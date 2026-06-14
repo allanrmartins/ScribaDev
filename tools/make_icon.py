@@ -1,4 +1,4 @@
-"""Gera o ícone do Scriba — um pergaminho sendo escrito por um raio.
+"""Gera o ícone do ScribaDev — um pergaminho escrito por um raio (tile teal + marca </>).
 
 Desenha tudo com Pillow (sem dependência de rasterizador SVG), em 4x de
 supersampling, e empacota um .ico multi-resolução + um .png 256 para a UI.
@@ -21,8 +21,8 @@ W = N * S        # canvas de trabalho
 ASSETS = Path(__file__).resolve().parent.parent / "scriba" / "assets"
 
 # paleta
-TILE_TOP = (58, 58, 112)      # indigo claro
-TILE_BOT = (26, 26, 46)       # indigo escuro
+TILE_TOP = (22, 120, 100)     # teal claro (ScribaDev — distingue da Scriba, que é indigo)
+TILE_BOT = (8, 44, 40)        # teal escuro
 PARCH = (243, 228, 178)       # creme do pergaminho
 PARCH_EDGE = (214, 192, 130)  # borda/sombra do creme
 ROLL = (231, 211, 152)        # rolos do pergaminho
@@ -109,11 +109,30 @@ def _bolt(img: Image.Image) -> None:
     img.alpha_composite(layer)
 
 
+def _dev_mark(img: Image.Image) -> None:
+    """Marca </> ('dev') no canto inferior esquerdo — distingue da Scriba na bandeja/Iniciar."""
+    d = ImageDraw.Draw(img)
+
+    def stroke(pts, color, w):
+        d.line([(x * S, y * S) for x, y in pts], fill=color, width=int(w * S), joint="curve")
+
+    chev_l = [(55, 199), (40, 210), (55, 221)]   # <
+    slash = [(63, 223), (76, 197)]               # /
+    chev_r = [(82, 199), (92, 210), (82, 221)]   # >
+    shadow = (6, 34, 31, 235)
+    ink = (226, 246, 238)
+    for pts in (chev_l, slash, chev_r):          # sombra fina p/ legibilidade no teal
+        stroke([(x + 1.5, y + 1.5) for x, y in pts], shadow, 5)
+    for pts in (chev_l, slash, chev_r):
+        stroke(pts, ink, 5)
+
+
 def render_base() -> Image.Image:
     img = Image.new("RGBA", (W, W), (0, 0, 0, 0))
     _tile(ImageDraw.Draw(img))
     _parchment(img)
     _bolt(img)
+    _dev_mark(img)
     return img.resize((N, N), Image.LANCZOS)
 
 
