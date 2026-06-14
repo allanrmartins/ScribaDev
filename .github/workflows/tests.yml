@@ -1,0 +1,22 @@
+name: tests
+
+on: [push, pull_request]
+
+# cancela um run anterior ainda em andamento no mesmo ref (economiza minutos)
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # Windows porque as deps são Windows-only (pyaudiowpatch, windows-toasts)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"   # piso do pyproject (requires-python >=3.12)
+      - name: Instalar deps do projeto (sem os extras cuda/diarization)
+        run: pip install -e .
+      - name: Rodar a suite de testes
+        run: python -m unittest discover -s tests -v

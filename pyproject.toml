@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scribadev"
+version = "0.2.0"
+description = "Fork pessoal/local do Scriba: gravação e transcrição automática de reuniões (Teams, Zoom, Meet) — 100% local e privada, com notas em Markdown prontas para usar como contexto de desenvolvimento."
+readme = "README.md"
+license = "Elastic-2.0"
+authors = [{ name = "Allan Martins" }]
+requires-python = ">=3.12"
+keywords = ["teams", "meeting", "transcription", "whisper", "notes", "recorder", "windows"]
+classifiers = [
+    "Operating System :: Microsoft :: Windows :: Windows 11",
+    "Programming Language :: Python :: 3 :: Only",
+    "Natural Language :: Portuguese (Brazilian)",
+    "Topic :: Multimedia :: Sound/Audio :: Capture/Recording",
+    "Topic :: Office/Business",
+]
+dependencies = [
+    "pyaudiowpatch==0.2.12.8",
+    "faster-whisper==1.2.1",
+    "ctranslate2~=4.8",
+    "pystray==0.19.5",
+    "Pillow>=11",
+    "windows-toasts==1.3.1",
+]
+
+[project.optional-dependencies]
+cuda = [
+    "nvidia-cublas-cu12~=12.9",
+    "nvidia-cudnn-cu12~=9.23",
+]
+# diarização: instale o torch antes (com CUDA, use o índice do PyTorch):
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+diarization = [
+    "pyannote.audio>=3.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/allanrmartins/ScribaDev"
+Repository = "https://github.com/allanrmartins/ScribaDev"
+Issues = "https://github.com/allanrmartins/ScribaDev/issues"
+
+[project.scripts]
+scribadev = "scriba.cli:main"
+
+[project.gui-scripts]
+scribadev-tray = "scriba.cli:main_tray"
+
+[tool.setuptools]
+packages = ["scriba"]
+
+[tool.setuptools.package-data]
+scriba = ["assets/*.ico", "assets/*.png"]

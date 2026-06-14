@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# ScribaDev — dados locais ficam em %LOCALAPPDATA%\ScribaDev, mas por garantia:
+meetings/
+*.wav
+*.log
+
+# Claude Code
+.claude/settings.local.json
+.claude/worktrees/
