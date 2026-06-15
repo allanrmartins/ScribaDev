@@ -37,6 +37,7 @@ def diarize(wav: Path, cfg: Diarization) -> list[Turn] | None:
         log.warning("diarização indisponível: %s", e)
         print(f"AVISO: diarização habilitada mas dependências ausentes ({e})")
         return None
+    pipe = None
     try:
         try:
             pipe = Pipeline.from_pretrained(cfg.model, token=cfg.hf_token)
@@ -71,6 +72,20 @@ def diarize(wav: Path, cfg: Diarization) -> list[Turn] | None:
         log.exception("diarização falhou")
         print(f"AVISO: diarização falhou ({e}); seguindo com 'Participantes'")
         return None
+    finally:
+        # libera o modelo + cache CUDA do pyannote LOGO após a diarização: senão ele
+        # segura ~1-2 GB durante o resumo (claude -p) e o arquivamento (ffmpeg), que
+        # rodam depois no MESMO processo do pipeline. (O contexto CUDA do torch em si,
+        # ~0,5-1 GB, só sai quando o subprocesso encerra — aí é inevitável.)
+        pipe = None
+        try:
+            import gc
+
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
 
 
 def _extract_annotation(result):
