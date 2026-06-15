@@ -113,8 +113,19 @@ class Transcriber:
         return out
 
     def close(self) -> None:
-        """Libera o modelo (e a VRAM) entre reuniões."""
+        """Libera o modelo (e a VRAM) entre estágios/reuniões."""
         self.model = None
+        self.batched = None  # BatchedInferencePipeline segura o modelo: sem isto o GC não libera
+        import gc
+
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
 
 
 # Nome do provider conforme #13: a classe acima já satisfaz TranscriptionProvider

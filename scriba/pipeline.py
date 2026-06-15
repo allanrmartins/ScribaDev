@@ -47,6 +47,11 @@ def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: Transc
         print(f"modelo {cfg.whisper.model} em {device}")
 
     by_speaker: dict[str, tuple[list, float]] = {}
+    # 1ª passada: SÓ transcrição (Whisper carregado). Guarda os segmentos e a wav do
+    # loopback p/ diarizar DEPOIS — liberar o Whisper antes de carregar o pyannote faz
+    # o pico de RAM/VRAM virar max(Whisper, pyannote) em vez da soma dos dois.
+    pending: list[tuple[str, str, list, float]] = []  # (stream, speaker, segments, offset)
+    loopback_wav: Path | None = None
     for stream_name, speaker in (("mic", "Eu"), ("loopback", "Participantes")):
         s = (meta.get("streams") or {}).get(stream_name)
         if not s or not s.get("file"):
@@ -62,18 +67,30 @@ def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: Transc
         segments = tr.transcribe(wav)
         offset = float(s.get("offset_seconds", 0.0))
         print(f"  {len(segments)} segmentos")
+        pending.append((stream_name, speaker, segments, offset))
         if stream_name == "loopback" and segments:
-            from . import diarize as diarize_mod
+            loopback_wav = wav
 
-            turns = diarize_mod.diarize(wav, cfg.diarization)
-            if turns:
-                for name, group in diarize_mod.assign_speakers(segments, turns).items():
-                    by_speaker[name] = (group, offset)
-                meta["diarization_model"] = cfg.diarization.model
-                continue
-        by_speaker[speaker] = (segments, offset)
     final_device = tr.device_used or device
-    tr.close()
+    tr.close()  # libera o Whisper ANTES da diarização: corta o pico de memória
+
+    # 2ª passada: diarização do loopback (pyannote), já sem o Whisper na memória
+    diarized_groups: dict[str, list] | None = None
+    if loopback_wav is not None:
+        from . import diarize as diarize_mod
+
+        lb_segments = next((seg for st, _sp, seg, _off in pending if st == "loopback"), [])
+        turns = diarize_mod.diarize(loopback_wav, cfg.diarization)
+        if turns:
+            diarized_groups = diarize_mod.assign_speakers(lb_segments, turns)
+            meta["diarization_model"] = cfg.diarization.model
+
+    for stream_name, speaker, segments, offset in pending:
+        if stream_name == "loopback" and diarized_groups is not None:
+            for name, group in diarized_groups.items():
+                by_speaker[name] = (group, offset)
+        else:
+            by_speaker[speaker] = (segments, offset)
 
     if not by_speaker:
         print("nenhum áudio para transcrever")
