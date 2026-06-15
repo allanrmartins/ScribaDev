@@ -53,7 +53,7 @@ device = "auto"          # auto | cuda | cpu
 language = "pt"
 batch_size = 8           # inferência em lote (~2x mais rápido); 0 desliga (turnos mais granulares)
 # Vocabulário para guiar a transcrição (troque pelo jargão da sua área):
-hotwords = "SAP ABAP BAPI BAdI CDS RAP Fiori OData ALV IDoc SE80 SE11 SE16N SE37 SE38 SM30 SM37 ST22 VA01 ME21N MIGO MARA MATNR VBAK VBAP EKKO BSEG KNA1 SmartForms HANA user exit enhancement request transporte mandante tabela Z campo Z"
+hotwords = "SAP ABAP BAPI BAdI CDS RAP Fiori OData ALV IDoc SE80 SE11 SE16N SE37 SE38 SM30 SM37 ST22 VA01 ME21N MIGO MARA MATNR VBAK VBAP EKKO BSEG KNA1 SmartForms HANA user exit enhancement request transporte mandante tabela Z campo Z SU01 SU53 PFCG ST01 SAP_ALL"
 # Motor de transcrição: local (faster-whisper, 100% na máquina) ou cloud (envia o
 # áudio a um endpoint OpenAI-compatível /audio/transcriptions — opt-in explícito).
 engine = "local"
