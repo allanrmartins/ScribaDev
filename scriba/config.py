@@ -51,7 +51,13 @@ retention_days = 30
 model = "large-v3-turbo"
 device = "auto"          # auto | cuda | cpu
 language = "pt"
-batch_size = 8           # inferência em lote (~2x mais rápido); 0 desliga (turnos mais granulares)
+batch_size = 16          # inferência em lote (~2x mais rápido); 0 desliga (turnos mais granulares)
+beam_size = 3            # feixes da decodificação; menor = mais rápido (a lib usa 5)
+cpu_threads = 0          # threads quando cai para CPU (0 = automático)
+# Filtro de voz (VAD): 0 = padrão da lib. Suba vad_min_silence_ms / vad_threshold só
+# após testar com áudio real — pode recuperar voz baixa, mas arrisca alucinar em silêncio.
+vad_min_silence_ms = 0   # silêncio mínimo para cortar um trecho (ms); 0 = padrão
+vad_threshold = 0        # limiar de detecção de voz (0..1); 0 = padrão
 # Vocabulário para guiar a transcrição (troque pelo jargão da sua área):
 hotwords = "SAP ABAP BAPI BAdI CDS RAP Fiori OData ALV IDoc SE80 SE11 SE16N SE37 SE38 SM30 SM37 ST22 VA01 ME21N MIGO MARA MATNR VBAK VBAP EKKO BSEG KNA1 SmartForms HANA user exit enhancement request transporte mandante tabela Z campo Z SU01 SU53 PFCG ST01 SAP_ALL"
 # Motor de transcrição: local (faster-whisper, 100% na máquina) ou cloud (envia o
@@ -133,7 +139,12 @@ class Whisper:
     model: str = "large-v3-turbo"
     device: str = "auto"
     language: str = "pt"
-    batch_size: int = 8
+    batch_size: int = 16               # #6: GPU com folga de VRAM aguenta 16 (era 8)
+    beam_size: int = 3                 # #6: feixes da decodificação; menor = mais rápido (lib usa 5)
+    cpu_threads: int = 0               # #6: threads no fallback CPU (0 = automático)
+    # VAD opt-in (#6): 0 = defaults da lib (sem mudança). >0 recupera voz baixa/pausas.
+    vad_min_silence_ms: int = 0        # silêncio mínimo p/ cortar (ms); 0 = default
+    vad_threshold: float = 0.0         # limiar de voz do Silero (0..1); 0 = default
     hotwords: str = ""
     engine: str = "local"              # local (faster-whisper) | cloud (Groq/OpenAI-compat STT)
     cloud_base_url: str = ""           # vazio = Groq (https://api.groq.com/openai/v1)
@@ -282,6 +293,10 @@ model = {_s(w.model)}
 device = {_s(w.device)}          # auto | cuda | cpu
 language = {_s(w.language)}
 batch_size = {_n(w.batch_size)}           # inferência em lote (~2x mais rápido); 0 desliga
+beam_size = {_n(w.beam_size)}            # feixes da decodificação; menor = mais rápido (a lib usa 5)
+cpu_threads = {_n(w.cpu_threads)}          # threads quando cai para CPU (0 = automático)
+vad_min_silence_ms = {_n(w.vad_min_silence_ms)}   # silêncio mínimo para cortar (ms); 0 = padrão
+vad_threshold = {_n(w.vad_threshold)}        # limiar de detecção de voz (0..1); 0 = padrão
 # Vocabulário para guiar a transcrição (troque pelo jargão da sua área):
 hotwords = {_s(w.hotwords)}
 engine = {_s(w.engine)}          # local | cloud (envia o áudio à nuvem — opt-in)

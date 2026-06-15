@@ -82,6 +82,36 @@ class DiarizationConfigTests(unittest.TestCase):
         self.assertEqual(got.max_speakers, 4)
 
 
+class WhisperConfigTests(unittest.TestCase):
+    """Novos campos de [whisper] (#6): beam_size, cpu_threads, vad, batch_size=16."""
+
+    def setUp(self):
+        d = Path(tempfile.mkdtemp(prefix="scriba_whisper_"))
+        util.APP_DIR = d
+        util.LOGS_DIR = d / "logs"
+        util.CONFIG_PATH = d / "config.toml"
+
+    def test_defaults(self):
+        w = config.load().whisper
+        self.assertEqual(w.batch_size, 16)
+        self.assertEqual(w.beam_size, 3)
+        self.assertEqual(w.cpu_threads, 0)
+        self.assertEqual(w.vad_min_silence_ms, 0)
+        self.assertEqual(w.vad_threshold, 0.0)
+
+    def test_round_trip_preserva_campos(self):
+        import dataclasses
+
+        cfg = config.load()
+        config.save(dataclasses.replace(cfg, whisper=dataclasses.replace(
+            cfg.whisper, batch_size=24, beam_size=1, cpu_threads=8,
+            vad_min_silence_ms=500, vad_threshold=0.35)))
+        w = config.load().whisper
+        self.assertEqual((w.batch_size, w.beam_size, w.cpu_threads), (24, 1, 8))
+        self.assertEqual(w.vad_min_silence_ms, 500)
+        self.assertAlmostEqual(float(w.vad_threshold), 0.35)
+
+
 _HAVE_DPAPI = util.dpapi_encrypt("probe") is not None
 
 
