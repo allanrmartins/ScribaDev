@@ -103,12 +103,15 @@ quando citado; cite [HH:MM:SS]. Esta seção avisa a IA o que NÃO está definid
 sobre cada ambiguidade para que ela sinalize em vez de presumir.)
 
 ## Participantes
-(nomes e papéis que derem para inferir; quando houver "Participante N", associe ao nome/papel \
-citado, ex.: "Participante 1 — João, funcional fiscal".)
+(Liste só quem a transcrição evidencia. Separe quem ESTAVA na call de quem foi só CITADO — nunca misture os dois:
+- **Presentes** — "Eu" (SEMPRE o desenvolvedor ABAP que gravou a call) e cada "Participante N" da diarização. Cada número é uma voz DISTINTA e consistente do início ao fim — não funda duas vozes nem invente participantes além dos que aparecem. Só dê um NOME a um "Participante N" quando ficar claro que AQUELA VOZ é a pessoa: ela se identifica ("aqui é o Marcelo") ou é chamada pelo nome e responde em seguida. Se a pessoa aparece só em 3ª pessoa (falam SOBRE ela), ela NÃO é essa voz — mantenha "Participante N" sem nome. Na dúvida, deixe sem nome.
+- **Mencionados** — pessoas citadas que NÃO são vozes da call (clientes, terceiros, colegas ausentes), com o papel quando dado; deixe explícito que não necessariamente estavam presentes.
+Regra de ouro: nunca rotule uma voz presente com o nome de alguém que estava sendo apenas discutido.)
 
 Regras:
 - não invente NADA que não esteja na transcrição; se o nome de um objeto estiver incerto, \
 marque com (?);
+- ao atribuir uma fala, decisão ou ação, use "Eu" ou "Participante N" para quem ESTAVA na call e o nome só para quem foi apenas citado (deixando claro que é externo) — nunca troque os dois (ver Participantes);
 - normalize termos SAP corrompidos pelo reconhecimento de voz: junte soletrações \
 ("S E dezesseis N" → SE16N, "vê a zero um" → VA01), use maiúsculas em transações, tabelas \
 e campos (se16n → SE16N, mara → MARA), "bapi" → BAPI, "badi" → BAdI, "fiori" → Fiori;
