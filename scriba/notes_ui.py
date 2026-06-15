@@ -2,7 +2,7 @@
 
 Janela própria (botão "Notas" do dashboard) — separada das Configurações. Lista as
 notas prontas e as reuniões ainda em processamento (com barra animada), busca por
-conteúdo, título editável e botão "Copiar p/ Claude".
+conteúdo, título editável e botão "Gerar Prompt de Contexto".
 """
 
 from __future__ import annotations
@@ -99,7 +99,8 @@ class NotesWindow:
         # cada tabela da nota tem seu próprio "⧉ copiar (Excel)" ao lado dela
         copy_row = tk.Frame(right, bg=_BG)
         copy_row.pack(fill="x", pady=(0, 8))
-        self.copy_btn = ModernButton(copy_row, "Copiar p/ Claude", self._copy_claude, kind="primary", width=150)
+        self.copy_btn = ModernButton(copy_row, "Gerar Prompt de Contexto", self._copy_context_prompt,
+                                     kind="primary", width=200)
         self.copy_btn.pack(side="left")
         self.copy_tr_btn = ModernButton(copy_row, "Copiar transcrição", self._copy_transcript, width=150)
         self.copy_tr_btn.pack(side="left", padx=(8, 0))
@@ -447,22 +448,6 @@ class NotesWindow:
                     return "\n".join(lines[i + 1:]).strip()
         return md.strip()
 
-    def _spec_only(self, md: str) -> str:
-        """O prompt para o Claude: a nota sem frontmatter e SEM a transcrição
-        (ela já foi resumida — colar de novo só gastaria contexto)."""
-        body = self._strip_frontmatter(md)
-        pre, secs = mdview.split_sections(body)
-        parts = [pre.rstrip()]
-        for title, text in secs:
-            if title.strip().lower() == self._TRANSCRIPT_TITLE:
-                continue
-            parts.append(f"## {title}\n{text.rstrip()}")
-        out = "\n\n".join(p for p in parts if p.strip())
-        # o callout menciona a transcrição "ao final" — sem ela, tira a frase
-        out = re.sub(r"\s*A \*Transcrição completa\*[^\n]*", "", out)
-        # separador órfão que antecedia a transcrição
-        return re.sub(r"\n─*-{3,}\s*$", "", out).strip()
-
     def _transcript_only(self, md: str) -> str | None:
         _pre, secs = mdview.split_sections(self._strip_frontmatter(md))
         for title, text in secs:
@@ -470,12 +455,19 @@ class NotesWindow:
                 return text.strip()
         return None
 
-    def _copy_claude(self) -> None:
+    def _copy_context_prompt(self) -> None:
+        """Gera o Prompt de Contexto (issue #3) da nota selecionada e copia.
+
+        Reembala o resumo numa moldura que faz o Claude Code absorver a call como
+        contexto do gap em tratamento. A mesma função (context_prompt, pura) será
+        reusada pelo Scriba nuvem."""
         md = self._selected_md()
         if md is None:
             return
-        self._set_clip(self._spec_only(md))
-        self._flash(self.copy_btn, "✓ Copiado", "Copiar p/ Claude")
+        from . import context_prompt
+
+        self._set_clip(context_prompt.build_context_prompt(md))
+        self._flash(self.copy_btn, "✓ Copiado", "Gerar Prompt de Contexto")
 
     def _copy_transcript(self) -> None:
         md = self._selected_md()
