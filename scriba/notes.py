@@ -453,6 +453,79 @@ def set_note_client(md_path: Path, new_client: str) -> None:
     util.atomic_write_text(md_path, "\n".join(out) + "\n")
 
 
+def relabel_speakers(folder: Path, renames: dict[str, str]) -> bool:
+    """Aplica rótulos de voz (#1) a uma reunião já processada:
+
+    1. aprende cada voz (speakers.enroll com o embedding salvo em voices.json) —
+       o app passa a reconhecê-la nas próximas reuniões;
+    2. troca "Participante N" → Nome na transcrição (transcript.json) e na nota
+       (notas.md local + cópia exportada), por substituição de texto — SEM re-rodar
+       a IA: rápido e a nota fica coerente na hora.
+
+    `renames`: {rótulo_atual: novo_nome}. Retorna True se algo mudou.
+    """
+    folder = Path(folder)
+    renames = {k: v.strip() for k, v in renames.items() if v and v.strip() and v.strip() != k}
+    if not renames:
+        return False
+    from . import speakers
+
+    # 1) aprende as vozes a partir dos embeddings guardados na pasta
+    voices_path = folder / "voices.json"
+    try:
+        voices = json.loads(voices_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        voices = {}
+    for label, name in renames.items():
+        emb = (voices.get(label) or {}).get("embedding")
+        if emb:
+            speakers.enroll(name, emb)
+
+    # 2) transcript.json: troca o campo speaker (comparação exata)
+    tpath = folder / "transcript.json"
+    try:
+        turns = json.loads(tpath.read_text(encoding="utf-8"))
+        for t in turns:
+            if t.get("speaker") in renames:
+                t["speaker"] = renames[t["speaker"]]
+        util.atomic_write_text(tpath, json.dumps(turns, ensure_ascii=False, indent=1))
+    except (OSError, ValueError):
+        pass
+
+    # 3) markdown (nota local + exportada): "Participante N" → Nome, com \b para
+    # não casar "Participante 1" dentro de "Participante 12"
+    subs = [(re.compile(r"\b" + re.escape(label) + r"\b"), name) for label, name in renames.items()]
+    targets = [folder / "notas.md"]
+    try:
+        exp = json.loads((folder / "meta.json").read_text(encoding="utf-8")).get("export_path")
+        if exp:
+            targets.append(Path(exp))
+    except (OSError, ValueError):
+        pass
+    for md in targets:
+        try:
+            text = md.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for rx, name in subs:
+            text = rx.sub(name, text)
+        util.atomic_write_text(md, text)
+
+    # 4) voices.json: renomeia as chaves e marca como rotulada à mão
+    if voices:
+        for label, name in renames.items():
+            if label in voices:
+                v = voices.pop(label)
+                v["auto"] = False
+                v["labeled"] = True
+                voices[name] = v
+        try:
+            util.atomic_write_text(voices_path, json.dumps(voices, ensure_ascii=False))
+        except OSError:
+            pass
+    return True
+
+
 def set_note_title(md_path: Path, new_title: str) -> None:
     """Atualiza o título de uma nota: linha `titulo:` do frontmatter + primeiro H1."""
     new_title = new_title.strip()

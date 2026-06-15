@@ -88,10 +88,15 @@ def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: Transc
         from . import diarize as diarize_mod
 
         lb_segments = next((seg for st, _sp, seg, _off in pending if st == "loopback"), [])
-        turns = diarize_mod.diarize(loopback_wav, cfg.diarization, num_speakers=num_speakers)
-        if turns:
-            diarized_groups = diarize_mod.assign_speakers(lb_segments, turns)
+        dz_result = diarize_mod.diarize(loopback_wav, cfg.diarization, num_speakers=num_speakers)
+        if dz_result and dz_result.turns:
+            diarized_groups, order = diarize_mod.assign_speakers(lb_segments, dz_result.turns)
             meta["diarization_model"] = cfg.diarization.model
+            # enrollment de voz (#1): casa cada "Participante N" ao seu embedding,
+            # aplica nomes já conhecidos e guarda as vozes p/ rotular na UI
+            diarized_groups = _apply_voice_enrollment(
+                folder, meta, diarized_groups, order, dz_result.embeddings
+            )
 
     for stream_name, speaker, segments, offset in pending:
         if stream_name == "loopback" and diarized_groups is not None:
@@ -127,6 +132,52 @@ def summarize_folder(folder: Path) -> int:
     from . import notes
 
     return 0 if notes.build_notes(Path(folder)) else 1
+
+
+def _apply_voice_enrollment(folder: Path, meta: dict, grouped: dict, order: dict, embeddings: dict) -> dict:
+    """Enrollment de voz (#1): renomeia "Participante N" → nome já conhecido
+    (match por embedding) e grava voices.json na pasta para rotulagem na UI.
+
+    voices.json: {rótulo exibido: {embedding, auto, score}} — só vozes do loopback.
+    Sem embeddings (pyannote legacy) é no-op e a nota segue com "Participante N".
+    """
+    if not embeddings:
+        return grouped
+    from . import speakers
+
+    store = speakers.load_store()
+    part_to_label = {f"Participante {n}": label for label, n in order.items()}
+    voices: dict[str, dict] = {}
+    renames: dict[str, str] = {}
+    used: set[str] = set()
+    for part, label in part_to_label.items():
+        emb = embeddings.get(label)
+        if emb is None:
+            continue
+        name, score = speakers.match(emb, store)
+        final, auto = part, False
+        # não cola o mesmo nome em duas vozes distintas (mantém a 2ª como Participante)
+        if name and name not in used:
+            final, auto = name, True
+            renames[part] = name
+        used.add(final)
+        voices[final] = {"embedding": emb, "auto": auto, "score": round(float(score), 3)}
+
+    if renames:
+        merged: dict[str, list] = {}
+        for k, segs in grouped.items():
+            merged.setdefault(renames.get(k, k), []).extend(segs)
+        grouped = merged
+        print("vozes reconhecidas: " + ", ".join(f"{p} -> {n}" for p, n in renames.items()))
+
+    try:
+        util_mod.atomic_write_text(folder / "voices.json", json.dumps(voices, ensure_ascii=False))
+    except Exception as e:
+        print(f"AVISO: não salvei voices.json ({e})")
+    recognized = sorted(n for n, v in voices.items() if v["auto"])
+    if recognized:
+        meta["speakers_recognized"] = recognized
+    return grouped
 
 
 def _mark_failed(folder: Path, exc: BaseException) -> None:

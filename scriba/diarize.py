@@ -8,6 +8,7 @@ página do modelo — depois disso, o download acontece uma vez e o resto é off
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import Diarization
@@ -16,6 +17,19 @@ from .transcriber import Segment
 log = logging.getLogger("scriba.diarize")
 
 Turn = tuple[float, float, str]  # (início, fim, rótulo da voz)
+
+
+@dataclass
+class DiarizationResult:
+    """Saída da diarização: trechos por voz + um embedding por voz (issue #1).
+
+    embeddings mapeia o rótulo cru do pyannote (SPEAKER_00, …) ao vetor 256-d do
+    wespeaker. Fica {} quando o modelo não expõe embeddings (pyannote legacy) —
+    aí a separação por voz funciona, mas sem reconhecimento de quem é quem.
+    """
+
+    turns: list[Turn]
+    embeddings: dict[str, list[float]] = field(default_factory=dict)
 
 
 def _speaker_kwargs(cfg: Diarization, num_speakers: int | None) -> dict:
@@ -33,11 +47,14 @@ def _speaker_kwargs(cfg: Diarization, num_speakers: int | None) -> dict:
     return {}
 
 
-def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None) -> list[Turn] | None:
+def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None) -> DiarizationResult | None:
     """Trechos por voz do arquivo, ou None se desabilitado/indisponível (segue sem separar).
 
     num_speakers: nº de vozes remotas (loopback) informado pelo usuário — trava a
     diarização nesse número. None = automático (ou max_speakers do config).
+
+    Devolve um DiarizationResult (turns + embeddings por voz) para o enrollment
+    da issue #1 — ou None se a diarização não rodou.
     """
     if not cfg.enabled:
         return None
@@ -87,7 +104,7 @@ def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None) -> lis
         ]
         voices = {label for *_x, label in turns}
         print(f"diarização: {len(voices)} voz(es) distintas em {len(turns)} trechos")
-        return turns
+        return DiarizationResult(turns=turns, embeddings=_extract_embeddings(result, annotation))
     except Exception as e:
         log.exception("diarização falhou")
         print(f"AVISO: diarização falhou ({e}); seguindo com 'Participantes'")
@@ -106,6 +123,34 @@ def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None) -> lis
                 torch.cuda.empty_cache()
         except Exception:
             pass
+
+
+def _extract_embeddings(result, annotation) -> dict[str, list[float]]:
+    """{rótulo do pyannote → vetor de voz} a partir do DiarizeOutput (pyannote 4.x).
+
+    speaker_embeddings vem como (n_vozes, dim) NA ORDEM de annotation.labels();
+    casa um a um. Modos sem embeddings (pyannote legacy 3.x devolve Annotation
+    crua) → {}, e a diarização segue sem reconhecer quem é quem.
+    """
+    emb = getattr(result, "speaker_embeddings", None)
+    if emb is None:
+        return {}
+    try:
+        import numpy as np
+
+        out: dict[str, list[float]] = {}
+        for i, label in enumerate(annotation.labels()):
+            if i >= len(emb):
+                break
+            vec = np.asarray(emb[i], dtype=np.float32)
+            # o wespeaker às vezes devolve NaN para uma voz com pouquíssima fala —
+            # descarta (essa voz fica sem enrollment e segue como "Participante N")
+            if vec.size and not bool(np.isnan(vec).any()):
+                out[str(label)] = vec.tolist()
+        return out
+    except Exception:
+        log.exception("não consegui extrair embeddings de voz")
+        return {}
 
 
 def _extract_annotation(result):
@@ -184,11 +229,15 @@ def _load_waveform(wav: Path):
         tmp.unlink(missing_ok=True)
 
 
-def assign_speakers(segments: list[Segment], turns: list[Turn]) -> dict[str, list[Segment]]:
+def assign_speakers(segments: list[Segment], turns: list[Turn]) -> tuple[dict[str, list[Segment]], dict[str, int]]:
     """Rotula cada segmento transcrito com a voz de maior sobreposição temporal.
 
     Vozes viram "Participante 1/2/3" na ordem em que aparecem na reunião;
     segmentos sem sobreposição com voz nenhuma caem em "Participantes".
+
+    Retorna (grupos, ordem), onde `ordem` mapeia o rótulo cru do pyannote
+    (SPEAKER_00, …) ao número N de "Participante N" — usado para casar cada
+    participante ao seu embedding no enrollment de voz (#1).
     """
     order: dict[str, int] = {}
     grouped: dict[str, list[Segment]] = {}
@@ -205,4 +254,4 @@ def assign_speakers(segments: list[Segment], turns: list[Turn]) -> dict[str, lis
                 order[best_label] = len(order) + 1
             name = f"Participante {order[best_label]}"
         grouped.setdefault(name, []).append(seg)
-    return grouped
+    return grouped, order

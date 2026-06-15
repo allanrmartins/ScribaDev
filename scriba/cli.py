@@ -320,6 +320,16 @@ def cmd_doctor(args) -> int:
     else:
         _print(_OK, "Diarização", "desabilitada (participantes saem agrupados)")
 
+    # Enrollment de voz (#1): vozes que o app já aprende a reconhecer
+    try:
+        from . import speakers
+
+        n = len(speakers.load_store())
+        if n:
+            _print(_OK, "Vozes cadastradas", f"{n} pessoa(s) reconhecida(s) por voz (enrollment)")
+    except Exception:
+        pass
+
     # Cache do modelo Whisper
     try:
         model = cfg.whisper.model if cfg else "large-v3-turbo"

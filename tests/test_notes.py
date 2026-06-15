@@ -3,12 +3,15 @@
 Roda sem dependências externas:  python -m unittest discover -s tests
 """
 
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scriba import notes, speakers, util  # noqa: E402
 from scriba.notes import split_header  # noqa: E402
 
 
@@ -77,6 +80,66 @@ class SplitHeaderTests(unittest.TestCase):
     def test_titulo_com_aspas(self):
         _, title, _ = split_header('TITULO: "Entre aspas"\nCLIENTE: Acme\ncorpo')
         self.assertEqual(title, "Entre aspas")
+
+
+class RelabelSpeakersTests(unittest.TestCase):
+    """notes.relabel_speakers (#1): aprende a voz E corrige a nota já gerada."""
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp(prefix="scriba_relabel_"))
+        # store de voz ISOLADO — nunca tocar no speakers.json real do usuário
+        util.APP_DIR = self.d / "app"
+        util.LOGS_DIR = util.APP_DIR / "logs"
+        speakers.STORE_PATH = util.APP_DIR / "speakers.json"
+        self.rec = self.d / "rec"
+        self.rec.mkdir(parents=True)
+        self.export = self.d / "2026-06-10_20-00_reuniao.md"
+        (self.rec / "voices.json").write_text(json.dumps({
+            "Participante 1": {"embedding": [1.0, 0.0, 0.0], "auto": False, "score": 0.0},
+            "Participante 2": {"embedding": [0.0, 1.0, 0.0], "auto": False, "score": 0.0},
+        }), encoding="utf-8")
+        (self.rec / "transcript.json").write_text(json.dumps([
+            {"start": 0.0, "end": 1.0, "speaker": "Eu", "text": "oi"},
+            {"start": 1.0, "end": 2.0, "speaker": "Participante 2", "text": "aqui e o Marcelo"},
+        ]), encoding="utf-8")
+        nota = ("# Reuniao\n\n**[00:00:01] Participante 2:** aqui e o Marcelo\n\n"
+                "## Participantes\n- Participante 2 (voz)\n")
+        (self.rec / "notas.md").write_text(nota, encoding="utf-8")
+        self.export.write_text(nota, encoding="utf-8")
+        (self.rec / "meta.json").write_text(
+            json.dumps({"export_path": str(self.export)}), encoding="utf-8")
+
+    def test_aprende_e_corrige_nota_e_transcricao(self):
+        ok = notes.relabel_speakers(self.rec, {"Participante 2": "Marcelo"})
+        self.assertTrue(ok)
+        # transcript.json: campo speaker trocado
+        turns = json.loads((self.rec / "transcript.json").read_text(encoding="utf-8"))
+        self.assertEqual(turns[1]["speaker"], "Marcelo")
+        # markdown local E exportado: trocado, sem sobra de "Participante 2"
+        for md in (self.rec / "notas.md", self.export):
+            txt = md.read_text(encoding="utf-8")
+            self.assertIn("Marcelo:", txt)
+            self.assertNotIn("Participante 2", txt)
+        # store global: aprendeu Marcelo com o embedding da voz 2
+        st = speakers.load_store()
+        self.assertEqual([e["name"] for e in st], ["Marcelo"])
+        self.assertEqual(st[0]["embedding"], [0.0, 1.0, 0.0])
+        # voices.json: chave renomeada e marcada como rotulada à mão
+        voices = json.loads((self.rec / "voices.json").read_text(encoding="utf-8"))
+        self.assertIn("Marcelo", voices)
+        self.assertNotIn("Participante 2", voices)
+        self.assertTrue(voices["Marcelo"]["labeled"])
+
+    def test_sem_mudanca_e_noop(self):
+        self.assertFalse(notes.relabel_speakers(self.rec, {"Participante 1": ""}))
+        self.assertFalse(notes.relabel_speakers(self.rec, {"Participante 1": "Participante 1"}))
+        self.assertEqual(speakers.load_store(), [])
+
+    def test_word_boundary_nao_pega_participante_12(self):
+        (self.rec / "notas.md").write_text("Participante 1 e Participante 12 aqui", encoding="utf-8")
+        notes.relabel_speakers(self.rec, {"Participante 1": "Ana"})
+        txt = (self.rec / "notas.md").read_text(encoding="utf-8")
+        self.assertIn("Ana e Participante 12 aqui", txt)
 
 
 if __name__ == "__main__":

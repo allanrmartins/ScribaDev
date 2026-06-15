@@ -103,6 +103,9 @@ class NotesWindow:
         self.copy_btn.pack(side="left")
         self.copy_tr_btn = ModernButton(copy_row, "Copiar transcrição", self._copy_transcript, width=150)
         self.copy_tr_btn.pack(side="left", padx=(8, 0))
+        # rotular vozes (#1): só aparece quando a reunião selecionada tem diarização
+        # (voices.json na pasta da gravação) — empacotado sob demanda
+        self.label_voices_btn = ModernButton(copy_row, "Rotular vozes…", self._open_speaker_labeler, width=130)
 
         # área de conteúdo: alterna entre o leitor (markdown) e a barra de progresso
         self.view_frame = tk.Frame(right, bg=_BG)
@@ -349,6 +352,8 @@ class NotesWindow:
 
     def _render_progress(self, folder: Path, status: str) -> None:
         self._show_progress_pane()
+        if self.label_voices_btn.winfo_ismapped():
+            self.label_voices_btn.pack_forget()  # reunião em andamento: nada a rotular
         self._showing_note = False
         self._current_view_key = folder
         self.note_title_var.set("")
@@ -392,6 +397,7 @@ class NotesWindow:
             return
         self.note_title_var.set(title or "")
         self.note_client_var.set(self._client_of(path))
+        self._update_voice_button(path)
         # mesma nota já renderizada: não re-renderiza (preserva a rolagem durante o poll)
         if self._showing_note and self._current_view_key == path:
             return
@@ -558,6 +564,37 @@ class NotesWindow:
         if new_title:
             util.rename_recording_folder(rec_folder, new_title)  # pasta acompanha o título
         self._showing_note = False  # força re-render com o novo cabeçalho
+        self._refresh_notes_list()
+
+    # -- rotulagem de vozes (#1) -----------------------------------------------
+
+    def _update_voice_button(self, note_path: Path) -> None:
+        """Mostra "Rotular vozes…" só se a gravação desta nota tem vozes (voices.json)."""
+        from .speakers_ui import has_labelable_voices
+
+        try:
+            has = has_labelable_voices(self._recording_folder_for(note_path))
+        except Exception:
+            has = False
+        if has and not self.label_voices_btn.winfo_ismapped():
+            self.label_voices_btn.pack(side="left", padx=(8, 0))
+        elif not has and self.label_voices_btn.winfo_ismapped():
+            self.label_voices_btn.pack_forget()
+
+    def _open_speaker_labeler(self) -> None:
+        sel = self.notes_tree.selection()
+        if not sel or sel[0] not in self._note_items:
+            return
+        path, _title, status = self._note_items[sel[0]]
+        if status is not None:
+            return  # reunião em andamento: sem vozes a rotular ainda
+        from .speakers_ui import label_speakers_dialog
+
+        label_speakers_dialog(self.win, self._recording_folder_for(path), on_saved=self._after_relabel)
+
+    def _after_relabel(self) -> None:
+        """Pós-rotulagem: re-renderiza a nota (agora com os nomes) e a lista."""
+        self._showing_note = False
         self._refresh_notes_list()
 
     def _highlight_hits(self) -> None:

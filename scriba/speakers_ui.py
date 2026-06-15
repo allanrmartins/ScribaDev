@@ -9,11 +9,13 @@ esgota — nunca trava uma pendência para sempre. A diarização roda só no lo
 
 from __future__ import annotations
 
+import json
 import tkinter as tk
+from pathlib import Path
 from typing import Callable
 
 from . import util
-from .widgets import PALETTE, ModernButton, enable_dark_titlebar, make_entry
+from .widgets import FONT, FONT_BOLD, PALETTE, ModernButton, enable_dark_titlebar, make_entry
 
 _BG = PALETTE["bg"]
 
@@ -119,4 +121,95 @@ def ask_num_speakers(
     win.focus_force()
     entry.focus_set()
     entry.select_range(0, "end")
+    return win
+
+
+def has_labelable_voices(folder) -> bool:
+    """True se a pasta da gravação tem vozes (voices.json) para rotular (#1)."""
+    try:
+        voices = json.loads((Path(folder) / "voices.json").read_text(encoding="utf-8"))
+        return bool(voices)
+    except (OSError, ValueError):
+        return False
+
+
+def label_speakers_dialog(parent: tk.Misc, folder, on_saved: Callable[[], None] | None = None) -> tk.Toplevel:
+    """Diálogo "Rotular participantes" (#1): nomeia as vozes de uma reunião.
+
+    Lê os embeddings de voices.json (na pasta da gravação), deixa o usuário dar
+    um nome a cada voz e, ao salvar, aprende a voz (futuro) E corrige a nota atual
+    via notes.relabel_speakers. Vozes já reconhecidas vêm preenchidas para confirmar.
+    """
+    folder = Path(folder)
+    try:
+        voices: dict = json.loads((folder / "voices.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        voices = {}
+
+    win = tk.Toplevel(parent)
+    win.title("ScribaDev — Rotular participantes")
+    win.configure(bg=_BG, padx=20, pady=16)
+    win.resizable(False, False)
+    win.transient(parent if isinstance(parent, (tk.Tk, tk.Toplevel)) else None)
+    try:
+        win.iconbitmap(str(util.ICON_ICO))
+    except Exception:
+        pass
+
+    if not voices:
+        tk.Label(win, text="Esta reunião não tem vozes separadas para rotular.",
+                 bg=_BG, fg=PALETTE["text"], font=FONT, wraplength=320).pack(pady=(0, 12))
+        ModernButton(win, "Fechar", win.destroy, kind="primary", width=100).pack()
+        enable_dark_titlebar(win)
+        win.lift()
+        win.focus_force()
+        return win
+
+    tk.Label(win, text="Rotular participantes", bg=_BG, fg=PALETTE["text"],
+             font=("Segoe UI", 12, "bold")).pack(anchor="w")
+    tk.Label(win, text="Dê um nome a cada voz. O ScribaDev aprende e reconhece nas próximas "
+                       "reuniões, e corrige esta nota na hora.",
+             bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8),
+             wraplength=380, justify="left").pack(anchor="w", pady=(2, 10))
+
+    rows: list[tuple[str, tk.StringVar]] = []
+    for label, info in voices.items():
+        row = tk.Frame(win, bg=_BG)
+        row.pack(fill="x", pady=3)
+        auto = bool((info or {}).get("auto"))
+        tag = "  ✓ reconhecido" if auto else ""
+        tk.Label(row, text=label, bg=_BG, fg=PALETTE["text"], font=FONT_BOLD,
+                 width=16, anchor="w").pack(side="left")
+        # voz anônima ("Participante N") começa vazia; nome conhecido vem preenchido
+        var = tk.StringVar(value="" if str(label).startswith("Participante ") else str(label))
+        make_entry(row, var, width=20).pack(side="left", fill="x", expand=True, ipady=3)
+        if tag:
+            tk.Label(row, text=tag, bg=_BG, fg=PALETTE["ok"], font=("Segoe UI", 8)).pack(side="left", padx=(6, 0))
+        rows.append((str(label), var))
+
+    def save() -> None:
+        renames = {label: var.get().strip() for label, var in rows
+                   if var.get().strip() and var.get().strip() != label}
+        if renames:
+            from . import notes
+
+            try:
+                notes.relabel_speakers(folder, renames)
+            except Exception:
+                import logging
+
+                logging.getLogger("scriba.speakers_ui").exception("falha ao rotular vozes")
+        win.destroy()
+        if on_saved is not None:
+            on_saved()
+
+    btns = tk.Frame(win, bg=_BG)
+    btns.pack(fill="x", pady=(14, 0))
+    ModernButton(btns, "Salvar", save, kind="primary", width=110).pack(side="right")
+    ModernButton(btns, "Cancelar", win.destroy, width=100).pack(side="right", padx=(0, 8))
+
+    win.update_idletasks()
+    enable_dark_titlebar(win)
+    win.lift()
+    win.focus_force()
     return win
