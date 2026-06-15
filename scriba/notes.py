@@ -164,6 +164,8 @@ TITLE_INSTRUCTION = (
     "reunião se refere — a empresa dona do sistema/projeto/chamado discutido (não a "
     "consultoria que presta o serviço, e não o fornecedor de software). Se a transcrição "
     "não permitir identificar o cliente com confiança, escreva exatamente `CLIENTE: ?`. "
+    "Se um NOME DA REUNIÃO (do título da janela) for fornecido adiante, use-o como pista "
+    "forte para o TÍTULO e o CLIENTE — mas a transcrição prevalece se houver conflito. "
     "A partir da linha seguinte, siga as instruções abaixo normalmente.\n\n"
 )
 
@@ -248,7 +250,14 @@ def generate_summary(transcript_md: str, folder: Path) -> tuple[str | None, str 
     # (sem CLAUDE.md alheio no contexto); hidden_window=False de propósito — isto roda
     # no worker (console já oculto) e forçar CREATE_NO_WINDOW dispararia o bug do
     # Windows Terminal (ver o caminho da bandeja em promptgen._call_claude).
-    payload = f"{TITLE_INSTRUCTION}{load_summary_prompt()}\n\n=== TRANSCRIÇÃO ===\n\n{transcript_md}"
+    payload = f"{TITLE_INSTRUCTION}{load_summary_prompt()}"
+    try:
+        meeting = (json.loads((folder / "meta.json").read_text(encoding="utf-8")).get("meeting_title") or "").strip()
+    except Exception:
+        meeting = ""
+    if meeting:
+        payload += f"\n\n=== NOME DA REUNIÃO (do título da janela; pista, pode estar incompleto) ===\n{meeting}"
+    payload += f"\n\n=== TRANSCRIÇÃO ===\n\n{transcript_md}"
     out = ai.complete(SYSTEM_PROMPT, payload, timeout=cfg.timeout_seconds, cwd=folder, hidden_window=False)
     if not out:
         return None, None, None

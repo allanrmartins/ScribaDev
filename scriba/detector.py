@@ -182,6 +182,70 @@ def browser_call_service(browser: str, title_pats: list[str]) -> str | None:
     return None
 
 
+# -------- nome da reunião pelo título da janela (Teams/Zoom/navegador) ----------
+# Robusto e barato: só lê títulos de janela (Win32), sem depender de acessibilidade.
+# É só uma PISTA de contexto pro resumo — "" quando não dá pra extrair nada útil.
+
+_TITLE_APP_SUFFIXES = (
+    " - Google Chrome", " - Microsoft Edge", " - Mozilla Firefox", " - Brave",
+    " - Opera", " - Vivaldi", " - Zoom", " - Zoom Meeting", " - Zoom Workplace",
+)
+_TITLE_NAV_PARTS = {
+    "chat", "atividade", "activity", "equipes", "teams", "calendário", "calendar",
+    "arquivos", "chamadas", "comunidades", "feed",
+}
+_TITLE_GENERIC = {
+    "microsoft teams", "teams", "zoom", "zoom meeting", "zoom workplace", "meet",
+    "google meet", "microsoft edge", "google chrome", "mozilla firefox", "brave",
+    "opera", "vivaldi", "reunião", "meeting", "",
+}
+
+
+def _clean_meeting_title(raw: str) -> str:
+    """Reduz um título de janela ao nome da reunião; "" se sobrar só app genérico."""
+    t = re.sub(r"^\(\d+\)\s*", "", (raw or "").strip())  # contador de não-lidas
+    t = re.sub(r"\s+(?:and|e)\s+\d+\s+more\s+pages?\.*$", "", t, flags=re.IGNORECASE)
+    for suf in _TITLE_APP_SUFFIXES:
+        if t.endswith(suf):
+            t = t[: -len(suf)].strip()
+            break
+    if "|" in t:  # formato Teams: "Chat | <nome> | Microsoft Teams"
+        parts = [p.strip() for p in t.split("|") if p.strip()]
+        parts = [p for p in parts if p.lower() not in _TITLE_NAV_PARTS and p.lower() not in _TITLE_GENERIC]
+        t = " — ".join(parts)
+    t = re.sub(r"^(?:Meet|Reunião)\s*[–-]\s+", "", t)  # "Meet - xyz" -> "xyz"
+    t = re.sub(r"\s+", " ", t).strip(" -–—|·\t")
+    return "" if t.lower() in _TITLE_GENERIC else t
+
+
+def capture_meeting_title(cfg: Detection) -> str:
+    """Nome da reunião lido do título da janela do app da call (Teams/Zoom/navegador).
+
+    Prefere a aba do navegador que casa um padrão de reunião; senão, a janela do
+    Teams/Zoom. Retorna "" se nada confiável — captura de título NUNCA atrapalha a
+    gravação (toda falha é engolida).
+    """
+    from .wintitles import window_titles
+
+    try:
+        browsers = browser_patterns_from(cfg)
+        title_pats = title_patterns_from(cfg)
+        if browsers and title_pats:
+            for t in window_titles({b + ".exe" for b in browsers}):
+                if any(_title_match(p, t) for p in title_pats):
+                    name = _clean_meeting_title(t)
+                    if name:
+                        return name
+        for exes in ({"ms-teams.exe", "teams.exe"}, {"zoom.exe"}):
+            for t in window_titles(exes):
+                name = _clean_meeting_title(t)
+                if name:
+                    return name
+    except Exception:
+        pass
+    return ""
+
+
 class Detector:
     """Máquina de estados que vigia o registro e emite início/fim de call.
 

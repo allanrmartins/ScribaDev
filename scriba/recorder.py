@@ -160,6 +160,12 @@ class Recording:
         except Exception:
             self.pa.terminate()
             raise
+        try:
+            from .detector import capture_meeting_title
+
+            self.meeting_title = capture_meeting_title(cfg.detection)
+        except Exception:
+            self.meeting_title = ""
         self._write_meta("recording")
 
     def _new_folder(self) -> Path:
@@ -194,6 +200,8 @@ class Recording:
                 "loopback": self._stream_meta(self.loopback),
             },
         }
+        if getattr(self, "meeting_title", ""):
+            meta["meeting_title"] = self.meeting_title
         if extra:
             meta.update(extra)
         util.atomic_write_text(
