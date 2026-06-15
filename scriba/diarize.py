@@ -18,8 +18,27 @@ log = logging.getLogger("scriba.diarize")
 Turn = tuple[float, float, str]  # (início, fim, rótulo da voz)
 
 
-def diarize(wav: Path, cfg: Diarization) -> list[Turn] | None:
-    """Trechos por voz do arquivo, ou None se desabilitado/indisponível (segue sem separar)."""
+def _speaker_kwargs(cfg: Diarization, num_speakers: int | None) -> dict:
+    """Argumentos de contagem de vozes para o pipeline do pyannote.
+
+    num_speakers (informado pelo usuário ao fim da call) trava min=max=N e tem
+    PRECEDÊNCIA sobre max_speakers — no pyannote, max_speakers não tem efeito
+    quando num_speakers é dado, então nunca combinamos os dois. Sem num_speakers,
+    cai no max_speakers do config (0 = automático).
+    """
+    if num_speakers and int(num_speakers) >= 1:
+        return {"num_speakers": int(num_speakers)}
+    if cfg.max_speakers and int(cfg.max_speakers) > 1:
+        return {"max_speakers": int(cfg.max_speakers)}
+    return {}
+
+
+def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None) -> list[Turn] | None:
+    """Trechos por voz do arquivo, ou None se desabilitado/indisponível (segue sem separar).
+
+    num_speakers: nº de vozes remotas (loopback) informado pelo usuário — trava a
+    diarização nesse número. None = automático (ou max_speakers do config).
+    """
     if not cfg.enabled:
         return None
     if not cfg.hf_token:
@@ -51,10 +70,11 @@ def diarize(wav: Path, cfg: Diarization) -> list[Turn] | None:
             return None
         if torch.cuda.is_available():
             pipe.to(torch.device("cuda"))
-        kwargs = {}
-        if cfg.max_speakers and int(cfg.max_speakers) > 1:
-            kwargs["max_speakers"] = int(cfg.max_speakers)
-        print("separando participantes por voz...")
+        kwargs = _speaker_kwargs(cfg, num_speakers)
+        if "num_speakers" in kwargs:
+            print(f"separando participantes por voz (fixo em {kwargs['num_speakers']} voz(es))...")
+        else:
+            print("separando participantes por voz...")
         audio = _load_waveform(wav)
         result = pipe(audio, **kwargs) if audio is not None else pipe(str(wav), **kwargs)
         annotation = _extract_annotation(result)

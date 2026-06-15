@@ -231,8 +231,58 @@ class ScribaApp:
             self.ui(lambda: self._pill_processing("recorded"))
         # enfileira na fila serial (o worker processa uma de cada vez): uma call
         # nova pode ser gravada enquanto a anterior transcreve, sem dois Whisper
-        # disputando a GPU — era o que travava em calls seguidas
-        self.jobs.put(rec.folder)
+        # disputando a GPU — era o que travava em calls seguidas. Com diarização +
+        # ask_speakers, _enqueue_meeting pergunta antes o nº de participantes.
+        self._enqueue_meeting(rec.folder)
+
+    def _enqueue_meeting(self, folder) -> None:
+        """Põe a reunião na fila de processamento.
+
+        Com diarização + ask_speakers ligados, abre antes a janela de nº de
+        participantes (na thread de UI, não-bloqueante): o job só entra na fila
+        quando o usuário responde, escolhe automático ou o timeout esgota — então
+        só ESTA reunião espera, e nunca para sempre.
+        """
+        dz = self.cfg.diarization
+        if dz.enabled and dz.ask_speakers:
+            self.ui(lambda: self._ask_speakers_then_enqueue(folder))
+        else:
+            self.jobs.put(folder)
+
+    def _ask_speakers_then_enqueue(self, folder) -> None:
+        """(thread de UI) Abre a janela e enfileira a reunião quando ela resolver."""
+        from .speakers_ui import ask_num_speakers
+
+        def done(n: int | None) -> None:
+            if n is not None:
+                self._save_num_speakers(folder, n)
+                util.update_state(last_num_speakers=int(n))
+            self.jobs.put(folder)
+
+        try:
+            last = util.read_state().get("last_num_speakers")
+            ask_num_speakers(
+                self.root, done,
+                last_value=last if isinstance(last, int) else None,
+                timeout_seconds=int(self.cfg.diarization.ask_speakers_timeout or 0),
+            )
+        except Exception:
+            log.exception("janela de nº de participantes falhou — enfileirando direto")
+            self.jobs.put(folder)
+
+    def _save_num_speakers(self, folder, n: int) -> None:
+        """Grava num_speakers no meta.json (o subprocesso de processamento o lê)."""
+        import json
+        from pathlib import Path
+
+        meta_path = Path(folder) / "meta.json"
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            meta["num_speakers"] = int(n)
+            util.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
+            log.info("nº de participantes informado (%d): %s", n, getattr(folder, "name", folder))
+        except Exception:
+            log.exception("não consegui gravar num_speakers no meta de %s", getattr(folder, "name", folder))
 
     # ------------------------------------------------------------- janelas --
 

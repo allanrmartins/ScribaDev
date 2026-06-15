@@ -191,6 +191,21 @@ class SettingsWindow:
                 lambda n=url_name: __import__("webbrowser").open(f"https://huggingface.co/pyannote/{n}"),
             ).pack(side="left", padx=3)
 
+        self.ask_speakers_var = tk.BooleanVar()
+        self._toggle_row(tab, "Perguntar o nº de participantes ao fim da call", self.ask_speakers_var)
+        to_row = tk.Frame(tab, bg=_BG)
+        to_row.pack(fill="x", pady=(0, 2))
+        tk.Label(to_row, text="Tempo até cair no automático", bg=_BG, fg=PALETTE["text"], font=FONT).pack(side="left")
+        self.ask_timeout_var = tk.IntVar(value=90)
+        Stepper(to_row, self.ask_timeout_var, step=15, lo=0, hi=600).pack(side="right")
+        tk.Label(
+            tab,
+            text="Com a diarização ligada, ao encerrar a call abre uma janela no topo perguntando quantas "
+                 "pessoas (além de você) participaram — trava a separação por voz nesse número.\n"
+                 "0 s = espera você responder; senão, sem resposta cai no modo automático.",
+            bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), justify="left", wraplength=660,
+        ).pack(anchor="w", pady=(2, 0))
+
         hk_row = tk.Frame(tab, bg=_BG)
         hk_row.pack(fill="x", pady=6)
         tk.Label(hk_row, text="Atalho global gravar/parar", bg=_BG, fg=PALETTE["text"], font=FONT).pack(side="left")
@@ -647,6 +662,8 @@ class SettingsWindow:
         self.autostart_var.set(autostart.is_enabled())
         self.diar_var.set(cfg.diarization.enabled)
         self.hf_token_var.set(cfg.diarization.hf_token)
+        self.ask_speakers_var.set(cfg.diarization.ask_speakers)
+        self.ask_timeout_var.set(int(cfg.diarization.ask_speakers_timeout))
         self.hotkey_var.set(cfg.ui.hotkey)
         self.min_secs_var.set(int(cfg.detection.min_call_seconds))
         self.apps_var.set(cfg.detection.apps)
@@ -732,6 +749,8 @@ class SettingsWindow:
                 cfg.diarization,
                 enabled=self.diar_var.get(),
                 hf_token=self.hf_token_var.get().strip(),
+                ask_speakers=self.ask_speakers_var.get(),
+                ask_speakers_timeout=int(self.ask_timeout_var.get()),
             ),
         )
         config_mod.save(new_cfg)

@@ -50,6 +50,38 @@ class ConfigLoadTests(unittest.TestCase):
         self.assertEqual(cfg.detection.apps, "teams, zoom")
 
 
+class DiarizationConfigTests(unittest.TestCase):
+    """Novos campos de [diarization] (#2): pergunta de nº de participantes."""
+
+    def setUp(self):
+        d = Path(tempfile.mkdtemp(prefix="scriba_diar_"))
+        util.APP_DIR = d
+        util.LOGS_DIR = d / "logs"
+        util.CONFIG_PATH = d / "config.toml"
+
+    def test_defaults(self):
+        dz = config.load().diarization
+        self.assertTrue(dz.ask_speakers)
+        self.assertEqual(dz.ask_speakers_timeout, 90)
+
+    def test_round_trip_preserva_campos(self):
+        import dataclasses
+
+        cfg = config.load()
+        config.save(dataclasses.replace(
+            cfg,
+            diarization=dataclasses.replace(
+                cfg.diarization, enabled=True, ask_speakers=False,
+                ask_speakers_timeout=120, max_speakers=4,
+            ),
+        ))
+        got = config.load().diarization
+        self.assertTrue(got.enabled)
+        self.assertFalse(got.ask_speakers)
+        self.assertEqual(got.ask_speakers_timeout, 120)
+        self.assertEqual(got.max_speakers, 4)
+
+
 _HAVE_DPAPI = util.dpapi_encrypt("probe") is not None
 
 

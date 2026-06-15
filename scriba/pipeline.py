@@ -12,13 +12,21 @@ from .config import load
 from .transcription import TranscriptionProvider, make_transcriber
 
 
-def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: TranscriptionProvider | None = None) -> int:
+def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: TranscriptionProvider | None = None,
+                      num_speakers: int | None = None) -> int:
     folder = Path(folder)
     meta_path = folder / "meta.json"
     if not meta_path.exists():
         print(f"meta.json não encontrado em {folder}")
         return 1
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+    # nº de vozes remotas para travar a diarização: o argumento (CLI --speakers)
+    # sobrepõe e passa a valer nas próximas reprocessadas; sem ele, usa o que a
+    # janela de fim de call gravou no meta. None nos dois = diarização automática.
+    if num_speakers is not None:
+        meta["num_speakers"] = int(num_speakers)
+    num_speakers = meta.get("num_speakers")
 
     if meta.get("audio_removed"):
         # áudio apagado DE PROPÓSITO (keep_audio=false): os WAVs não existem mais,
@@ -80,7 +88,7 @@ def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: Transc
         from . import diarize as diarize_mod
 
         lb_segments = next((seg for st, _sp, seg, _off in pending if st == "loopback"), [])
-        turns = diarize_mod.diarize(loopback_wav, cfg.diarization)
+        turns = diarize_mod.diarize(loopback_wav, cfg.diarization, num_speakers=num_speakers)
         if turns:
             diarized_groups = diarize_mod.assign_speakers(lb_segments, turns)
             meta["diarization_model"] = cfg.diarization.model
@@ -134,7 +142,8 @@ def _mark_failed(folder: Path, exc: BaseException) -> None:
         pass  # meta ilegível: o supervisor (app) ainda marca failed pelo rc
 
 
-def process_folder(folder: Path, force_cpu: bool = False, transcriber: TranscriptionProvider | None = None) -> Path | None:
+def process_folder(folder: Path, force_cpu: bool = False, transcriber: TranscriptionProvider | None = None,
+                   num_speakers: int | None = None) -> Path | None:
     """Fluxo completo pós-call: transcrever + gerar notas. Retorna o MD exportado.
 
     Qualquer exceção vira status="failed" no meta antes de propagar — a UI nunca
@@ -174,7 +183,8 @@ def process_folder(folder: Path, force_cpu: bool = False, transcriber: Transcrip
             skip_transcribe = st in ("transcribed", "summarizing")
         if skip_transcribe:
             print("transcript.json já existe — retomando direto no resumo")
-        elif transcribe_folder(folder, force_cpu=force_cpu, transcriber=transcriber) != 0:
+        elif transcribe_folder(folder, force_cpu=force_cpu, transcriber=transcriber,
+                               num_speakers=num_speakers) != 0:
             return None
         from . import notes
 

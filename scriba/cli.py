@@ -24,6 +24,8 @@ def main(argv: list[str] | None = None) -> int:
     p_tr = sub.add_parser("transcribe", help="(re)transcreve uma pasta de reunião")
     p_tr.add_argument("folder", type=Path)
     p_tr.add_argument("--cpu", action="store_true", help="força transcrição em CPU")
+    p_tr.add_argument("--speakers", type=int, default=None, metavar="N",
+                      help="nº de participantes remotos: trava a diarização em N vozes (persiste no meta)")
 
     p_su = sub.add_parser("summarize", help="(re)gera o resumo e o notas.md de uma pasta de reunião")
     p_su.add_argument("folder", type=Path)
@@ -34,6 +36,8 @@ def main(argv: list[str] | None = None) -> int:
         "--when-ready", action="store_true",
         help="pré-carrega o modelo e espera a gravação terminar (usado pelo app durante a call)",
     )
+    p_proc.add_argument("--speakers", type=int, default=None, metavar="N",
+                        help="nº de participantes remotos: trava a diarização em N vozes (persiste no meta)")
 
     sub.add_parser("devices", help="lista dispositivos de áudio (microfone e loopback)")
     sub.add_parser("detect", help="modo debug: imprime as transições de estado da detecção")
@@ -77,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "transcribe":
         from .pipeline import transcribe_folder
 
-        return transcribe_folder(args.folder, force_cpu=args.cpu)
+        return transcribe_folder(args.folder, force_cpu=args.cpu, num_speakers=args.speakers)
     if args.cmd == "summarize":
         from .pipeline import summarize_folder
 
@@ -87,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.when_ready:
             return process_when_ready(args.folder)
-        return 0 if process_folder(args.folder) else 1
+        return 0 if process_folder(args.folder, num_speakers=args.speakers) else 1
     if args.cmd == "run":
         from .main import run_app
 
@@ -307,7 +311,8 @@ def cmd_doctor(args) -> int:
 
             gpu = "GPU" if torch.cuda.is_available() else "CPU"
             if cfg.diarization.hf_token:
-                _print(_OK, "Diarização", f"habilitada ({gpu}); modelo {cfg.diarization.model}")
+                mode = "pergunta nº de participantes" if cfg.diarization.ask_speakers else "automático"
+                _print(_OK, "Diarização", f"habilitada ({gpu}); modelo {cfg.diarization.model}; {mode}")
             else:
                 _print(_WARN, "Diarização", "habilitada mas SEM token HF — configure na aba Gravação")
         except ImportError as e:

@@ -312,6 +312,28 @@ def atomic_write_text(path: Path, data: str, encoding: str = "utf-8") -> None:
         raise
 
 
+# -- estado leve do app (state.json): preferências de conveniência, não config --
+# Ex.: posição da pílula (overlay.py) e o último nº de participantes informado.
+# Perdê-lo nunca quebra nada — por isso tudo aqui é silencioso em erro.
+
+def read_state() -> dict:
+    """Lê o state.json. {} se ausente/ilegível."""
+    try:
+        return json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def update_state(**values) -> None:
+    """Mescla `values` no state.json (escrita atômica, preserva as outras chaves)."""
+    try:
+        data = read_state()
+        data.update(values)
+        atomic_write_text(STATE_PATH, json.dumps(data))
+    except Exception:
+        pass
+
+
 # lock criado há mais de 2 h sem PID vivo é considerado órfão de crash
 LOCK_MAX_AGE_SECONDS = 7200
 

@@ -69,6 +69,10 @@ enabled = false
 hf_token = ""
 model = "pyannote/speaker-diarization-3.1"
 max_speakers = 0         # 0 = automático
+# Ao fim da call, perguntar nº de participantes (vozes remotas) numa janela e
+# travar a diarização nesse número — separa muito melhor que o automático.
+ask_speakers = true
+ask_speakers_timeout = 90   # s sem resposta -> automático (0 = espera indefinida)
 
 [summary]
 enabled = true           # gerar resumo estruturado da reunião (IA)
@@ -143,6 +147,11 @@ class Diarization:
     hf_token: str = ""
     model: str = "pyannote/speaker-diarization-3.1"
     max_speakers: int = 0
+    # Ao fim de cada call, perguntar quantos participantes remotos houve e travar
+    # a diarização em num_speakers=N (separa muito melhor que o automático). 0 no
+    # timeout = espera indefinida; senão cai no automático após N segundos.
+    ask_speakers: bool = True
+    ask_speakers_timeout: int = 90
 
 
 @dataclass(frozen=True)
@@ -288,6 +297,10 @@ enabled = {_b(dz.enabled)}
 hf_token = {_s(_maybe_protect(dz.hf_token))}
 model = {_s(dz.model)}
 max_speakers = {_n(dz.max_speakers)}         # 0 = automático
+# Ao fim da call, perguntar nº de participantes (vozes remotas) e travar a
+# diarização nesse número — separa muito melhor que o automático.
+ask_speakers = {_b(dz.ask_speakers)}
+ask_speakers_timeout = {_n(dz.ask_speakers_timeout)}   # s sem resposta -> automático (0 = espera indefinida)
 
 [summary]
 enabled = {_b(s.enabled)}           # gerar resumo estruturado da reunião (IA)
