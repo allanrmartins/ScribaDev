@@ -87,6 +87,10 @@ def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None) -> Dia
             return None
         if torch.cuda.is_available():
             pipe.to(torch.device("cuda"))
+            # blinda contra o sysmem fallback do Windows (spill VRAM->RAM = freeze):
+            # capa o allocator do PyTorch com uma margem livre, então VRAM apertada/
+            # bloco pesado vira OOM capturável (cai em "Participantes"), não trava (issue #8).
+            _cap_pyannote_vram()
         audio = _load_waveform(wav)
         kwargs = _speaker_kwargs(cfg, num_speakers)
         chunk_s = max(0, int(getattr(cfg, "chunk_minutes", 3) or 0)) * 60
@@ -121,6 +125,7 @@ def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None) -> Dia
         # segura ~1-2 GB durante o resumo (claude -p) e o arquivamento (ffmpeg), que
         # rodam depois no MESMO processo do pipeline. (O contexto CUDA do torch em si,
         # ~0,5-1 GB, só sai quando o subprocesso encerra — aí é inevitável.)
+        _uncap_pyannote_vram()  # restaura a fração do allocator (o cap valia só aqui)
         pipe = None
         try:
             import gc
@@ -188,6 +193,52 @@ def _free_cuda() -> None:
         pass
 
 
+# Margem de VRAM (MB) deixada LIVRE no device durante a diarização. O working-set
+# medido do pyannote é ~3,3 GB/bloco; capar o allocator do PyTorch nesse teto faz um
+# bloco pesado (ou VRAM já apertada por outra app) levantar um OutOfMemoryError
+# CAPTURÁVEL — que diarize() degrada para "Participantes" — em vez de cair no fallback
+# VRAM->RAM do Windows, que TRAVA a máquina e não se recupera. Diagnóstico: issue #8
+# (não era vazamento nem fragmentação — o gatilho é VRAM livre baixa -> sysmem fallback).
+_VRAM_KEEP_FREE_MB = 1024
+
+
+def _cap_pyannote_vram(keep_free_mb: int = _VRAM_KEEP_FREE_MB) -> None:
+    """Limita o allocator CUDA do PyTorch a deixar ~keep_free_mb livres no device.
+
+    Só afeta o pool do PyTorch (pyannote); a transcrição (ctranslate2) usa memória
+    própria e já liberou quando a diarização roda. Falha graciosamente (sem cap) se
+    a API não existir ou a VRAM estiver indisponível."""
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return
+        dev = torch.cuda.current_device()
+        free, total = torch.cuda.mem_get_info(dev)
+        held = torch.cuda.memory_reserved(dev)  # o que o allocator já segura (modelo)
+        # teto do processo = o que já temos + (livre - margem); nunca abaixo do atual.
+        cap = held + max(0, free - keep_free_mb * 1024 * 1024)
+        frac = min(0.95, max(0.05, cap / total))
+        torch.cuda.set_per_process_memory_fraction(frac, dev)
+        log.info(
+            "diarização: allocator CUDA capado em ~%.0f MB (frac %.2f; %.0f MB livres, margem %d MB)",
+            cap / 1e6, frac, free / 1e6, keep_free_mb,
+        )
+    except Exception:
+        log.debug("não consegui capar o allocator CUDA — seguindo sem cap", exc_info=True)
+
+
+def _uncap_pyannote_vram() -> None:
+    """Restaura a fração do allocator (1.0) ao fim da diarização."""
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.set_per_process_memory_fraction(1.0, torch.cuda.current_device())
+    except Exception:
+        pass
+
+
 def _cosine(a, b) -> float:
     import numpy as np
 
@@ -240,7 +291,16 @@ def _diarize_chunked(pipe, audio, sr: int, chunk_s: int) -> tuple[list[Turn], di
     for i in range(n_chunks):
         a, b = i * chunk_n, min((i + 1) * chunk_n, total)
         offset = a / sr
-        out = _run_pipe(pipe, {"waveform": wav[:, a:b].clone(), "sample_rate": sr}, {})
+        try:
+            out = _run_pipe(pipe, {"waveform": wav[:, a:b].clone(), "sample_rate": sr}, {})
+        except Exception as e:
+            # Resiliência por bloco: um bloco que falha (ex.: OOM sob VRAM apertada —
+            # com o cap, o spill->freeze vira um OutOfMemoryError) NÃO derruba a call
+            # inteira. Pula só este trecho (cai em "Participantes") e segue com os
+            # demais. Antes, o erro subia e zerava TODA a diarização (issue #8).
+            _free_cuda()
+            log.warning("diarização: bloco %d/%d falhou (%s); pulando este trecho", i + 1, n_chunks, e)
+            continue
         _free_cuda()             # solta o pico de trabalho do bloco antes do próximo
         if out is None:
             continue
