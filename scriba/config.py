@@ -51,7 +51,7 @@ retention_days = 30
 model = "large-v3-turbo"
 device = "auto"          # auto | cuda | cpu
 language = "pt"
-batch_size = 16          # inferência em lote (~2x mais rápido); 0 desliga (turnos mais granulares)
+batch_size = 4           # inferência em lote; 0 desliga (turnos mais granulares). 16 picava ~7,6 GB p/ só 1,16x vs 4 (#7)
 beam_size = 3            # feixes da decodificação; menor = mais rápido (a lib usa 5)
 cpu_threads = 0          # threads quando cai para CPU (0 = automático)
 # Filtro de voz (VAD): 0 = padrão da lib. Suba vad_min_silence_ms / vad_threshold só
@@ -142,7 +142,7 @@ class Whisper:
     model: str = "large-v3-turbo"
     device: str = "auto"
     language: str = "pt"
-    batch_size: int = 16               # #6: GPU com folga de VRAM aguenta 16 (era 8)
+    batch_size: int = 4                # #7: 16 picava ~7,6 GB (só ~1,16x vs 4); 4 ~4,3 GB, folga segura
     beam_size: int = 3                 # #6: feixes da decodificação; menor = mais rápido (lib usa 5)
     cpu_threads: int = 0               # #6: threads no fallback CPU (0 = automático)
     # VAD opt-in (#6): 0 = defaults da lib (sem mudança). >0 recupera voz baixa/pausas.
