@@ -96,5 +96,118 @@ class AssignSpeakersTests(unittest.TestCase):
         self.assertEqual(order, {})
 
 
+class ReLinkTests(unittest.TestCase):
+    """Re-linking de vozes entre blocos (diarização chunked, áudio longo)."""
+
+    def _v(self, *xs):
+        import numpy as np
+        return np.asarray(xs, dtype=np.float32)
+
+    def test_cosine(self):
+        self.assertAlmostEqual(diarize._cosine([1, 0, 0], [1, 0, 0]), 1.0, places=5)
+        self.assertAlmostEqual(diarize._cosine([1, 0, 0], [0, 1, 0]), 0.0, places=5)
+        self.assertEqual(diarize._cosine([0, 0], [1, 0]), 0.0)  # vetor nulo não quebra
+
+    def test_match_cria_religa_e_separa(self):
+        g = []
+        self.assertEqual(diarize._match_or_new_global(g, self._v(1, 0, 0)), "G0")
+        # voz quase idêntica → mesma global
+        self.assertEqual(diarize._match_or_new_global(g, self._v(0.97, 0.03, 0)), "G0")
+        self.assertEqual(len(g), 1)
+        # voz ortogonal → nova global
+        self.assertEqual(diarize._match_or_new_global(g, self._v(0, 1, 0)), "G1")
+        self.assertEqual(len(g), 2)
+
+    def test_centroide_acumula(self):
+        g = []
+        diarize._match_or_new_global(g, self._v(1, 0, 0))
+        diarize._match_or_new_global(g, self._v(1, 1, 0))  # cos=0.707 ≥ 0.5 → mesma voz
+        self.assertEqual(g[0][1], 2)                        # n de amostras
+        self.assertAlmostEqual(float(g[0][0][1]), 0.5, places=5)  # média da 2ª dim
+
+
+# -- fakes p/ testar _diarize_chunked sem pyannote/torch -----------------------
+class _FakeSeg:
+    def __init__(self, s, e):
+        self.start, self.end = s, e
+
+
+class _FakeAnnotation:
+    def __init__(self, tracks):
+        self._tracks = tracks  # [(start, end, label)]
+
+    def labels(self):
+        seen = []
+        for _s, _e, lab in self._tracks:
+            if lab not in seen:
+                seen.append(lab)
+        return seen
+
+    def itertracks(self, yield_label=True):
+        for s, e, lab in self._tracks:
+            yield _FakeSeg(s, e), None, lab
+
+
+class _FakeOut:
+    def __init__(self, tracks, emb):
+        self.speaker_diarization = _FakeAnnotation(tracks)
+        self.speaker_embeddings = emb  # (n_labels, dim), ordem de labels()
+
+
+class _FakePipe:
+    def __init__(self, outs):
+        self._outs, self._i = outs, 0
+
+    def __call__(self, audio, **kw):
+        o = self._outs[self._i]
+        self._i += 1
+        return o
+
+
+class _FakeWave:
+    def __init__(self, arr):
+        self.arr = arr
+
+    @property
+    def shape(self):
+        return self.arr.shape
+
+    def __getitem__(self, k):
+        return _FakeWave(self.arr[k])
+
+    def clone(self):
+        return _FakeWave(self.arr.copy())
+
+
+class ChunkedDiarizeTests(unittest.TestCase):
+    def test_offsets_e_religacao_entre_blocos(self):
+        import numpy as np
+
+        sr, chunk_s = 16000, 60
+        total = int(2.5 * chunk_s * sr)  # 2,5 blocos
+        audio = {"waveform": _FakeWave(np.zeros((1, total), dtype=np.float32)), "sample_rate": sr}
+        EA, EB = np.array([1.0, 0, 0], np.float32), np.array([0, 1.0, 0], np.float32)
+        # bloco0: voz A · bloco1: voz A (mesma) + voz B · bloco2: voz B
+        pipe = _FakePipe([
+            _FakeOut([(0.0, 5.0, "SPEAKER_00")], np.stack([EA])),
+            _FakeOut([(1.0, 4.0, "SPEAKER_00"), (10.0, 15.0, "SPEAKER_01")], np.stack([EA * 0.97, EB])),
+            _FakeOut([(2.0, 8.0, "SPEAKER_00")], np.stack([EB * 0.98])),
+        ])
+        out = diarize._diarize_chunked(pipe, audio, sr, chunk_s)
+        self.assertIsNotNone(out)
+        turns, embeddings = out
+        # A e B re-ligadas entre blocos → só 2 vozes globais
+        self.assertEqual(len(embeddings), 2)
+        self.assertEqual(len({lab for *_x, lab in turns}), 2)
+        starts = sorted(s for s, _e, _l in turns)
+        self.assertIn(0.0, starts)     # bloco0 (offset 0)
+        self.assertIn(61.0, starts)    # bloco1 voz A em 1.0 + 60
+        self.assertIn(122.0, starts)   # bloco2 voz B em 2.0 + 120
+        # a voz A do bloco0 e a do bloco1 têm o MESMO id global
+        g_b0 = next(l for s, _e, l in turns if s == 0.0)
+        g_b1a = next(l for s, _e, l in turns if s == 61.0)
+        self.assertEqual(g_b0, g_b1a)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

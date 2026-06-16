@@ -87,24 +87,31 @@ def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None) -> Dia
             return None
         if torch.cuda.is_available():
             pipe.to(torch.device("cuda"))
-        kwargs = _speaker_kwargs(cfg, num_speakers)
-        if "num_speakers" in kwargs:
-            print(f"separando participantes por voz (fixo em {kwargs['num_speakers']} voz(es))...")
-        else:
-            print("separando participantes por voz...")
         audio = _load_waveform(wav)
-        result = pipe(audio, **kwargs) if audio is not None else pipe(str(wav), **kwargs)
-        annotation = _extract_annotation(result)
-        if annotation is None:
-            print(f"AVISO: não reconheci o retorno da diarização ({type(result).__name__})")
+        kwargs = _speaker_kwargs(cfg, num_speakers)
+        chunk_s = max(0, int(getattr(cfg, "chunk_minutes", 3) or 0)) * 60
+        dur = (audio["waveform"].shape[-1] / int(audio["sample_rate"])) if audio is not None else 0.0
+
+        if audio is not None and chunk_s and dur > chunk_s:
+            # Áudio longo: diariza em blocos p/ NÃO estourar a VRAM (o pico da
+            # diarização é ~O(duração²) — a matriz de afinidade do clustering). As
+            # vozes da PRÓPRIA call são re-ligadas pelo embedding (não depende de
+            # conhecer ninguém). num_speakers não se aplica por bloco.
+            out = _diarize_chunked(pipe, audio, int(audio["sample_rate"]), chunk_s)
+        else:
+            if "num_speakers" in kwargs:
+                print(f"separando participantes por voz (fixo em {kwargs['num_speakers']} voz(es))...")
+            else:
+                print("separando participantes por voz...")
+            out = _run_pipe(pipe, audio if audio is not None else str(wav), kwargs)
+
+        if out is None:
+            print("AVISO: não reconheci o retorno da diarização")
             return None
-        turns = [
-            (float(turn.start), float(turn.end), str(label))
-            for turn, _, label in annotation.itertracks(yield_label=True)
-        ]
+        turns, embeddings = out
         voices = {label for *_x, label in turns}
         print(f"diarização: {len(voices)} voz(es) distintas em {len(turns)} trechos")
-        return DiarizationResult(turns=turns, embeddings=_extract_embeddings(result, annotation))
+        return DiarizationResult(turns=turns, embeddings=embeddings)
     except Exception as e:
         log.exception("diarização falhou")
         print(f"AVISO: diarização falhou ({e}); seguindo com 'Participantes'")
@@ -151,6 +158,104 @@ def _extract_embeddings(result, annotation) -> dict[str, list[float]]:
     except Exception:
         log.exception("não consegui extrair embeddings de voz")
         return {}
+
+
+def _run_pipe(pipe, audio, kwargs) -> tuple[list[Turn], dict[str, list[float]]] | None:
+    """Roda o pipeline num áudio (dict ou caminho) e devolve (turns, embeddings),
+    ou None se não reconheceu o retorno."""
+    result = pipe(audio, **kwargs)
+    annotation = _extract_annotation(result)
+    if annotation is None:
+        return None
+    turns = [
+        (float(turn.start), float(turn.end), str(label))
+        for turn, _, label in annotation.itertracks(yield_label=True)
+    ]
+    return turns, _extract_embeddings(result, annotation)
+
+
+def _free_cuda() -> None:
+    """Libera o cache CUDA (o pico de trabalho), mantendo o modelo carregado."""
+    try:
+        import gc
+
+        import torch
+
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def _cosine(a, b) -> float:
+    import numpy as np
+
+    a = np.asarray(a, dtype=np.float32)
+    b = np.asarray(b, dtype=np.float32)
+    na, nb = float(np.linalg.norm(a)), float(np.linalg.norm(b))
+    return float(np.dot(a, b) / (na * nb)) if na and nb else 0.0
+
+
+# Limiar de cosseno p/ considerar a voz de dois blocos a MESMA pessoa. Conservador:
+# o gap medido é enorme (mesma voz ~0,87 · vozes distintas ~0,11), então 0,5 fica
+# folgado no meio — evita tanto fundir pessoas quanto fragmentar uma só.
+_RELINK_THRESHOLD = 0.5
+
+
+def _match_or_new_global(globals_: list, vec, threshold: float = _RELINK_THRESHOLD) -> str:
+    """Liga o embedding `vec` a uma voz global da call (melhor cosseno ≥ limiar) ou
+    cria uma nova. `globals_` é mutado: [centroide, n_amostras, id] por voz; o
+    centroide da voz casada é atualizado (média acumulada)."""
+    best_i, best_s = -1, -1.0
+    for idx, (cen, _n, _gid) in enumerate(globals_):
+        s = _cosine(vec, cen)
+        if s > best_s:
+            best_i, best_s = idx, s
+    if best_i >= 0 and best_s >= threshold:
+        cen, n, gid = globals_[best_i]
+        globals_[best_i] = [(cen * n + vec) / (n + 1), n + 1, gid]
+        return gid
+    gid = f"G{len(globals_)}"
+    globals_.append([vec, 1, gid])
+    return gid
+
+
+def _diarize_chunked(pipe, audio, sr: int, chunk_s: int) -> tuple[list[Turn], dict[str, list[float]]] | None:
+    """Diariza áudio longo em blocos de `chunk_s` segundos, re-ligando as vozes
+    entre blocos pelo embedding (cosseno). Cada bloco cabe na VRAM; entre blocos o
+    cache CUDA é liberado — assim o pico fica por-bloco e nunca estoura. As vozes
+    da própria call são re-ligadas, então funciona mesmo sem conhecer ninguém."""
+    import numpy as np
+
+    wav = audio["waveform"]
+    total = wav.shape[-1]
+    chunk_n = max(1, int(chunk_s * sr))
+    n_chunks = (total + chunk_n - 1) // chunk_n
+    print(f"separando participantes por voz em {n_chunks} blocos de ~{chunk_s // 60} min "
+          "(áudio longo: evita estouro de VRAM)...")
+
+    globals_: list = []          # [centroide(np), n_amostras, id global] por voz da call
+    all_turns: list[Turn] = []
+    for i in range(n_chunks):
+        a, b = i * chunk_n, min((i + 1) * chunk_n, total)
+        offset = a / sr
+        out = _run_pipe(pipe, {"waveform": wav[:, a:b].clone(), "sample_rate": sr}, {})
+        _free_cuda()             # solta o pico de trabalho do bloco antes do próximo
+        if out is None:
+            continue
+        turns, embs = out
+        local_to_global = {
+            label: _match_or_new_global(globals_, np.asarray(vec, dtype=np.float32))
+            for label, vec in embs.items()
+        }
+        for s, e, label in turns:
+            # voz sem embedding (NaN/silêncio): id isolado do bloco — não re-ligável
+            all_turns.append((s + offset, e + offset, local_to_global.get(label, f"c{i}_{label}")))
+
+    all_turns.sort(key=lambda t: t[0])
+    embeddings = {gid: cen.tolist() for cen, _n, gid in globals_}
+    return all_turns, embeddings
 
 
 def _extract_annotation(result):

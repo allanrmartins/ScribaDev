@@ -63,6 +63,7 @@ class DiarizationConfigTests(unittest.TestCase):
         dz = config.load().diarization
         self.assertTrue(dz.ask_speakers)
         self.assertEqual(dz.ask_speakers_timeout, 90)
+        self.assertEqual(dz.chunk_minutes, 3)
 
     def test_round_trip_preserva_campos(self):
         import dataclasses
@@ -72,7 +73,7 @@ class DiarizationConfigTests(unittest.TestCase):
             cfg,
             diarization=dataclasses.replace(
                 cfg.diarization, enabled=True, ask_speakers=False,
-                ask_speakers_timeout=120, max_speakers=4,
+                ask_speakers_timeout=120, max_speakers=4, chunk_minutes=5,
             ),
         ))
         got = config.load().diarization
@@ -80,6 +81,7 @@ class DiarizationConfigTests(unittest.TestCase):
         self.assertFalse(got.ask_speakers)
         self.assertEqual(got.ask_speakers_timeout, 120)
         self.assertEqual(got.max_speakers, 4)
+        self.assertEqual(got.chunk_minutes, 5)
 
 
 class WhisperConfigTests(unittest.TestCase):

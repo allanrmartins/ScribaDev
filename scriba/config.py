@@ -79,6 +79,9 @@ max_speakers = 0         # 0 = automático
 # travar a diarização nesse número — separa muito melhor que o automático.
 ask_speakers = true
 ask_speakers_timeout = 90   # s sem resposta -> automático (0 = espera indefinida)
+# Áudio longo: diariza em blocos de N min p/ não estourar a VRAM (re-liga as vozes
+# pelo embedding). Resolve o spill VRAM->RAM em reuniões longas. 0 = sempre inteiro.
+chunk_minutes = 3
 
 [summary]
 enabled = true           # gerar resumo estruturado da reunião (IA)
@@ -163,6 +166,9 @@ class Diarization:
     # timeout = espera indefinida; senão cai no automático após N segundos.
     ask_speakers: bool = True
     ask_speakers_timeout: int = 90
+    # Áudio longo: diariza em blocos deste tamanho (min) p/ não estourar a VRAM e
+    # escalar p/ reuniões de 1 h; as vozes são re-ligadas pelo embedding. 0 = sempre inteiro.
+    chunk_minutes: int = 3
 
 
 @dataclass(frozen=True)
@@ -316,6 +322,7 @@ max_speakers = {_n(dz.max_speakers)}         # 0 = automático
 # diarização nesse número — separa muito melhor que o automático.
 ask_speakers = {_b(dz.ask_speakers)}
 ask_speakers_timeout = {_n(dz.ask_speakers_timeout)}   # s sem resposta -> automático (0 = espera indefinida)
+chunk_minutes = {_n(dz.chunk_minutes)}      # diariza em blocos de N min (0 = inteiro) p/ não estourar a VRAM
 
 [summary]
 enabled = {_b(s.enabled)}           # gerar resumo estruturado da reunião (IA)
