@@ -261,6 +261,30 @@ _ARCHIVE_CODECS = {
 }
 
 
+def _transcode_one(ff: list, w: Path, codec_args: list, ext: str) -> dict:
+    """Transcoda um WAV para `ext` (16 kHz mono); em sucesso remove o WAV e devolve
+    o resultado. Thread-safe — cada stream é um arquivo independente, então os
+    streams (mic + loopback) podem ser transcodados em paralelo."""
+    import subprocess
+
+    out = w.with_suffix("." + ext)
+    cmd = ff + ["-hide_banner", "-loglevel", "error", "-y", "-i", str(w),
+                "-ac", "1", "-ar", "16000", *codec_args, str(out)]
+    try:
+        r = subprocess.run(
+            cmd, capture_output=True, text=True, errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception as e:  # ffmpeg sumiu no meio, etc.
+        return {"wav": w, "ok": False, "err": str(e)}
+    if r.returncode == 0 and out.exists() and out.stat().st_size > 0:
+        before = w.stat().st_size
+        w.unlink(missing_ok=True)
+        return {"wav": w, "ok": True, "out": out, "before": before, "after": out.stat().st_size}
+    out.unlink(missing_ok=True)  # não deixa arquivo parcial
+    return {"wav": w, "ok": False, "rc": r.returncode}
+
+
 def archive_audio(folder: Path, cfg) -> None:
     """Pós-transcrição: encolhe o áudio guardado conforme [audio].archive_format.
 
@@ -269,8 +293,6 @@ def archive_audio(folder: Path, cfg) -> None:
     opus/flac          → transcoda para 16 kHz mono e remove o WAV — sem nunca
                          apagar o original antes de confirmar o destino gravado.
     """
-    import subprocess
-
     from . import util
 
     wavs = sorted(folder.glob("*.wav"))
@@ -310,27 +332,25 @@ def archive_audio(folder: Path, cfg) -> None:
     codec_args, ext = codec
     renamed: dict[str, str] = {}
     saved = 0
-    for w in wavs:
-        out = w.with_suffix("." + ext)
-        cmd = ff + ["-hide_banner", "-loglevel", "error", "-y", "-i", str(w),
-                    "-ac", "1", "-ar", "16000", *codec_args, str(out)]
-        try:
-            r = subprocess.run(
-                cmd, capture_output=True, text=True, errors="replace",
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-        except Exception as e:  # ffmpeg sumiu no meio, etc.
-            print(f"AVISO: transcode de {w.name} falhou ({e}); mantendo .wav")
-            continue
-        if r.returncode == 0 and out.exists() and out.stat().st_size > 0:
-            before = w.stat().st_size
-            w.unlink(missing_ok=True)
-            renamed[w.name] = out.name
-            saved += before - out.stat().st_size
-            print(f"  {w.name} → {out.name} ({before / 1e6:.0f} MB → {out.stat().st_size / 1e6:.1f} MB)")
+    # Transcoda os streams (mic + loopback) em PARALELO: ffmpeg é processo externo
+    # (libera o GIL) e cada stream é um arquivo independente, então roda os 2 ao
+    # mesmo tempo — corta ~metade do tempo de arquivamento. Cap em 2 (são 2 streams;
+    # não toca a GPU). A ordem dos resultados acompanha `wavs` (ThreadPoolExecutor.map).
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda w: _transcode_one(ff, w, codec_args, ext), wavs))
+    for res in results:
+        w = res["wav"]
+        if res["ok"]:
+            renamed[w.name] = res["out"].name
+            saved += res["before"] - res["after"]
+            print(f"  {w.name} → {res['out'].name} "
+                  f"({res['before'] / 1e6:.0f} MB → {res['after'] / 1e6:.1f} MB)")
+        elif "err" in res:
+            print(f"AVISO: transcode de {w.name} falhou ({res['err']}); mantendo .wav")
         else:
-            out.unlink(missing_ok=True)  # não deixa arquivo parcial
-            print(f"AVISO: ffmpeg falhou em {w.name} (rc={r.returncode}); mantendo .wav")
+            print(f"AVISO: ffmpeg falhou em {w.name} (rc={res.get('rc')}); mantendo .wav")
 
     if not renamed:
         return

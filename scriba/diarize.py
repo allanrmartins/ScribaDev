@@ -361,7 +361,8 @@ def _load_waveform(wav: Path):
     """Áudio como tensor (canal, tempo), evitando o torchcodec/FFmpeg do pyannote.
 
     WAV PCM é lido direto. Áudio comprimido (opus/flac de uma pasta já arquivada,
-    numa re-transcrição) é decodificado via ffmpeg para um WAV 16 kHz mono temporário.
+    numa re-transcrição) é decodificado via ffmpeg DIRETO para a memória (PCM s16le
+    por pipe) — sem WAV temporário em disco, sem I/O extra nem risco de arquivo órfão.
     """
     try:
         return _read_pcm_wav(wav)
@@ -375,23 +376,25 @@ def _load_waveform(wav: Path):
         log.warning("sem ffmpeg para decodificar %s; deixando o pyannote tentar", wav.name)
         return None
 
-    import os
     import subprocess
-    import tempfile
 
-    tmp = Path(tempfile.gettempdir()) / f"scriba_dz_{os.getpid()}_{wav.stem}.wav"
+    import numpy as np
+    import torch
+
     try:
-        subprocess.run(
-            ff + ["-hide_banner", "-loglevel", "error", "-y", "-i", str(wav),
-                  "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(tmp)],
-            check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        r = subprocess.run(
+            ff + ["-hide_banner", "-loglevel", "error", "-i", str(wav),
+                  "-f", "s16le", "-ac", "1", "-ar", "16000", "pipe:1"],
+            check=True, capture_output=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        return _read_pcm_wav(tmp)
     except Exception as e:
         log.warning("não consegui decodificar %s (%s); deixando o pyannote tentar", wav.name, e)
         return None
-    finally:
-        tmp.unlink(missing_ok=True)
+
+    # mesmo formato do _read_pcm_wav: s16le mono 16 kHz -> float32 normalizado (1, N)
+    data = np.frombuffer(r.stdout, dtype=np.int16).astype(np.float32) / 32768.0
+    return {"waveform": torch.from_numpy(data).unsqueeze(0), "sample_rate": 16000}
 
 
 def assign_speakers(segments: list[Segment], turns: list[Turn]) -> tuple[dict[str, list[Segment]], dict[str, int]]:
