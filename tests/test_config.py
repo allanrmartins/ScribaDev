@@ -85,7 +85,7 @@ class DiarizationConfigTests(unittest.TestCase):
 
 
 class WhisperConfigTests(unittest.TestCase):
-    """Novos campos de [whisper] (#6): beam_size, cpu_threads, vad, batch_size=16."""
+    """Novos campos de [whisper] (#6): beam_size, cpu_threads, vad, batch_size (#7: default 4)."""
 
     def setUp(self):
         d = Path(tempfile.mkdtemp(prefix="scriba_whisper_"))
@@ -95,7 +95,7 @@ class WhisperConfigTests(unittest.TestCase):
 
     def test_defaults(self):
         w = config.load().whisper
-        self.assertEqual(w.batch_size, 16)
+        self.assertEqual(w.batch_size, 4)
         self.assertEqual(w.beam_size, 3)
         self.assertEqual(w.cpu_threads, 0)
         self.assertEqual(w.vad_min_silence_ms, 0)
