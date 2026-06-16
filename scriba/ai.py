@@ -12,6 +12,7 @@ imprime uma linha de diagnóstico — mesmo estilo do código atual.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import urllib.error
 import urllib.request
@@ -62,6 +63,11 @@ def _claude_cli(cfg, system_prompt, user_payload, *, timeout, cwd, hidden_window
         "--model", cfg.model,
         "--output-format", "text",
     ]
+    # Desliga o raciocínio estendido (MAX_THINKING_TOKENS=0): para RESUMIR (extrair +
+    # organizar, não raciocinar) o thinking é desperdício — benchmark mediu ~14,6k
+    # tokens de thinking (80% da geração) por ~3x o tempo e 2x o custo, com qualidade
+    # IGUAL ou melhor sem ele. Vale para o resumo e o test_connection (únicos usos).
+    env = {**os.environ, "MAX_THINKING_TOKENS": "0"}
     try:
         proc = subprocess.run(
             cmd + flags,
@@ -72,6 +78,7 @@ def _claude_cli(cfg, system_prompt, user_payload, *, timeout, cwd, hidden_window
             errors="replace",
             cwd=str(cwd) if cwd else str(util.APP_DIR),
             timeout=timeout,
+            env=env,
             # hidden_window=True só no caminho da bandeja (pythonw sem console); no
             # worker de processamento fica False de propósito — forçar a flag lá
             # dispara o bug do Windows Terminal (janela visível).

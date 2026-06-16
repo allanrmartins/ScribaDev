@@ -233,6 +233,14 @@ def split_header(text: str) -> tuple[str, str | None, str | None]:
     return "\n".join(lines[last_header + 1:]).strip(), title, client
 
 
+# Timeout do resumo ESCALADO pela duração da call: o resumo é geração-bound e cresce
+# com o tamanho da reunião, então um valor fixo cortaria o resumo de uma call longa
+# (ex.: 4 h). `[summary].timeout_seconds` vira o PISO; escala N s por minuto de áudio,
+# com um teto de segurança (evita travar o worker se o claude pendurar de vez).
+_SUMMARY_S_PER_AUDIO_MIN = 20
+_SUMMARY_TIMEOUT_CEILING = 3600  # 1 h — folga grande mesmo p/ uma call de 4 h
+
+
 def generate_summary(transcript_md: str, folder: Path) -> tuple[str | None, str | None, str | None]:
     """Gera o resumo estruturado da transcrição via o provider de IA configurado.
 
@@ -250,15 +258,22 @@ def generate_summary(transcript_md: str, folder: Path) -> tuple[str | None, str 
     # (sem CLAUDE.md alheio no contexto); hidden_window=False de propósito — isto roda
     # no worker (console já oculto) e forçar CREATE_NO_WINDOW dispararia o bug do
     # Windows Terminal (ver o caminho da bandeja em promptgen._call_claude).
-    payload = f"{TITLE_INSTRUCTION}{load_summary_prompt()}"
     try:
-        meeting = (json.loads((folder / "meta.json").read_text(encoding="utf-8")).get("meeting_title") or "").strip()
+        meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
     except Exception:
-        meeting = ""
+        meta = {}
+    meeting = (meta.get("meeting_title") or "").strip()
+
+    payload = f"{TITLE_INSTRUCTION}{load_summary_prompt()}"
     if meeting:
         payload += f"\n\n=== NOME DA REUNIÃO (do título da janela; pista, pode estar incompleto) ===\n{meeting}"
     payload += f"\n\n=== TRANSCRIÇÃO ===\n\n{transcript_md}"
-    out = ai.complete(SYSTEM_PROMPT, payload, timeout=cfg.timeout_seconds, cwd=folder, hidden_window=False)
+
+    # piso = config; escala pela duração do áudio; teto p/ não pendurar o worker
+    audio_min = float(meta.get("duration_seconds") or 0) / 60
+    timeout = min(_SUMMARY_TIMEOUT_CEILING, max(int(cfg.timeout_seconds), int(audio_min * _SUMMARY_S_PER_AUDIO_MIN)))
+
+    out = ai.complete(SYSTEM_PROMPT, payload, timeout=timeout, cwd=folder, hidden_window=False)
     if not out:
         return None, None, None
     return split_header(out)
