@@ -15,7 +15,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub = parser.add_subparsers(dest="cmd")
 
-    sub.add_parser("run", help="inicia o app de bandeja (monitora calls do Teams)")
+    p_run = sub.add_parser("run", help="inicia o app de bandeja (monitora calls do Teams)")
+    p_run.add_argument("--minimized", action="store_true",
+                       help="inicia só na bandeja, sem abrir a janela (usado pelo autostart)")
 
     p_rec = sub.add_parser("record", help="grava manualmente por N segundos (teste)")
     p_rec.add_argument("seconds", type=int)
@@ -95,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "run":
         from .main import run_app
 
-        return run_app()
+        return run_app(minimized=args.minimized)
     if args.cmd == "autostart":
         from .autostart import set_autostart
 
@@ -132,8 +134,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def main_tray() -> int:
-    """Entry point do scribadev-tray.exe (sem console, usado no autostart)."""
-    return main(["run"])
+    """Entry point do scribadev-tray.exe (sem console). Repassa os argumentos do
+    atalho/autostart: o autostart usa `--minimized` (inicia só na bandeja); o atalho
+    normal vem sem args e abre a janela na frente."""
+    return main(["run", *sys.argv[1:]])
 
 
 # ---------------------------------------------------------------- doctor ---

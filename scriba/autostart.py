@@ -36,6 +36,7 @@ def set_autostart(enable: bool) -> int:
         "$ws = New-Object -ComObject WScript.Shell; "
         f"$s = $ws.CreateShortcut('{lnk}'); "
         f"$s.TargetPath = '{target}'; "
+        "$s.Arguments = '--minimized'; "  # autostart inicia só na bandeja (o atalho normal abre a janela)
         f"$s.WorkingDirectory = '{target.parent}'; "
         f"{icon_line}"
         "$s.Description = 'ScribaDev - gravacao automatica de calls do Teams'; "

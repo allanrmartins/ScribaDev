@@ -74,7 +74,10 @@ def _setup_logging() -> None:
 
 
 class ScribaApp:
-    def __init__(self):
+    def __init__(self, start_hidden: bool = True):
+        # start_hidden=True: inicia só na bandeja (autostart). False: abre a janela
+        # na frente (lançamento manual pelo atalho), como qualquer app.
+        self.start_hidden = start_hidden
         self.cfg = load()
         self.stop_event = threading.Event()
         self.ui_queue: queue.Queue = queue.Queue()
@@ -683,6 +686,8 @@ class ScribaApp:
         self.root.after(8000, self._purge_loop)  # limpeza de gravações antigas (e a cada 6 h)
         self.root.after(2500, self._maybe_offer_wizard)  # 1º uso: assistente de perfil
 
+        if not self.start_hidden:
+            self.show_main()  # lançamento manual (atalho): abre a janela na frente
         log.info("ScribaDev iniciado — monitorando calls do Teams")
         self.root.after(100, self._drain_ui)
         self.root.mainloop()
@@ -695,7 +700,7 @@ class ScribaApp:
         return 0
 
 
-def run_app() -> int:
+def run_app(minimized: bool = False) -> int:
     # No scribadev-tray.exe (pythonw) não existe stdout/stderr: qualquer print()
     # — nosso ou de bibliotecas (tqdm do Whisper) — estouraria AttributeError.
     if sys.stdout is None:
@@ -716,4 +721,4 @@ def run_app() -> int:
         else:
             print("ScribaDev já está rodando (ícone na bandeja).")
         return 0
-    return ScribaApp().run()
+    return ScribaApp(start_hidden=minimized).run()
