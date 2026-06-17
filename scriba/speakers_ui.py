@@ -168,13 +168,14 @@ def label_speakers_dialog(parent: tk.Misc, folder, on_saved: Callable[[], None] 
 
     tk.Label(win, text="Rotular participantes", bg=_BG, fg=PALETTE["text"],
              font=("Segoe UI", 12, "bold")).pack(anchor="w")
-    tk.Label(win, text="Confirme ou corrija o nome de cada voz — quando dá, já vem um palpite "
-                       "da IA (revise). O ScribaDev aprende e reconhece nas próximas reuniões, "
-                       "e corrige esta nota na hora.",
+    tk.Label(win, text="Revise o nome de cada voz e MARQUE o check só nas que tiver certeza — "
+                       "só as marcadas são salvas. O palpite da IA vem desmarcado: confirme, "
+                       "corrija o nome ou deixe desmarcado se não souber. O ScribaDev aprende as "
+                       "marcadas e corrige esta nota na hora.",
              bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8),
              wraplength=380, justify="left").pack(anchor="w", pady=(2, 10))
 
-    rows: list[tuple[str, tk.StringVar]] = []
+    rows: list[tuple[str, tk.StringVar, tk.BooleanVar]] = []
     guesses = guesses or {}
     for label, info in voices.items():
         row = tk.Frame(win, bg=_BG)
@@ -188,25 +189,45 @@ def label_speakers_dialog(parent: tk.Misc, folder, on_saved: Callable[[], None] 
         # pré-preenche: voz já nomeada vem com o nome; "Participante N" vem com o
         # palpite da IA (se houver) p/ só confirmar; senão, vazia.
         prefill = guess or ("" if anon else slabel)
+        # check por voz: já reconhecida/rotulada nasce MARCADA; palpite e vazio
+        # nascem DESMARCADOS — no Salvar só vale o que você marcou.
+        confirmed = tk.BooleanVar(value=bool(auto or labeled))
+        # legenda DESMARCADO = o motivo do palpite; MARCADO = "Confirmado" (verde)
         if auto:
-            tag, tag_fg = "  ✓ reconhecido", PALETTE["ok"]
+            base = "reconhecido"
         elif labeled:
-            tag, tag_fg = "  ✓ você rotulou", PALETTE["ok"]
+            base = "você rotulou"
         elif anon and guess:
-            tag, tag_fg = "  palpite — confirme", PALETTE["muted"]
+            base = "palpite"
         else:
-            tag, tag_fg = "", PALETTE["muted"]
+            base = "confirmar"
         tk.Label(row, text=slabel, bg=_BG, fg=PALETTE["text"], font=FONT_BOLD,
                  width=16, anchor="w").pack(side="left")
+        chk = tk.Checkbutton(
+            row, variable=confirmed, bg=_BG, font=("Segoe UI", 8),
+            activebackground=_BG, selectcolor=PALETTE["field"],
+            bd=0, highlightthickness=0, anchor="w", takefocus=False,
+        )
+        chk.pack(side="right", padx=(6, 0))
+
+        # texto + cor seguem o check: marcado → "Confirmado" verde; senão, motivo cinza.
+        # default-args fixam o trio desta linha (evita o late-binding do loop).
+        def _sync_chk(*_a, _chk=chk, _base=base, _var=confirmed):
+            on = _var.get()
+            color = PALETTE["ok"] if on else PALETTE["muted"]
+            _chk.config(text=("Confirmado" if on else _base), fg=color, activeforeground=color)
+        _sync_chk()
+        confirmed.trace_add("write", _sync_chk)
+
         var = tk.StringVar(value=prefill)
         make_entry(row, var, width=20).pack(side="left", fill="x", expand=True, ipady=3)
-        if tag:
-            tk.Label(row, text=tag, bg=_BG, fg=tag_fg, font=("Segoe UI", 8)).pack(side="left", padx=(6, 0))
-        rows.append((slabel, var))
+        rows.append((slabel, var, confirmed))
 
     def save() -> None:
-        renames = {label: var.get().strip() for label, var in rows
-                   if var.get().strip() and var.get().strip() != label}
+        # só vozes MARCADAS com nome != label entram; desmarcado nunca é salvo,
+        # mesmo com palpite preenchido (você não confirmou).
+        renames = {label: var.get().strip() for label, var, confirmed in rows
+                   if confirmed.get() and var.get().strip() and var.get().strip() != label}
         if renames:
             from . import notes
 
