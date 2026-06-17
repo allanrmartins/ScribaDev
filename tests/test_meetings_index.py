@@ -80,11 +80,12 @@ class MeetingsIndexTests(unittest.TestCase):
         # termo inexistente → vazio
         self.assertEqual(mi.search(query="INEXISTENTEQWE"), [])
 
-    def test_transcricao_nao_e_indexada(self):
+    def test_transcricao_e_indexada(self):
+        # v2/#11: o termo só existe DEPOIS do marcador (na transcrição) e DEVE ser achado
         self._make_meeting("a", started_at="2026-06-10T09:00:00",
                             body="resumo curto", transcript_token="SONATRANSCRICAOZZ")
         mi.index_meeting(self.rec / "a")
-        self.assertEqual(mi.search(query="SONATRANSCRICAOZZ"), [])  # está só após o marcador
+        self.assertEqual(len(mi.search(query="SONATRANSCRICAOZZ")), 1)
 
     # -- filtros -------------------------------------------------------------
     def test_busca_por_participante(self):
@@ -175,6 +176,12 @@ class MeetingsIndexTests(unittest.TestCase):
         md = "## Resumo\nlinha do resumo\n\n## Transcrição completa\n\n**Eu:** fala da call\n"
         self.assertIn("resumo", mi._summary_body(md))
         self.assertNotIn("fala da call", mi._summary_body(md))
+
+    def test_transcript_text_pega_so_apos_o_marcador(self):
+        md = "## Resumo\nlinha do resumo\n\n## Transcrição completa\n\n**Eu:** fala da call\n"
+        self.assertIn("fala da call", mi._transcript_text(md))
+        self.assertNotIn("linha do resumo", mi._transcript_text(md))
+        self.assertEqual(mi._transcript_text("## Resumo\nsó resumo, sem transcrição"), "")
 
     # -- versionamento de schema (reconstruível) -----------------------------
     def test_schema_divergente_recria(self):

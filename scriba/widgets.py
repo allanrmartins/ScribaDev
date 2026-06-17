@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import calendar as _calendar
 import ctypes
+import re
 import tkinter as tk
 import tkinter.font as tkfont
+from datetime import date as _date
 from typing import Callable
 
 PALETTE = {
@@ -157,6 +160,112 @@ def make_entry(parent, textvariable: tk.StringVar, width: int = 44) -> tk.Entry:
         relief="flat", font=FONT, highlightthickness=1,
         highlightbackground=PALETTE["border"], highlightcolor=PALETTE["accent"],
     )
+
+
+def add_placeholder(entry: tk.Entry, var: tk.StringVar, text: str) -> None:
+    """Placeholder cinza DENTRO de um make_entry: visível só quando o `var` está
+    vazio, some ao digitar. NÃO escreve no `var` — quem o lê (busca/filtros) recebe
+    sempre o valor real, nunca o texto do placeholder."""
+    ph = tk.Label(entry, text=text, bg=PALETTE["field"], fg=PALETTE["muted"], font=FONT)
+    ph.bind("<Button-1>", lambda e: entry.focus_set())  # clicar no hint foca o campo
+
+    def _upd(*_a) -> None:
+        if var.get():
+            ph.place_forget()
+        else:
+            ph.place(x=6, rely=0.5, anchor="w")
+            ph.lift()
+
+    var.trace_add("write", lambda *a: _upd())
+    _upd()
+
+
+def mask_date_br(var: tk.StringVar) -> None:
+    """Máscara DD/MM/AAAA num StringVar: aceita SÓ dígitos (descarta o resto), insere
+    as barras sozinho e limita a 8 dígitos. 'aqsas' vira '' ; '17062026' vira
+    '17/06/2026'. Idempotente — não entra em loop ao reescrever o próprio var."""
+    def _fmt(*_a) -> None:
+        digits = re.sub(r"\D", "", var.get())[:8]
+        out = digits[:2]
+        if len(digits) > 2:
+            out += "/" + digits[2:4]
+        if len(digits) > 4:
+            out += "/" + digits[4:8]
+        if out != var.get():
+            var.set(out)
+
+    var.trace_add("write", lambda *a: _fmt())
+
+
+class CalendarPopup(tk.Toplevel):
+    """Mini calendário dark (tkinter puro, sem dependência externa) ancorado a um
+    widget. Chama `on_pick(date)` ao escolher um dia. Fecha ao escolher, no Esc ou
+    ao perder o foco (clicar fora). Início da semana no domingo (pt-BR)."""
+
+    _WD = ("D", "S", "T", "Q", "Q", "S", "S")
+    _MONTHS = ("Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho",
+               "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro")
+
+    def __init__(self, anchor: tk.Widget, initial, on_pick: Callable) -> None:
+        super().__init__(anchor.winfo_toplevel())
+        self._on_pick = on_pick
+        base = initial or _date.today()
+        self._y, self._m = base.year, base.month
+        self._today = _date.today()
+        self.overrideredirect(True)
+        self.attributes("-topmost", True)
+        self.configure(bg=PALETTE["border"])  # moldura de 1px
+        self._body = tk.Frame(self, bg=PALETTE["bg"], padx=8, pady=8)
+        self._body.pack(padx=1, pady=1)
+        self._build()
+        anchor.update_idletasks()
+        self.update_idletasks()
+        self.geometry(f"+{anchor.winfo_rootx()}+{anchor.winfo_rooty() + anchor.winfo_height() + 3}")
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.bind("<FocusOut>", lambda e: self.destroy())  # clicar fora fecha
+        self.focus_force()
+
+    def _build(self) -> None:
+        for w in self._body.winfo_children():
+            w.destroy()
+        hdr = tk.Frame(self._body, bg=PALETTE["bg"])
+        hdr.pack(fill="x")
+        LinkLabel(hdr, "‹", self._prev).pack(side="left")
+        tk.Label(hdr, text=f"{self._MONTHS[self._m - 1]} {self._y}", bg=PALETTE["bg"],
+                 fg=PALETTE["text"], font=FONT_BOLD).pack(side="left", expand=True)
+        LinkLabel(hdr, "›", self._next).pack(side="right")
+        grid = tk.Frame(self._body, bg=PALETTE["bg"])
+        grid.pack(pady=(6, 0))
+        for c, wd in enumerate(self._WD):
+            tk.Label(grid, text=wd, bg=PALETTE["bg"], fg=PALETTE["muted"],
+                     font=("Segoe UI", 8), width=3).grid(row=0, column=c, padx=1)
+        weeks = _calendar.Calendar(firstweekday=6).monthdayscalendar(self._y, self._m)
+        for r, week in enumerate(weeks, start=1):
+            for c, day in enumerate(week):
+                if day == 0:
+                    continue
+                d = _date(self._y, self._m, day)
+                hot = d == self._today
+                cell = tk.Label(grid, text=str(day), width=3, font=FONT, cursor="hand2",
+                                bg=PALETTE["field"] if hot else PALETTE["bg"], fg=PALETTE["text"])
+                cell.grid(row=r, column=c, padx=1, pady=1)
+                cell.bind("<Button-1>", lambda e, dd=d: self._pick(dd))
+                cell.bind("<Enter>", lambda e, w=cell: w.configure(bg=PALETTE["accent"]))
+                cell.bind("<Leave>", lambda e, w=cell, h=hot:
+                          w.configure(bg=PALETTE["field"] if h else PALETTE["bg"]))
+
+    def _prev(self) -> None:
+        self._m, self._y = (12, self._y - 1) if self._m == 1 else (self._m - 1, self._y)
+        self._build()
+
+    def _next(self) -> None:
+        self._m, self._y = (1, self._y + 1) if self._m == 12 else (self._m + 1, self._y)
+        self._build()
+
+    def _pick(self, d: _date) -> None:
+        cb = self._on_pick
+        self.destroy()
+        cb(d)
 
 
 def make_secret_entry(parent, textvariable: tk.StringVar, width: int = 44) -> tk.Frame:

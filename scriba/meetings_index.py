@@ -24,11 +24,12 @@ from . import util
 log = logging.getLogger("scriba.meetings_index")
 
 DB_PATH = util.APP_DIR / "index.db"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # v2 (#11): transcrição agora também entra no FTS
 
-# Separa o resumo (indexado p/ busca) da transcrição completa (NÃO indexada na v1:
-# é o grosso do texto — ver "decisões em aberto" da #10). build_notes sempre escreve
-# este cabeçalho no notas.md antes da transcrição.
+# Separa o resumo da transcrição completa no notas.md. AMBOS entram no FTS (v2/#11):
+# o resumo na coluna `body`, a transcrição na coluna `transcript` — assim a busca do
+# dashboard acha em qualquer lugar (como a varredura antiga fazia). build_notes sempre
+# escreve este cabeçalho no notas.md antes da transcrição.
 _TRANSCRIPT_MARKER = "## Transcrição completa"
 
 _DDL = (
@@ -56,8 +57,9 @@ _DDL = (
     "CREATE INDEX IF NOT EXISTS ix_part_name    ON participants(name)",
     "CREATE INDEX IF NOT EXISTS ix_part_meeting ON participants(meeting_id)",
     # FTS5 standalone (guarda o próprio texto: simples e robusto p/ delete/rebuild).
-    # rowid == meetings.id, mantido à mão no insert/delete.
-    "CREATE VIRTUAL TABLE IF NOT EXISTS meetings_fts USING fts5(title, client, participants, body)",
+    # rowid == meetings.id, mantido à mão no insert/delete. `body` = resumo,
+    # `transcript` = transcrição completa (v2/#11) — MATCH sem coluna busca em todas.
+    "CREATE VIRTUAL TABLE IF NOT EXISTS meetings_fts USING fts5(title, client, participants, body, transcript)",
 )
 
 
@@ -110,6 +112,14 @@ def _summary_body(md: str) -> str:
     return (md[:idx] if idx != -1 else md).strip()
 
 
+def _transcript_text(md: str) -> str:
+    """Texto da transcrição completa (tudo DEPOIS do marcador) p/ a busca full-text."""
+    if not md:
+        return ""
+    idx = md.find(_TRANSCRIPT_MARKER)
+    return md[idx + len(_TRANSCRIPT_MARKER):].strip() if idx != -1 else ""
+
+
 def _extract(folder: Path) -> dict | None:
     """Lê `meta.json` (+ `notas.md`) de uma pasta e monta o registro a indexar.
     None se não há `meta.json` (não é pasta de reunião)."""
@@ -142,6 +152,7 @@ def _extract(folder: Path) -> dict | None:
         "export_path": meta.get("export_path") or "",
         "participants": parts,
         "body": _summary_body(md),
+        "transcript": _transcript_text(md),
     }
 
 
@@ -170,8 +181,9 @@ def _upsert(conn: sqlite3.Connection, rec: dict) -> int:
         )
     names = " ".join(p["name"] for p in rec["participants"])
     conn.execute(
-        "INSERT INTO meetings_fts (rowid, title, client, participants, body) VALUES (?,?,?,?,?)",
-        (mid, rec["title"], rec["client"], names, rec["body"]),
+        "INSERT INTO meetings_fts (rowid, title, client, participants, body, transcript)"
+        " VALUES (?,?,?,?,?,?)",
+        (mid, rec["title"], rec["client"], names, rec["body"], rec.get("transcript", "")),
     )
     return mid
 

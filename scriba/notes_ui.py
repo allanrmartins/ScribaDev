@@ -18,10 +18,13 @@ from .widgets import (
     FONT,
     FONT_BOLD,
     PALETTE,
+    CalendarPopup,
     LinkLabel,
     ModernButton,
+    add_placeholder,
     enable_dark_titlebar,
     make_entry,
+    mask_date_br,
     style_notebook,
 )
 
@@ -63,14 +66,57 @@ class NotesWindow:
         left.pack(side="left", fill="y")
         tk.Label(left, text="Reuniões", bg=_BG, fg=PALETTE["text"], font=FONT_BOLD).pack(anchor="w")
 
-        # busca por conteúdo
+        # busca por conteúdo — via índice (#10/#11): full-text resumo+transcrição
         search_row = tk.Frame(left, bg=_BG)
         search_row.pack(fill="x", pady=(6, 0))
         self.search_var = tk.StringVar()
-        make_entry(search_row, self.search_var, width=22).pack(side="left", fill="x", expand=True, ipady=3)
+        se = make_entry(search_row, self.search_var, width=22)
+        se.pack(side="left", fill="x", expand=True, ipady=3)
+        add_placeholder(se, self.search_var, "buscar no resumo e na transcrição…")
         LinkLabel(search_row, "✕", self._clear_search).pack(side="left", padx=(6, 0))
+
+        # filtros estruturados (#11) — usam o índice de busca
+        self.filter_participant_var = tk.StringVar()
+        self.filter_client_var = tk.StringVar()
+        self.filter_since_var = tk.StringVar()
+        self.filter_until_var = tk.StringVar()
+        filt = tk.Frame(left, bg=_BG)
+        filt.pack(fill="x", pady=(4, 0))
+
+        def _frow(label, var, hint, width=12):
+            r = tk.Frame(filt, bg=_BG)
+            r.pack(fill="x", pady=(2, 0))
+            tk.Label(r, text=label, bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8),
+                     width=9, anchor="w").pack(side="left")
+            e = make_entry(r, var, width=width)
+            e.pack(side="left", fill="x", expand=True, ipady=2)
+            add_placeholder(e, var, hint)
+            return e
+
+        _frow("participante", self.filter_participant_var, "nome")
+        _frow("cliente", self.filter_client_var, "empresa")
+        tk.Label(filt, text="período", bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8),
+                 anchor="w").pack(fill="x", pady=(4, 0))
+
+        def _date_row(label, var):
+            # período: só data — máscara DD/MM/AAAA (texto descartado) + datepicker 📅
+            r = tk.Frame(filt, bg=_BG)
+            r.pack(fill="x", pady=(2, 0))
+            tk.Label(r, text=label, bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8),
+                     width=4, anchor="w").pack(side="left")
+            e = make_entry(r, var, width=10)
+            e.pack(side="left", fill="x", expand=True, ipady=2)
+            add_placeholder(e, var, "DD/MM/AAAA")
+            mask_date_br(var)
+            LinkLabel(r, "📅", lambda: self._open_calendar(e, var)).pack(side="left", padx=(4, 0))
+
+        _date_row("de", self.filter_since_var)
+        _date_row("até", self.filter_until_var)
+
         self._search_job = None
-        self.search_var.trace_add("write", lambda *a: self._debounced_search())
+        for _v in (self.search_var, self.filter_participant_var, self.filter_client_var,
+                   self.filter_since_var, self.filter_until_var):
+            _v.trace_add("write", lambda *a: self._debounced_search())
 
         self.notes_tree = ttk.Treeview(left, show="tree", selectmode="browse")
         self.notes_tree.column("#0", width=320)
@@ -158,7 +204,9 @@ class NotesWindow:
             self._refresh_notes_list()
 
     def _clear_search(self) -> None:
-        self.search_var.set("")
+        for v in (self.search_var, self.filter_participant_var, self.filter_client_var,
+                  self.filter_since_var, self.filter_until_var):
+            v.set("")
 
     def _debounced_search(self) -> None:
         if self._search_job:
@@ -233,25 +281,29 @@ class NotesWindow:
 
     def _refresh_notes_list(self) -> None:
         self._search_job = None
-        query = self.search_var.get().strip().lower()
-        try:
-            files = list(self._notes_dir().glob("*.md"))
-        except OSError:
-            files = []
+        q = self.search_var.get().strip()
+        participant = self.filter_participant_var.get().strip()
+        client = self.filter_client_var.get().strip()
+        since = self.filter_since_var.get().strip()
+        until = self.filter_until_var.get().strip()
+        searching = bool(q or participant or client or since or until)
         entries: list[tuple[datetime, str, tuple]] = []
-        for f in files:
-            if query:
-                try:
-                    if query not in f.read_text(encoding="utf-8", errors="replace").lower():
-                        continue
-                except OSError:
-                    continue
-            dt, dur, title = self._note_info(f)
-            entries.append((dt, "note", (f, dur, title)))
-        # reuniões em andamento só aparecem fora de busca (ainda não têm conteúdo)
-        pending = [] if query else self._pending_meetings()
-        for dt, status, folder, title in pending:
-            entries.append((dt, "pending", (folder, status, title)))
+        if searching:
+            # busca pelo índice (#11): full-text (resumo+transcrição) + filtros.
+            # Pendentes não entram (ainda sem conteúdo p/ buscar).
+            entries.extend(self._index_search(q, participant, client, since, until))
+            pending: list = []
+        else:
+            try:
+                files = list(self._notes_dir().glob("*.md"))
+            except OSError:
+                files = []
+            for f in files:
+                dt, dur, title = self._note_info(f)
+                entries.append((dt, "note", (f, dur, title)))
+            pending = self._pending_meetings()
+            for dt, status, folder, title in pending:
+                entries.append((dt, "pending", (folder, status, title)))
         entries.sort(key=lambda x: x[0], reverse=True)
         # assinatura por caminho completo: com a árvore ano/mês/dia, só o nome
         # ("16-34") colidiria entre dias diferentes
@@ -269,7 +321,7 @@ class NotesWindow:
         self._note_items.clear()
         if not entries:
             msg = (
-                f'Nenhuma nota contém "{query}".' if query
+                "Nenhuma reunião encontrada para a busca/filtros." if searching
                 else "Nenhuma nota ainda — elas aparecem aqui depois da primeira reunião."
             )
             self._show_note_pane()
@@ -285,7 +337,7 @@ class NotesWindow:
                 label_day = self._group_label(current_day)
                 day_node = self.notes_tree.insert(
                     "", "end", text=label_day,
-                    open=first_day or bool(query) or label_day in open_days,
+                    open=first_day or searching or label_day in open_days,
                 )
                 first_day = False
             if kind == "note":
@@ -313,6 +365,78 @@ class NotesWindow:
         # poll sempre ativo enquanto a janela está visível: além do progresso das
         # pendentes, é o que faz uma call NOVA aparecer com a janela já aberta
         self._schedule_poll(True)
+
+    # -- busca pelo índice (#11) ----------------------------------------------
+
+    @staticmethod
+    def _br_to_iso(s: str) -> str:
+        """'DD/MM/AAAA' completa → 'AAAA-MM-DD' (p/ comparar no índice). Parcial ou
+        inválida → "" (filtro de data ignorado até a data ficar completa)."""
+        m = re.fullmatch(r"(\d{2})/(\d{2})/(\d{4})", (s or "").strip())
+        return f"{m.group(3)}-{m.group(2)}-{m.group(1)}" if m else ""
+
+    def _open_calendar(self, anchor: tk.Widget, var: tk.StringVar) -> None:
+        """Abre o datepicker ancorado no campo; ao escolher, preenche DD/MM/AAAA."""
+        s = var.get().strip()
+        try:
+            cur = datetime.strptime(s, "%d/%m/%Y").date() if len(s) == 10 else None
+        except ValueError:
+            cur = None
+        CalendarPopup(anchor, cur, lambda d: var.set(d.strftime("%d/%m/%Y")))
+
+    def _index_search(self, q: str, participant: str, client: str,
+                      since: str, until: str) -> list:
+        """Consulta o índice de busca (#10/#11) e devolve entradas 'note' apontando
+        para o .md exportado: (dt, 'note', (path, dur_min, title)). Se o índice ainda
+        não foi construído (o reindex de boot/abertura roda em thread), cai na
+        varredura de texto p/ a busca de texto não aparecer vazia."""
+        from . import meetings_index
+
+        out: list = []
+        try:
+            if meetings_index.count() == 0:
+                return self._bruteforce_text(q) if q else []
+            results = meetings_index.search(
+                query=q or None, participant=participant or None, client=client or None,
+                since=self._br_to_iso(since) or None, until=self._br_to_iso(until) or None,
+                status="done", limit=1000,
+            )
+        except Exception:
+            return self._bruteforce_text(q) if q else []
+        for r in results:
+            exp = r.get("export_path")
+            if not exp:
+                continue
+            path = Path(exp)
+            if not path.exists():
+                continue  # nota apagada à mão; o índice se cura no próximo reindex
+            started = r.get("started_at") or ""
+            try:
+                dt = datetime.fromisoformat(started) if started else self._note_info(path)[0]
+            except ValueError:
+                dt = self._note_info(path)[0]
+            secs = r.get("duration_s")
+            dur = int(secs) // 60 if secs else None
+            out.append((dt, "note", (path, dur, r.get("title"))))
+        return out
+
+    def _bruteforce_text(self, q: str) -> list:
+        """Fallback (índice ainda vazio): varre os .md por substring — o jeito antigo."""
+        ql = q.lower()
+        out: list = []
+        try:
+            files = list(self._notes_dir().glob("*.md"))
+        except OSError:
+            return out
+        for f in files:
+            try:
+                if ql not in f.read_text(encoding="utf-8", errors="replace").lower():
+                    continue
+            except OSError:
+                continue
+            dt, dur, title = self._note_info(f)
+            out.append((dt, "note", (f, dur, title)))
+        return out
 
     # -- progresso de reuniões em andamento ----------------------------------
 
@@ -708,9 +832,25 @@ class NotesWindow:
             self._titlebar_done = True
             enable_dark_titlebar(self.win)
         self.win.update_idletasks()
+        self._ensure_index_async()  # índice de busca pronto/atualizado (#11), em thread
         self._refresh_notes_list()
         self.win.lift()
         self.win.focus_force()
+
+    def _ensure_index_async(self) -> None:
+        """Ao abrir as Notas, garante o índice de busca pronto/atualizado (#11) numa
+        thread — não bloqueia a UI; no-op se já populado."""
+        import threading
+
+        def work() -> None:
+            try:
+                from . import meetings_index
+
+                meetings_index.reindex_if_needed(self.app.cfg.output.resolved_recordings_dir())
+            except Exception:
+                pass
+
+        threading.Thread(target=work, daemon=True).start()
 
     def hide(self) -> None:
         self._stop_progress_anim()
