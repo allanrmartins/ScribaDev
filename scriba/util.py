@@ -286,6 +286,50 @@ def claude_command() -> list[str] | None:
     return [exe]
 
 
+# -- datas no formato BR (máscara/validação dos filtros de busca) ------------
+
+def format_date_br(raw: str) -> str:
+    """Máscara DD/MM/AAAA: mantém só os dígitos (até 8) e insere as barras. Funciona
+    em qualquer ponto da digitação. '19021988' e '19/02/1988' → '19/02/1988'; texto
+    não-numérico ('aqsas') é descartado."""
+    digits = re.sub(r"\D", "", raw or "")[:8]
+    out = digits[:2]
+    if len(digits) > 2:
+        out += "/" + digits[2:4]
+    if len(digits) > 4:
+        out += "/" + digits[4:8]
+    return out
+
+
+def date_br_to_iso(s: str) -> str:
+    """'DD/MM/AAAA' VÁLIDA → 'AAAA-MM-DD'. Incompleta ou inválida (31/02/2020,
+    99/99/9999, 19/21/8890…) → "" — o chamador trata como 'sem filtro'."""
+    try:
+        return datetime.strptime((s or "").strip(), "%d/%m/%Y").strftime("%Y-%m-%d")
+    except ValueError:
+        return ""
+
+
+def date_range_filter(since_br: str, until_br: str) -> tuple[str | None, str | None]:
+    """Semântica do filtro de período da busca (datas em DD/MM/AAAA):
+
+    - só DE válido  → aquele DIA exato (since == until == DE);
+    - só ATÉ válido → aquele DIA exato;
+    - DE e ATÉ      → INTERVALO; a ordem não importa (ajusta para min..max).
+
+    Datas inválidas/parciais são ignoradas. Devolve (since_iso, until_iso) em ISO
+    ('AAAA-MM-DD'), cada um None quando não há filtro aplicável."""
+    lo = date_br_to_iso(since_br)
+    hi = date_br_to_iso(until_br)
+    if lo and hi:
+        return tuple(sorted((lo, hi)))  # intervalo, ordem indiferente
+    if lo:
+        return lo, lo                   # só DE → aquele dia
+    if hi:
+        return hi, hi                   # só ATÉ → aquele dia
+    return None, None
+
+
 def atomic_write_text(path: Path, data: str, encoding: str = "utf-8") -> None:
     """Grava `data` em `path` de forma atômica: escreve num .tmp na mesma pasta
     e faz os.replace() — atômico no Windows contra kill de processo e antivírus.

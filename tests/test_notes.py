@@ -205,5 +205,57 @@ class GuessVoiceNameTests(unittest.TestCase):
             notes.guess_voice_name("Participante 2", "conduz; provavelmente o 'Pedro' citado"), "Pedro")
 
 
+class DateMaskTests(unittest.TestCase):
+    """util.format_date_br + date_br_to_iso: máscara e validação dos filtros de data."""
+
+    def test_format_acumulando_digitos(self):
+        # formata corretamente em qualquer ponto da digitação
+        self.assertEqual(util.format_date_br("1"), "1")
+        self.assertEqual(util.format_date_br("19"), "19")
+        self.assertEqual(util.format_date_br("190"), "19/0")
+        self.assertEqual(util.format_date_br("1902"), "19/02")
+        self.assertEqual(util.format_date_br("190219"), "19/02/19")
+        self.assertEqual(util.format_date_br("19021988"), "19/02/1988")
+
+    def test_format_descarta_nao_digito_e_limita_8(self):
+        self.assertEqual(util.format_date_br("aqsas"), "")
+        self.assertEqual(util.format_date_br("19/02/19x88"), "19/02/1988")
+        self.assertEqual(util.format_date_br("1902198899"), "19/02/1988")  # cap em 8
+
+    def test_iso_de_data_valida(self):
+        self.assertEqual(util.date_br_to_iso("19/02/1988"), "1988-02-19")
+        self.assertEqual(util.date_br_to_iso(" 01/12/2026 "), "2026-12-01")
+
+    def test_iso_parcial_ou_invalida_vira_vazio(self):
+        for s in ("", "19/02", "31/02/2020", "99/99/9999", "19/21/8890", "abc", "1988-02-19"):
+            self.assertEqual(util.date_br_to_iso(s), "", s)
+
+
+class DateRangeFilterTests(unittest.TestCase):
+    """util.date_range_filter: só DE = aquele dia; DE+ATÉ = intervalo (ordem livre)."""
+
+    def test_so_de_e_aquele_dia(self):
+        self.assertEqual(util.date_range_filter("10/06/2026", ""), ("2026-06-10", "2026-06-10"))
+
+    def test_so_ate_e_aquele_dia(self):
+        self.assertEqual(util.date_range_filter("", "10/06/2026"), ("2026-06-10", "2026-06-10"))
+
+    def test_de_e_ate_viram_intervalo(self):
+        self.assertEqual(util.date_range_filter("10/06/2026", "12/06/2026"),
+                         ("2026-06-10", "2026-06-12"))
+
+    def test_ordem_invertida_ajusta_min_max(self):
+        self.assertEqual(util.date_range_filter("12/06/2026", "10/06/2026"),
+                         ("2026-06-10", "2026-06-12"))
+
+    def test_vazio_ou_invalido_nao_filtra(self):
+        self.assertEqual(util.date_range_filter("", ""), (None, None))
+        self.assertEqual(util.date_range_filter("19/02", "abc"), (None, None))
+
+    def test_um_valido_outro_parcial_usa_o_valido_como_dia(self):
+        self.assertEqual(util.date_range_filter("10/06/2026", "12/06"), ("2026-06-10", "2026-06-10"))
+        self.assertEqual(util.date_range_filter("xx", "12/06/2026"), ("2026-06-12", "2026-06-12"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

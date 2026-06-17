@@ -107,7 +107,7 @@ class NotesWindow:
             e = make_entry(r, var, width=10)
             e.pack(side="left", fill="x", expand=True, ipady=2)
             add_placeholder(e, var, "DD/MM/AAAA")
-            mask_date_br(var)
+            mask_date_br(e, var)
             LinkLabel(r, "📅", lambda: self._open_calendar(e, var)).pack(side="left", padx=(4, 0))
 
         _date_row("de", self.filter_since_var)
@@ -368,13 +368,6 @@ class NotesWindow:
 
     # -- busca pelo índice (#11) ----------------------------------------------
 
-    @staticmethod
-    def _br_to_iso(s: str) -> str:
-        """'DD/MM/AAAA' completa → 'AAAA-MM-DD' (p/ comparar no índice). Parcial ou
-        inválida → "" (filtro de data ignorado até a data ficar completa)."""
-        m = re.fullmatch(r"(\d{2})/(\d{2})/(\d{4})", (s or "").strip())
-        return f"{m.group(3)}-{m.group(2)}-{m.group(1)}" if m else ""
-
     def _open_calendar(self, anchor: tk.Widget, var: tk.StringVar) -> None:
         """Abre o datepicker ancorado no campo; ao escolher, preenche DD/MM/AAAA."""
         s = var.get().strip()
@@ -396,10 +389,10 @@ class NotesWindow:
         try:
             if meetings_index.count() == 0:
                 return self._bruteforce_text(q) if q else []
+            since_iso, until_iso = util.date_range_filter(since, until)
             results = meetings_index.search(
                 query=q or None, participant=participant or None, client=client or None,
-                since=self._br_to_iso(since) or None, until=self._br_to_iso(until) or None,
-                status="done", limit=1000,
+                since=since_iso, until=until_iso, status="done", limit=1000,
             )
         except Exception:
             return self._bruteforce_text(q) if q else []

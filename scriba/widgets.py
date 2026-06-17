@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import calendar as _calendar
 import ctypes
-import re
 import tkinter as tk
 import tkinter.font as tkfont
 from datetime import date as _date
 from typing import Callable
+
+from . import util
 
 PALETTE = {
     "bg": "#26262e",
@@ -180,21 +181,29 @@ def add_placeholder(entry: tk.Entry, var: tk.StringVar, text: str) -> None:
     _upd()
 
 
-def mask_date_br(var: tk.StringVar) -> None:
-    """Máscara DD/MM/AAAA num StringVar: aceita SÓ dígitos (descarta o resto), insere
-    as barras sozinho e limita a 8 dígitos. 'aqsas' vira '' ; '17062026' vira
-    '17/06/2026'. Idempotente — não entra em loop ao reescrever o próprio var."""
-    def _fmt(*_a) -> None:
-        digits = re.sub(r"\D", "", var.get())[:8]
-        out = digits[:2]
-        if len(digits) > 2:
-            out += "/" + digits[2:4]
-        if len(digits) > 4:
-            out += "/" + digits[4:8]
-        if out != var.get():
-            var.set(out)
+def mask_date_br(entry: tk.Entry, var: tk.StringVar) -> None:
+    """Máscara DD/MM/AAAA num campo de data. `var` é o textvariable do `entry`.
 
-    var.trace_add("write", lambda *a: _fmt())
+    Reformata no <KeyRelease> (DEPOIS que a tecla já entrou) e joga o cursor pro fim:
+    fazer isso num trace do var embaralha a digitação, porque o trace dispara NO MEIO
+    do insert e briga com o cursor que o Tk ainda vai posicionar. A cor (vermelho se a
+    data completa for inválida, ex.: 19/21/8890) fica num trace separado — mudar cor
+    não mexe no cursor, então vale p/ digitação, datepicker e limpar."""
+    def _reformat(_e=None) -> None:
+        s = entry.get()
+        new = util.format_date_br(s)
+        if new != s:
+            entry.delete(0, "end")
+            entry.insert(0, new)
+        entry.icursor("end")
+
+    def _color(*_a) -> None:
+        s = var.get()
+        ok = len(s) < 10 or bool(util.date_br_to_iso(s))
+        entry.configure(fg=PALETTE["text"] if ok else PALETTE["accent"])
+
+    entry.bind("<KeyRelease>", _reformat)
+    var.trace_add("write", lambda *a: _color())
 
 
 class CalendarPopup(tk.Toplevel):
