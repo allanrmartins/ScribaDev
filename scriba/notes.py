@@ -545,7 +545,12 @@ _PART_HEADER = re.compile(r"(?i)^\s*##\s+participantes\s*$")
 _PART_BULLET = re.compile(r"^[-*]\s+\*\*(.+?)\*\*\s*[—:–-]?\s*(.*)$")
 # palpite de nome: "Alex (identificado: …" no começo, ou "… provavelmente/possivelmente/identificado X"
 _GUESS_LEAD = re.compile(r"^\s*([A-ZÀ-Ý][\wÀ-ÿ/]+)\s+\(")
-_GUESS_MARK = re.compile(r"(?:(?i:provavelmente|possivelmente|identificad[oa])(?:\s+como)?:?)\s+([A-ZÀ-Ý][\wÀ-ÿ]+)")
+_GUESS_MARK = re.compile(
+    r"(?i:provavelmente|possivelmente|identificad[oa]|talvez)"   # marcador (case-insensitive)
+    r"[\s:]+(?:(?:como|o|a|os|as)\s+)*"                          # separador + 'como'/artigo opcionais
+    "[\"'“”‘’]?"                             # aspas opcional (retas ou curvas)
+    r"([A-ZÀ-Ý][\wÀ-ÿ]+)"                                       # nome (capitalizado; 1o token, ate '/')
+)
 
 
 def parse_participants(md: str) -> tuple[dict[str, str], list[str]]:

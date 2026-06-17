@@ -186,6 +186,24 @@ class GuessVoiceNameTests(unittest.TestCase):
         self.assertEqual(
             notes.guess_voice_name("Participante 1", "conduz a reunião; nome não estabelecido com segurança"), "")
 
+    def test_nome_entre_aspas(self):
+        self.assertEqual(
+            notes.guess_voice_name("Participante 1", 'coordena a call; possivelmente "Suzy" (chamada pelo nome)'),
+            "Suzy")
+
+    def test_nome_entre_aspas_curvas(self):
+        self.assertEqual(
+            notes.guess_voice_name("Participante 1", "coordena; possivelmente “Suzy” (chamada)"), "Suzy")
+
+    def test_nome_com_barra_pega_o_primeiro(self):
+        self.assertEqual(
+            notes.guess_voice_name("Participante 3", 'analista; possivelmente "Marcão/Marco" (chamado e responde)'),
+            "Marcão")
+
+    def test_marcador_com_artigo(self):
+        self.assertEqual(
+            notes.guess_voice_name("Participante 2", "conduz; provavelmente o 'Pedro' citado"), "Pedro")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
