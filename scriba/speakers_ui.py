@@ -133,7 +133,8 @@ def has_labelable_voices(folder) -> bool:
         return False
 
 
-def label_speakers_dialog(parent: tk.Misc, folder, on_saved: Callable[[], None] | None = None) -> tk.Toplevel:
+def label_speakers_dialog(parent: tk.Misc, folder, on_saved: Callable[[], None] | None = None,
+                          guesses: dict[str, str] | None = None) -> tk.Toplevel:
     """Diálogo "Rotular participantes" (#1): nomeia as vozes de uma reunião.
 
     Lê os embeddings de voices.json (na pasta da gravação), deixa o usuário dar
@@ -167,25 +168,41 @@ def label_speakers_dialog(parent: tk.Misc, folder, on_saved: Callable[[], None] 
 
     tk.Label(win, text="Rotular participantes", bg=_BG, fg=PALETTE["text"],
              font=("Segoe UI", 12, "bold")).pack(anchor="w")
-    tk.Label(win, text="Dê um nome a cada voz. O ScribaDev aprende e reconhece nas próximas "
-                       "reuniões, e corrige esta nota na hora.",
+    tk.Label(win, text="Confirme ou corrija o nome de cada voz — quando dá, já vem um palpite "
+                       "da IA (revise). O ScribaDev aprende e reconhece nas próximas reuniões, "
+                       "e corrige esta nota na hora.",
              bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8),
              wraplength=380, justify="left").pack(anchor="w", pady=(2, 10))
 
     rows: list[tuple[str, tk.StringVar]] = []
+    guesses = guesses or {}
     for label, info in voices.items():
         row = tk.Frame(win, bg=_BG)
         row.pack(fill="x", pady=3)
-        auto = bool((info or {}).get("auto"))
-        tag = "  ✓ reconhecido" if auto else ""
-        tk.Label(row, text=label, bg=_BG, fg=PALETTE["text"], font=FONT_BOLD,
+        slabel = str(label)
+        info = info or {}
+        auto = bool(info.get("auto"))
+        labeled = bool(info.get("labeled"))   # você já rotulou esta voz antes
+        anon = slabel.startswith("Participante ")
+        guess = (guesses.get(slabel) or "").strip()
+        # pré-preenche: voz já nomeada vem com o nome; "Participante N" vem com o
+        # palpite da IA (se houver) p/ só confirmar; senão, vazia.
+        prefill = guess or ("" if anon else slabel)
+        if auto:
+            tag, tag_fg = "  ✓ reconhecido", PALETTE["ok"]
+        elif labeled:
+            tag, tag_fg = "  ✓ você rotulou", PALETTE["ok"]
+        elif anon and guess:
+            tag, tag_fg = "  palpite — confirme", PALETTE["muted"]
+        else:
+            tag, tag_fg = "", PALETTE["muted"]
+        tk.Label(row, text=slabel, bg=_BG, fg=PALETTE["text"], font=FONT_BOLD,
                  width=16, anchor="w").pack(side="left")
-        # voz anônima ("Participante N") começa vazia; nome conhecido vem preenchido
-        var = tk.StringVar(value="" if str(label).startswith("Participante ") else str(label))
+        var = tk.StringVar(value=prefill)
         make_entry(row, var, width=20).pack(side="left", fill="x", expand=True, ipady=3)
         if tag:
-            tk.Label(row, text=tag, bg=_BG, fg=PALETTE["ok"], font=("Segoe UI", 8)).pack(side="left", padx=(6, 0))
-        rows.append((str(label), var))
+            tk.Label(row, text=tag, bg=_BG, fg=tag_fg, font=("Segoe UI", 8)).pack(side="left", padx=(6, 0))
+        rows.append((slabel, var))
 
     def save() -> None:
         renames = {label: var.get().strip() for label, var in rows

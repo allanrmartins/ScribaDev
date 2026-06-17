@@ -108,6 +108,13 @@ class NotesWindow:
         # (voices.json na pasta da gravação) — empacotado sob demanda
         self.label_voices_btn = ModernButton(copy_row, "Rotular vozes…", self._open_speaker_labeler, width=130)
 
+        # painel "Presentes" colapsável (abaixo dos botões): o palpite da IA de quem é
+        # cada voz, lido do resumo. Só aparece quando a nota tem a seção Participantes.
+        self.presentes_panel = tk.Frame(right, bg=_BG)
+        self._presentes_open = False
+        self._presentes_desc_labels: list[tk.Label] = []
+        self.presentes_panel.bind("<Configure>", self._reflow_presentes)
+
         # área de conteúdo: alterna entre o leitor (markdown) e a barra de progresso
         self.view_frame = tk.Frame(right, bg=_BG)
         self.note_view = tk.Text(self.view_frame)
@@ -355,6 +362,7 @@ class NotesWindow:
         self._show_progress_pane()
         if self.label_voices_btn.winfo_ismapped():
             self.label_voices_btn.pack_forget()  # reunião em andamento: nada a rotular
+        self.presentes_panel.pack_forget()
         self._showing_note = False
         self._current_view_key = folder
         self.note_title_var.set("")
@@ -399,17 +407,20 @@ class NotesWindow:
         self.note_title_var.set(title or "")
         self.note_client_var.set(self._client_of(path))
         self._update_voice_button(path)
-        # mesma nota já renderizada: não re-renderiza (preserva a rolagem durante o poll)
+        # mesma nota já renderizada: não re-renderiza (preserva a rolagem E o painel
+        # Presentes, inclusive aberto/fechado, durante o poll)
         if self._showing_note and self._current_view_key == path:
             return
         self._show_note_pane()
         try:
-            # transcrição fechada por padrão: o que importa é a especificação
-            mdview.render(self.note_view, path.read_text(encoding="utf-8"),
-                          collapsed={"Transcrição completa"})
+            md = path.read_text(encoding="utf-8")
         except OSError as e:
+            self.presentes_panel.pack_forget()
             mdview.render(self.note_view, f"# Erro\n\nNão consegui ler {path.name}: {e}")
             return
+        self._build_presentes_panel(md)  # painel Presentes colapsável acima do leitor
+        # transcrição fechada por padrão: o que importa é a especificação
+        mdview.render(self.note_view, md, collapsed={"Transcrição completa"})
         self._current_view_key = path
         self._showing_note = True
         self._highlight_hits()
@@ -582,7 +593,85 @@ class NotesWindow:
             return  # reunião em andamento: sem vozes a rotular ainda
         from .speakers_ui import label_speakers_dialog
 
-        label_speakers_dialog(self.win, self._recording_folder_for(path), on_saved=self._after_relabel)
+        folder = self._recording_folder_for(path)
+        label_speakers_dialog(self.win, folder, on_saved=self._after_relabel,
+                              guesses=self._voice_guesses(path, folder))
+
+    def _voice_guesses(self, note_path: Path, folder: Path) -> dict[str, str]:
+        """{rótulo da voz → palpite de nome} a partir da seção Presentes do resumo."""
+        import json
+
+        from . import notes
+
+        try:
+            presentes, _ = notes.parse_participants(note_path.read_text(encoding="utf-8"))
+            voices = json.loads((folder / "voices.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return {str(v): notes.guess_voice_name(str(v), presentes.get(str(v), "")) for v in voices}
+
+    # -- painel "Presentes" colapsável -----------------------------------------
+
+    def _build_presentes_panel(self, md: str) -> None:
+        """Monta o painel Presentes (colapsável) com o palpite da IA de quem é cada
+        voz, lido do resumo. Esconde-se quando a nota não tem a seção Participantes."""
+        from . import notes
+
+        for w in self.presentes_panel.winfo_children():
+            w.destroy()
+        self._presentes_desc_labels = []
+        presentes, _menc = notes.parse_participants(md)
+        if not presentes:
+            self.presentes_panel.pack_forget()
+            return
+        self._presentes_n = len(presentes)
+        # mesma fonte/cor dos títulos de seção da nota (## Objetivo etc. no mdview)
+        self._presentes_hdr = tk.Label(self.presentes_panel, bg=_BG, fg=PALETTE["accent_hover"],
+                                       font=("Segoe UI", 13, "bold"), cursor="hand2", anchor="w")
+        self._presentes_hdr.pack(anchor="w")
+        self._presentes_hdr.bind("<Button-1>", lambda e: self._toggle_presentes())
+        self._set_presentes_header()
+        content = tk.Frame(self.presentes_panel, bg=_BG)
+        self._presentes_content = content
+        for label, desc in presentes.items():
+            blk = tk.Frame(content, bg=_BG)
+            blk.pack(fill="x", anchor="w", pady=(3, 0))
+            tk.Label(blk, text="• " + label, bg=_BG, fg=PALETTE["text"], font=FONT_BOLD,
+                     anchor="w").pack(anchor="w")
+            dl = tk.Label(blk, text=desc, bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8),
+                          justify="left", anchor="w", wraplength=600)
+            dl.pack(anchor="w", padx=(12, 0))
+            self._presentes_desc_labels.append(dl)
+        if self._presentes_open:
+            content.pack(fill="x", pady=(4, 0))
+        self.presentes_panel.pack(fill="x", pady=(0, 8), before=self.view_frame)
+        self._reflow_presentes()
+
+    def _set_presentes_header(self) -> None:
+        arrow = "▾" if self._presentes_open else "▸"
+        self._presentes_hdr.configure(
+            text=f"{arrow} Presentes ({self._presentes_n}) — quem é cada voz, segundo a IA")
+
+    def _toggle_presentes(self) -> None:
+        self._presentes_open = not self._presentes_open
+        self._set_presentes_header()
+        if self._presentes_open:
+            self._presentes_content.pack(fill="x", pady=(4, 0))
+            self._reflow_presentes()
+        else:
+            self._presentes_content.pack_forget()
+
+    def _reflow_presentes(self, event=None) -> None:
+        """Ajusta o wrap das descrições à largura atual (responsivo, sem cortar)."""
+        if not self._presentes_desc_labels:
+            return
+        w = event.width if event is not None else self.presentes_panel.winfo_width()
+        wl = max(200, w - 24)
+        if wl == getattr(self, "_presentes_wl", None):
+            return
+        self._presentes_wl = wl
+        for lbl in self._presentes_desc_labels:
+            lbl.configure(wraplength=wl)
 
     def _after_relabel(self) -> None:
         """Pós-rotulagem: re-renderiza a nota (agora com os nomes) e a lista."""

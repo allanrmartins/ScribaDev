@@ -541,6 +541,65 @@ def relabel_speakers(folder: Path, renames: dict[str, str]) -> bool:
     return True
 
 
+_PART_HEADER = re.compile(r"(?i)^\s*##\s+participantes\s*$")
+_PART_BULLET = re.compile(r"^[-*]\s+\*\*(.+?)\*\*\s*[—:–-]?\s*(.*)$")
+# palpite de nome: "Alex (identificado: …" no começo, ou "… provavelmente/possivelmente/identificado X"
+_GUESS_LEAD = re.compile(r"^\s*([A-ZÀ-Ý][\wÀ-ÿ/]+)\s+\(")
+_GUESS_MARK = re.compile(r"(?:(?i:provavelmente|possivelmente|identificad[oa])(?:\s+como)?:?)\s+([A-ZÀ-Ý][\wÀ-ÿ]+)")
+
+
+def parse_participants(md: str) -> tuple[dict[str, str], list[str]]:
+    """Lê a seção `## Participantes` do resumo: (presentes, mencionados).
+
+    `presentes` mapeia o rótulo → a descrição/palpite da IA (ex.: "Participante 2"
+    → "Alex (identificado: …)"). `mencionados` é a lista de nomes citados que não
+    falaram. Best-effort: o resumo é texto livre da IA; sem a seção → ({}, [])."""
+    lines = md.splitlines()
+    start = next((i + 1 for i, ln in enumerate(lines) if _PART_HEADER.match(ln)), None)
+    if start is None:
+        return {}, []
+    presentes: dict[str, str] = {}
+    mencionados: list[str] = []
+    mode: str | None = None
+    for ln in lines[start:]:
+        s = ln.strip()
+        if s.startswith("## "):  # próxima seção: acabou Participantes
+            break
+        low = s.lower()
+        if low.startswith("**presentes"):
+            mode = "pres"
+            continue
+        if low.startswith("**mencionad"):
+            mode = "menc"
+            continue
+        mb = _PART_BULLET.match(s)
+        if not mb:
+            continue
+        label, desc = mb.group(1).strip(), mb.group(2).strip()
+        if mode == "pres":
+            presentes[label] = desc
+        elif mode == "menc":
+            mencionados.append(label)
+    return presentes, mencionados
+
+
+def guess_voice_name(label: str, desc: str) -> str:
+    """Palpite de nome para uma voz, a partir da descrição da IA em Presentes.
+
+    Voz já nomeada (rótulo não é "Participante N") → o próprio rótulo. Senão tenta
+    "Nome (…" no início da descrição ou "provavelmente/possivelmente/identificado X".
+    Retorna "" quando a IA não cravou um nome (o usuário digita)."""
+    if not label.startswith("Participante "):
+        return label
+    m = _GUESS_LEAD.match(desc)
+    if m:
+        return m.group(1)
+    m = _GUESS_MARK.search(desc)
+    if m:
+        return m.group(1)
+    return ""
+
+
 def set_note_title(md_path: Path, new_title: str) -> None:
     """Atualiza o título de uma nota: linha `titulo:` do frontmatter + primeiro H1."""
     new_title = new_title.strip()

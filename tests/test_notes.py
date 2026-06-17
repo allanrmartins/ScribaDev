@@ -142,5 +142,50 @@ class RelabelSpeakersTests(unittest.TestCase):
         self.assertIn("Ana e Participante 12 aqui", txt)
 
 
+class ParseParticipantsTests(unittest.TestCase):
+    """notes.parse_participants: extrai a seção Participantes do resumo."""
+
+    _MD = (
+        "# Reunião X\n\n## Objetivo\nbla\n\n## Participantes\n\n"
+        "**Presentes:**\n"
+        "- **Eu** — desenvolvedor ABAP\n"
+        "- **Participante 1** — conduz a reunião; nome não estabelecido com segurança\n"
+        "- **Participante 2** — Alex (identificado: responde quando chamam 'Alex')\n\n"
+        "**Mencionados (não necessariamente presentes):**\n"
+        "- **Renato** — cliente\n"
+        "- **Ebert / Herbert** — interno\n\n"
+        "## Transcrição completa\n\n**[00:00:00] Eu:** oi\n"
+    )
+
+    def test_presentes_e_mencionados(self):
+        pres, menc = notes.parse_participants(self._MD)
+        self.assertIn("Eu", pres)
+        self.assertTrue(pres["Participante 2"].startswith("Alex ("))
+        self.assertEqual(menc, ["Renato", "Ebert / Herbert"])
+        self.assertNotIn("Renato", pres)
+
+    def test_sem_secao_participantes(self):
+        self.assertEqual(notes.parse_participants("# Nota\n\n## Resumo\ntexto"), ({}, []))
+
+
+class GuessVoiceNameTests(unittest.TestCase):
+    """notes.guess_voice_name: palpite de nome a partir da descrição da IA."""
+
+    def test_ja_nomeada_retorna_o_proprio_label(self):
+        self.assertEqual(notes.guess_voice_name("Pedro", "papel técnico"), "Pedro")
+
+    def test_nome_no_inicio_entre_parenteses(self):
+        self.assertEqual(notes.guess_voice_name("Participante 2", "Alex (identificado: …)"), "Alex")
+
+    def test_marcador_possivelmente(self):
+        self.assertEqual(
+            notes.guess_voice_name("Participante 5", "papel técnico; possivelmente Paulo, mas citado em 3a pessoa"),
+            "Paulo")
+
+    def test_sem_palpite_vira_vazio(self):
+        self.assertEqual(
+            notes.guess_voice_name("Participante 1", "conduz a reunião; nome não estabelecido com segurança"), "")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
