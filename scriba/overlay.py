@@ -52,6 +52,36 @@ def _round_rect(c: tk.Canvas, x1, y1, x2, y2, r, **kw):
     return c.create_polygon(pts, smooth=True, **kw)
 
 
+# WDA_EXCLUDEFROMCAPTURE (Win10 2004+): a janela some de QUALQUER captura/gravação/
+# compartilhamento de tela (Teams/Zoom/Meet/OBS/PrintScreen), mas segue visível
+# localmente pro usuário. É o que mantém a pílula fora da tela transmitida sem
+# precisar detectar "está compartilhando" (issue #9).
+_WDA_EXCLUDEFROMCAPTURE = 0x00000011
+
+
+def _exclude_from_capture(win: tk.Toplevel) -> bool:
+    """Marca a janela como excluída de captura de tela. True se aplicou. Falha
+    graciosa (Windows < 10 2004, sandbox): a pílula segue funcionando, só não fica
+    oculta no compartilhamento."""
+    try:
+        import ctypes
+        import ctypes.wintypes as wt
+
+        win.update_idletasks()  # garante o HWND realizado antes de pegar winfo_id()
+        u32 = ctypes.windll.user32
+        u32.GetAncestor.argtypes = [wt.HWND, wt.UINT]
+        u32.GetAncestor.restype = wt.HWND
+        u32.SetWindowDisplayAffinity.argtypes = [wt.HWND, wt.DWORD]
+        u32.SetWindowDisplayAffinity.restype = wt.BOOL
+        # winfo_id() devolve a janela-FILHA do Tk; a top-level real que a captura vê é
+        # o ancestral-raiz (GA_ROOT=2) — é nela que a afinidade precisa ser aplicada
+        # (na filha, a API falha com ERROR_INVALID_PARAMETER).
+        hwnd = u32.GetAncestor(win.winfo_id(), 2)
+        return bool(u32.SetWindowDisplayAffinity(hwnd, _WDA_EXCLUDEFROMCAPTURE))
+    except Exception:
+        return False
+
+
 class RecordingPill:
     """Janela-pílula da call.
 
@@ -123,6 +153,10 @@ class RecordingPill:
         c.bind("<B1-Motion>", self._drag_move)
         c.bind("<ButtonRelease-1>", self._drag_end)
         self._drag_offset = None
+
+        # oculta a pílula em compartilhamento/captura de tela (issue #9) — uma vez, na
+        # criação (a janela nasce withdrawn, então não vaza nem por um frame).
+        _exclude_from_capture(self.win)
 
         self._pulse()
 
