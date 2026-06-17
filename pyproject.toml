@@ -35,7 +35,9 @@ cuda = [
 # diarização: instale o torch antes (com CUDA, use o índice do PyTorch):
 #   pip install torch --index-url https://download.pytorch.org/whl/cu128
 diarization = [
-    "pyannote.audio>=3.1",
+    # pin na major 4.x (testada): a API do pyannote já quebrou entre majors
+    # (shims em diarize.py) — um 5.x silencioso poderia regredir a diarização (#4).
+    "pyannote.audio>=4,<5",
 ]
 
 [project.urls]
