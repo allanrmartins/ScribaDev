@@ -617,6 +617,21 @@ class ScribaApp:
         if self.root is not None and not self.stop_event.is_set():
             self.root.after(6 * 3600 * 1000, self._purge_loop)
 
+    def _reindex_search_index(self) -> None:
+        """Boot (#12): reconstrói o índice de busca das reuniões se estiver vazio
+        (index.db ausente/recriado/nunca indexado). Em thread — não bloqueia a
+        bandeja; no-op se já populado. Falha aqui nunca derruba o app."""
+        def work() -> None:
+            try:
+                from . import meetings_index
+
+                n = meetings_index.reindex_if_needed(self.cfg.output.resolved_recordings_dir())
+                log.info("índice de busca pronto: %d reunião(ões)", n)
+            except Exception:
+                log.exception("reindex de boot do índice de busca falhou")
+
+        threading.Thread(target=work, daemon=True, name="reindex").start()
+
     def _show_window_listener(self) -> None:
         """Espera o sinal de uma 2ª instância (atalho clicado) e mostra a janela."""
         handle = ctypes.windll.kernel32.CreateEventW(None, False, False, _SHOW_EVENT_NAME)
@@ -685,6 +700,7 @@ class ScribaApp:
         self.scan_pending()
         self.root.after(8000, self._purge_loop)  # limpeza de gravações antigas (e a cada 6 h)
         self.root.after(2500, self._maybe_offer_wizard)  # 1º uso: assistente de perfil
+        self.root.after(5000, self._reindex_search_index)  # índice de busca (#12), só se vazio
 
         if not self.start_hidden:
             self.show_main()  # lançamento manual (atalho): abre a janela na frente

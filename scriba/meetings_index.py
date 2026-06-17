@@ -245,6 +245,18 @@ def reindex(recordings_dir=None) -> int:
     return n
 
 
+def reindex_if_needed(recordings_dir=None) -> int:
+    """Reconstrói o índice SÓ se ele estiver vazio — index.db ausente, recriado por
+    schema divergente (`_ensure_schema` dropa+recria) ou nunca indexado. No-op quando
+    já há reuniões, então no boot do app (#12) o custo é zero depois da 1ª carga.
+    Devolve o nº de reuniões no índice. (Drift de base já populada fica para o
+    `scribadev reindex` manual / hooks incrementais.)"""
+    n = count()  # conecta → _ensure_schema trata divergência de versão (pode zerar)
+    if n == 0:
+        return reindex(recordings_dir)
+    return n
+
+
 # -- busca ------------------------------------------------------------------
 
 def _fts_query(text: str) -> str:

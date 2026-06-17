@@ -204,6 +204,33 @@ class MeetingsIndexTests(unittest.TestCase):
         self.assertTrue(mi.search(participant="Marcelo"))
         self.assertFalse(mi.search(participant="Participante 2"))
 
+    # -- reindex_if_needed: gatilho do boot (#12) ----------------------------
+    def test_reindex_if_needed_popula_quando_vazio(self):
+        self._make_meeting("a", started_at="2026-06-10T09:00:00")
+        self._make_meeting("b", started_at="2026-06-11T09:00:00")
+        self.assertFalse(mi.DB_PATH.exists())  # índice ainda nem existe
+        self.assertEqual(mi.reindex_if_needed(self.rec), 2)
+        self.assertEqual(mi.count(), 2)
+
+    def test_reindex_if_needed_e_noop_quando_populado(self):
+        self._make_meeting("a", started_at="2026-06-10T09:00:00")
+        mi.index_meeting(self.rec / "a")
+        # nova pasta no disco NÃO indexada: se reindex_if_needed varresse, viraria 2
+        self._make_meeting("b", started_at="2026-06-11T09:00:00")
+        self.assertEqual(mi.reindex_if_needed(self.rec), 1)  # já populado → no-op
+        self.assertEqual(mi.count(), 1)
+        self.assertEqual(len(mi.search(status="done")), 1)  # pasta 'b' NÃO foi varrida
+
+    def test_reindex_if_needed_reconstrui_apos_schema_divergente(self):
+        self._make_meeting("a", started_at="2026-06-10T09:00:00")
+        mi.index_meeting(self.rec / "a")
+        import sqlite3
+        with sqlite3.connect(str(mi.DB_PATH)) as c:
+            c.execute("PRAGMA user_version = 999")  # finge schema futuro → será zerado
+        # _ensure_schema zera no connect; reindex_if_needed vê 0 e repopula do disco
+        self.assertEqual(mi.reindex_if_needed(self.rec), 1)
+        self.assertEqual(mi.count(), 1)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
