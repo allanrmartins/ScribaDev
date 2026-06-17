@@ -421,6 +421,15 @@ def build_notes(folder: Path) -> Path | None:
     meta["client"] = client
     meta["export_path"] = str(export_path)
     util.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
+    # indexa p/ busca (#10): o índice é derivado/reconstruível — falha aqui NUNCA
+    # pode quebrar a geração da nota (index_meeting já engole exceções, mas o import
+    # fica protegido por garantia).
+    try:
+        from . import meetings_index
+
+        meetings_index.index_meeting(folder)
+    except Exception:
+        pass
     print(f"notas prontas: {export_path}")
     return export_path
 
@@ -538,6 +547,13 @@ def relabel_speakers(folder: Path, renames: dict[str, str]) -> bool:
             util.atomic_write_text(voices_path, json.dumps(voices, ensure_ascii=False))
         except OSError:
             pass
+    # re-indexa (#10): nomes de participantes mudaram → atualiza a busca
+    try:
+        from . import meetings_index
+
+        meetings_index.index_meeting(folder)
+    except Exception:
+        pass
     return True
 
 

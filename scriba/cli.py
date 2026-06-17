@@ -59,6 +59,17 @@ def main(argv: list[str] | None = None) -> int:
     p_purge.add_argument("--days", type=int, default=None, help="sobrepõe [audio].retention_days do config")
     p_purge.add_argument("--dry-run", action="store_true", help="só lista o que seria apagado")
 
+    sub.add_parser("reindex", help="reconstrói o índice de busca das reuniões a partir das pastas (#10)")
+
+    p_search = sub.add_parser("search", help="busca nas reuniões indexadas (texto, participante, cliente, datas)")
+    p_search.add_argument("query", nargs="*", help="termos de busca full-text (título/resumo/participantes)")
+    p_search.add_argument("--participant", "-p", metavar="NOME", help="filtra por participante (casa parcial)")
+    p_search.add_argument("--client", "-c", metavar="CLIENTE", help="filtra por cliente (casa parcial)")
+    p_search.add_argument("--since", metavar="AAAA-MM-DD", help="reuniões a partir desta data")
+    p_search.add_argument("--until", metavar="AAAA-MM-DD", help="reuniões até esta data")
+    p_search.add_argument("--status", default="done", help="status (default: done; use '' p/ todos)")
+    p_search.add_argument("--limit", type=int, default=20, help="máximo de resultados (default: 20)")
+
     args = parser.parse_args(argv)
 
     if not args.cmd:
@@ -129,8 +140,47 @@ def main(argv: list[str] | None = None) -> int:
         verb = "seria(m) apagada(s)" if args.dry_run else "apagada(s)"
         print(f"{len(affected)} gravação(ões) {verb} (retenção: {int(cfg.audio.retention_days)} dias)")
         return 0
+    if args.cmd == "reindex":
+        from .meetings_index import reindex
+
+        n = reindex()
+        print(f"índice reconstruído: {n} reunião(ões) indexada(s)")
+        return 0
+    if args.cmd == "search":
+        return cmd_search(args)
     parser.error(f"comando desconhecido: {args.cmd}")
     return 2
+
+
+def cmd_search(args) -> int:
+    """`scribadev search`: lista as reuniões do índice (#10) que casam os filtros."""
+    from .meetings_index import search
+
+    results = search(
+        query=" ".join(args.query) or None,
+        participant=args.participant,
+        client=args.client,
+        since=args.since,
+        until=args.until,
+        status=(args.status or None),
+        limit=args.limit,
+    )
+    if not results:
+        print("nenhuma reunião encontrada.")
+        return 0
+    for r in results:
+        when = (r.get("started_at") or "")[:16].replace("T", " ")
+        mins = (r.get("duration_s") or 0) // 60
+        cli = f" · {r['client']}" if r.get("client") else ""
+        dur = f"  [{mins} min]" if mins else ""
+        print(f"{when or '?':16}  {r.get('title') or '(sem título)'}{cli}{dur}")
+        pres = [p["name"] for p in r.get("participants", []) if p["kind"] == "present"]
+        if pres:
+            print(f"    presentes: {', '.join(pres)}")
+        if r.get("export_path"):
+            print(f"    {r['export_path']}")
+    print(f"\n{len(results)} resultado(s)")
+    return 0
 
 
 def main_tray() -> int:

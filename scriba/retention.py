@@ -133,5 +133,12 @@ def purge_old_recordings(cfg, dry_run: bool = False) -> list[tuple[Path, float]]
             continue
         _prune_empty_dirs(rec_dir, folder.parent)
         log.info("retenção: removida %s (%.0f dias)", folder.name, age)
+        # remove do índice de busca (#10): a pasta (fonte da verdade) já foi apagada
+        try:
+            from . import meetings_index
+
+            meetings_index.remove_meeting(folder)
+        except Exception:
+            pass
         affected.append((folder, age))
     return affected
