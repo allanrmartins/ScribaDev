@@ -36,7 +36,8 @@ def main(argv: list[str] | None = None) -> int:
     p_proc.add_argument("folder", type=Path)
     p_proc.add_argument(
         "--when-ready", action="store_true",
-        help="pré-carrega o modelo e espera a gravação terminar (usado pelo app durante a call)",
+        help="espera a gravação terminar e SÓ ENTÃO carrega o modelo (não segura a GPU "
+             "durante a call); usado pelo app",
     )
     p_proc.add_argument("--speakers", type=int, default=None, metavar="N",
                         help="nº de participantes remotos: trava a diarização em N vozes (persiste no meta)")
