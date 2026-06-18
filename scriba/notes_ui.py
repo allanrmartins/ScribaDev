@@ -74,8 +74,13 @@ class NotesWindow:
         se = make_entry(search_row, self.search_var, width=22)
         se.pack(side="left", fill="x", expand=True, ipady=3)
         add_placeholder(se, self.search_var, "buscar no resumo…")
-        se.bind("<Return>", lambda e: self._next_hit())     # Enter: próxima ocorrência
+        se.bind("<Return>", lambda e: self._next_hit())        # Enter: próxima ocorrência
         se.bind("<KP_Enter>", lambda e: self._next_hit())
+        se.bind("<Shift-Return>", lambda e: self._prev_hit())  # Shift+Enter: anterior
+        se.bind("<Shift-KP_Enter>", lambda e: self._prev_hit())
+        self.hit_count_var = tk.StringVar(value="")  # contador "N/M" das ocorrências
+        tk.Label(search_row, textvariable=self.hit_count_var, bg=_BG, fg=PALETTE["muted"],
+                 font=("Segoe UI", 8)).pack(side="left", padx=(6, 0))
         LinkLabel(search_row, "✕", self._clear_search).pack(side="left", padx=(6, 0))
         self.search_transcript_var = tk.BooleanVar(value=False)
         tk.Checkbutton(
@@ -835,6 +840,7 @@ class NotesWindow:
         t.tag_remove("hit_current", "1.0", "end")
         self._hits = []
         self._hit_idx = -1
+        self.hit_count_var.set("")
         if not query:
             return
         mdview.expand_all(t)  # ocorrência pode estar numa seção fechada (ex.: transcrição)
@@ -852,20 +858,30 @@ class NotesWindow:
             self._mark_current_hit()
 
     def _mark_current_hit(self) -> None:
-        """Realça a ocorrência atual (self._hit_idx) e rola até ela."""
+        """Realça a ocorrência atual (self._hit_idx), rola até ela e atualiza 'N/M'."""
         t = self.note_view
         t.tag_remove("hit_current", "1.0", "end")
         if not self._hits:
+            self.hit_count_var.set("")
             return
         start, end = self._hits[self._hit_idx]
         t.tag_add("hit_current", start, end)
         t.see(start)
+        self.hit_count_var.set(f"{self._hit_idx + 1}/{len(self._hits)}")
 
     def _next_hit(self) -> str:
         """Enter na busca: pula para a próxima ocorrência (circular)."""
         if not self._hits:
             return "break"
         self._hit_idx = (self._hit_idx + 1) % len(self._hits)
+        self._mark_current_hit()
+        return "break"
+
+    def _prev_hit(self) -> str:
+        """Shift+Enter na busca: volta para a ocorrência anterior (circular)."""
+        if not self._hits:
+            return "break"
+        self._hit_idx = (self._hit_idx - 1) % len(self._hits)
         self._mark_current_hit()
         return "break"
 
