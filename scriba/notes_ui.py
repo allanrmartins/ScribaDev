@@ -74,6 +74,8 @@ class NotesWindow:
         se = make_entry(search_row, self.search_var, width=22)
         se.pack(side="left", fill="x", expand=True, ipady=3)
         add_placeholder(se, self.search_var, "buscar no resumo…")
+        se.bind("<Return>", lambda e: self._next_hit())     # Enter: próxima ocorrência
+        se.bind("<KP_Enter>", lambda e: self._next_hit())
         LinkLabel(search_row, "✕", self._clear_search).pack(side="left", padx=(6, 0))
         self.search_transcript_var = tk.BooleanVar(value=False)
         tk.Checkbutton(
@@ -204,6 +206,8 @@ class NotesWindow:
         self._showing_note = False
         self._progress_animating = False
         self._hl_query = ""  # última busca já destacada na nota aberta
+        self._hits: list = []  # (start, end) de cada ocorrência na nota aberta
+        self._hit_idx = -1     # ocorrência "atual"; Enter na busca avança (circular)
 
     # -- lista ----------------------------------------------------------------
 
@@ -816,26 +820,54 @@ class NotesWindow:
         self._refresh_notes_list()
 
     def _highlight_hits(self) -> None:
-        """Marca as ocorrências da busca na nota renderizada e rola até a primeira."""
+        """Destaca TODAS as ocorrências da busca na nota e rola até a primeira. A
+        ocorrência "atual" ganha um realce mais forte; Enter no campo de busca anda
+        para a próxima (ver _next_hit)."""
         query = self.search_var.get().strip()
         self._hl_query = query  # registra o que já foi destacado (evita refazer no poll)
         t = self.note_view
-        t.tag_configure("hit", background="#6e3a3a", foreground="#ffffff")
+        # destaque forte: todas em amarelo; a atual em laranja com borda
+        t.tag_configure("hit", background="#ffe14d", foreground="#161616")
+        t.tag_configure("hit_current", background="#ff8c1a", foreground="#000000",
+                        borderwidth=1, relief="solid")
+        t.tag_raise("hit_current")  # a atual vence onde as duas tags se sobrepõem
         t.tag_remove("hit", "1.0", "end")
+        t.tag_remove("hit_current", "1.0", "end")
+        self._hits = []
+        self._hit_idx = -1
         if not query:
             return
         mdview.expand_all(t)  # ocorrência pode estar numa seção fechada (ex.: transcrição)
-        idx, first = "1.0", None
+        idx = "1.0"
         while True:
             idx = t.search(query, idx, nocase=1, stopindex="end")
             if not idx:
                 break
-            end = f"{idx}+{len(query)}c"
+            end = t.index(f"{idx}+{len(query)}c")
             t.tag_add("hit", idx, end)
-            first = first or idx
+            self._hits.append((idx, end))
             idx = end
-        if first:
-            t.see(first)
+        if self._hits:
+            self._hit_idx = 0
+            self._mark_current_hit()
+
+    def _mark_current_hit(self) -> None:
+        """Realça a ocorrência atual (self._hit_idx) e rola até ela."""
+        t = self.note_view
+        t.tag_remove("hit_current", "1.0", "end")
+        if not self._hits:
+            return
+        start, end = self._hits[self._hit_idx]
+        t.tag_add("hit_current", start, end)
+        t.see(start)
+
+    def _next_hit(self) -> str:
+        """Enter na busca: pula para a próxima ocorrência (circular)."""
+        if not self._hits:
+            return "break"
+        self._hit_idx = (self._hit_idx + 1) % len(self._hits)
+        self._mark_current_hit()
+        return "break"
 
     # -- janela -----------------------------------------------------------------
 
