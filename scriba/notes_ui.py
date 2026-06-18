@@ -66,29 +66,15 @@ class NotesWindow:
         left.pack(side="left", fill="y")
         tk.Label(left, text="Reuniões", bg=_BG, fg=PALETTE["text"], font=FONT_BOLD).pack(anchor="w")
 
-        # busca por conteúdo — via índice (#10/#11). Por padrão só no resumo; o
-        # checkbox abaixo inclui a transcrição (FTS escopado por coluna).
+        # busca da ESQUERDA: localiza a NOTA (título + resumo + participantes). NÃO
+        # destaca dentro da nota — isso é a barra de find da direita (self.find_bar).
         search_row = tk.Frame(left, bg=_BG)
         search_row.pack(fill="x", pady=(6, 0))
         self.search_var = tk.StringVar()
         se = make_entry(search_row, self.search_var, width=22)
         se.pack(side="left", fill="x", expand=True, ipady=3)
-        add_placeholder(se, self.search_var, "buscar no resumo…")
-        se.bind("<Return>", lambda e: self._next_hit())        # Enter: próxima ocorrência
-        se.bind("<KP_Enter>", lambda e: self._next_hit())
-        se.bind("<Shift-Return>", lambda e: self._prev_hit())  # Shift+Enter: anterior
-        se.bind("<Shift-KP_Enter>", lambda e: self._prev_hit())
-        self.hit_count_var = tk.StringVar(value="")  # contador "N/M" das ocorrências
-        tk.Label(search_row, textvariable=self.hit_count_var, bg=_BG, fg=PALETTE["muted"],
-                 font=("Segoe UI", 8)).pack(side="left", padx=(6, 0))
+        add_placeholder(se, self.search_var, "filtrar notas (assunto, participante…)")
         LinkLabel(search_row, "✕", self._clear_search).pack(side="left", padx=(6, 0))
-        self.search_transcript_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            left, text="buscar também na transcrição", variable=self.search_transcript_var,
-            bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), activebackground=_BG,
-            activeforeground=PALETTE["text"], selectcolor=PALETTE["field"], bd=0,
-            highlightthickness=0, anchor="w", takefocus=False,
-        ).pack(fill="x", pady=(3, 0))
 
         # filtros estruturados (#11) — usam o índice de busca
         self.filter_participant_var = tk.StringVar()
@@ -130,7 +116,7 @@ class NotesWindow:
 
         self._search_job = None
         for _v in (self.search_var, self.filter_participant_var, self.filter_client_var,
-                   self.filter_since_var, self.filter_until_var, self.search_transcript_var):
+                   self.filter_since_var, self.filter_until_var):
             _v.trace_add("write", lambda *a: self._debounced_search())
 
         self.notes_tree = ttk.Treeview(left, show="tree", selectmode="browse")
@@ -186,6 +172,35 @@ class NotesWindow:
         self.note_view.pack(side="left", fill="both", expand=True)
         self.view_frame.pack(fill="both", expand=True)
 
+        # barra de busca DENTRO da nota (fixa, acima do leitor; só visível com nota
+        # aberta). Independente da busca da esquerda: destaca e navega no texto.
+        self.find_bar = tk.Frame(right, bg=_BG)
+        self.find_var = tk.StringVar()
+        fe = make_entry(self.find_bar, self.find_var, width=20)
+        fe.pack(side="left", fill="x", expand=True, ipady=2)
+        add_placeholder(fe, self.find_var, "buscar nesta nota…")
+        fe.bind("<Return>", lambda e: self._next_hit())        # Enter: próxima
+        fe.bind("<KP_Enter>", lambda e: self._next_hit())
+        fe.bind("<Shift-Return>", lambda e: self._prev_hit())  # Shift+Enter: anterior
+        fe.bind("<Shift-KP_Enter>", lambda e: self._prev_hit())
+        fe.bind("<Escape>", lambda e: self._reset_find())
+        self._find_entry = fe
+        LinkLabel(self.find_bar, "▲", self._prev_hit).pack(side="left", padx=(6, 0))
+        LinkLabel(self.find_bar, "▼", self._next_hit).pack(side="left", padx=(2, 0))
+        self.find_count_var = tk.StringVar(value="")
+        tk.Label(self.find_bar, textvariable=self.find_count_var, bg=_BG, fg=PALETTE["muted"],
+                 font=("Segoe UI", 8), width=6, anchor="w").pack(side="left", padx=(6, 0))
+        self.find_transcript_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            self.find_bar, text="incluir transcrição", variable=self.find_transcript_var,
+            bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), activebackground=_BG,
+            activeforeground=PALETTE["text"], selectcolor=PALETTE["field"], bd=0,
+            highlightthickness=0, takefocus=False,
+        ).pack(side="left", padx=(8, 0))
+        self.find_var.trace_add("write", lambda *a: self._debounced_find())
+        self.find_transcript_var.trace_add("write", lambda *a: self._run_find())
+        self.win.bind("<Control-f>", lambda e: self._focus_find())
+
         # painel de progresso (reunião em processamento)
         ttk.Style().configure(
             "Scriba.Horizontal.TProgressbar",
@@ -210,9 +225,9 @@ class NotesWindow:
         self._current_view_key: Path | None = None
         self._showing_note = False
         self._progress_animating = False
-        self._hl_query = ""  # última busca já destacada na nota aberta
-        self._hits: list = []  # (start, end) de cada ocorrência na nota aberta
-        self._hit_idx = -1     # ocorrência "atual"; Enter na busca avança (circular)
+        self._hits: list = []  # (start, end) de cada ocorrência da busca interna
+        self._hit_idx = -1     # ocorrência "atual"; Enter avança (circular)
+        self._find_job = None  # debounce da busca interna
 
     # -- lista ----------------------------------------------------------------
 
@@ -343,6 +358,8 @@ class NotesWindow:
                 else "Nenhuma nota ainda — elas aparecem aqui depois da primeira reunião."
             )
             self._show_note_pane()
+            self._hide_find_bar()
+            self._showing_note = False  # msg na área da nota: força re-render ao voltar
             mdview.render(self.note_view, msg)
             self._schedule_poll(True)  # segue vigiando: uma call nova deve aparecer sozinha
             return
@@ -411,7 +428,7 @@ class NotesWindow:
             results = meetings_index.search(
                 query=q or None, participant=participant or None, client=client or None,
                 since=since_iso, until=until_iso, status="done", limit=1000,
-                include_transcript=self.search_transcript_var.get(),
+                include_transcript=False,  # localizador de nota: transcrição é da busca interna
             )
         except Exception:
             return self._bruteforce_text(q) if q else []
@@ -433,10 +450,9 @@ class NotesWindow:
         return out
 
     def _bruteforce_text(self, q: str) -> list:
-        """Fallback (índice ainda vazio): varre os .md por substring — o jeito antigo.
-        Respeita o checkbox: sem transcrição, busca só antes do marcador."""
+        """Fallback (índice ainda vazio): varre os .md por substring, só no resumo
+        (corta na transcrição) — localizador de nota."""
         ql = q.lower()
-        incl_tr = self.search_transcript_var.get()
         out: list = []
         try:
             files = list(self._notes_dir().glob("*.md"))
@@ -447,10 +463,9 @@ class NotesWindow:
                 text = f.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            if not incl_tr:
-                i = text.find("## Transcrição completa")
-                if i != -1:
-                    text = text[:i]
+            i = text.find("## Transcrição completa")
+            if i != -1:
+                text = text[:i]  # localizador: só o resumo
             if ql not in text.lower():
                 continue
             dt, dur, title = self._note_info(f)
@@ -506,6 +521,7 @@ class NotesWindow:
         if self.label_voices_btn.winfo_ismapped():
             self.label_voices_btn.pack_forget()  # reunião em andamento: nada a rotular
         self.presentes_panel.pack_forget()
+        self._hide_find_bar()  # reunião em andamento: nada para buscar dentro
         self._showing_note = False
         self._current_view_key = folder
         self.note_title_var.set("")
@@ -550,18 +566,16 @@ class NotesWindow:
         self.note_title_var.set(title or "")
         self.note_client_var.set(self._client_of(path))
         self._update_voice_button(path)
-        # mesma nota já renderizada: não re-renderiza (preserva a rolagem E o painel
-        # Presentes durante o poll). MAS se a busca mudou, re-destaca e rola até a
-        # ocorrência — senão buscar com a nota já aberta não levava à palavra.
+        # mesma nota já renderizada: não re-renderiza (preserva rolagem, Presentes e a
+        # busca interna ativa durante o poll)
         if self._showing_note and self._current_view_key == path:
-            if self.search_var.get().strip() != self._hl_query:
-                self._highlight_hits()
             return
         self._show_note_pane()
         try:
             md = path.read_text(encoding="utf-8")
         except OSError as e:
             self.presentes_panel.pack_forget()
+            self._hide_find_bar()
             mdview.render(self.note_view, f"# Erro\n\nNão consegui ler {path.name}: {e}")
             return
         self._build_presentes_panel(md)  # painel Presentes colapsável acima do leitor
@@ -569,7 +583,8 @@ class NotesWindow:
         mdview.render(self.note_view, md, collapsed={"Transcrição completa"})
         self._current_view_key = path
         self._showing_note = True
-        self._highlight_hits()
+        self._show_find_bar()   # barra de busca dentro da nota (fixa)
+        self._reset_find()      # nova nota → zera a busca interna
 
     # -- cópias independentes ---------------------------------------------------
 
@@ -824,12 +839,18 @@ class NotesWindow:
         self._showing_note = False
         self._refresh_notes_list()
 
-    def _highlight_hits(self) -> None:
-        """Destaca TODAS as ocorrências da busca na nota e rola até a primeira. A
-        ocorrência "atual" ganha um realce mais forte; Enter no campo de busca anda
-        para a próxima (ver _next_hit)."""
-        query = self.search_var.get().strip()
-        self._hl_query = query  # registra o que já foi destacado (evita refazer no poll)
+    def _debounced_find(self) -> None:
+        if self._find_job:
+            self.win.after_cancel(self._find_job)
+        self._find_job = self.win.after(200, self._run_find)
+
+    def _run_find(self, *_a) -> None:
+        """Busca DENTRO da nota aberta (find_bar): destaca tudo, conta N/M, rola até a
+        1ª. Sem "incluir transcrição" busca só o resumo; com, descolapsa a transcrição e
+        busca tudo — t.see só rola em texto não-elidido, por isso a transcrição precisa
+        estar expandida para navegar até um match nela."""
+        self._find_job = None
+        query = self.find_var.get().strip()
         t = self.note_view
         # destaque forte: todas em amarelo; a atual em laranja com borda
         t.tag_configure("hit", background="#ffe14d", foreground="#161616")
@@ -840,13 +861,19 @@ class NotesWindow:
         t.tag_remove("hit_current", "1.0", "end")
         self._hits = []
         self._hit_idx = -1
-        self.hit_count_var.set("")
         if not query:
+            self.find_count_var.set("")
             return
-        mdview.expand_all(t)  # ocorrência pode estar numa seção fechada (ex.: transcrição)
+        tr = mdview.section_head_index(t, "Transcrição completa")  # None se não houver
+        if self.find_transcript_var.get():
+            if tr:
+                mdview.expand_section(t, "Transcrição completa")
+            stop = "end"
+        else:
+            stop = tr or "end"  # só o resumo (antes da transcrição)
         idx = "1.0"
         while True:
-            idx = t.search(query, idx, nocase=1, stopindex="end")
+            idx = t.search(query, idx, nocase=1, stopindex=stop)
             if not idx:
                 break
             end = t.index(f"{idx}+{len(query)}c")
@@ -856,21 +883,22 @@ class NotesWindow:
         if self._hits:
             self._hit_idx = 0
             self._mark_current_hit()
+        else:
+            self.find_count_var.set("0/0")
 
     def _mark_current_hit(self) -> None:
         """Realça a ocorrência atual (self._hit_idx), rola até ela e atualiza 'N/M'."""
         t = self.note_view
         t.tag_remove("hit_current", "1.0", "end")
         if not self._hits:
-            self.hit_count_var.set("")
             return
         start, end = self._hits[self._hit_idx]
         t.tag_add("hit_current", start, end)
         t.see(start)
-        self.hit_count_var.set(f"{self._hit_idx + 1}/{len(self._hits)}")
+        self.find_count_var.set(f"{self._hit_idx + 1}/{len(self._hits)}")
 
     def _next_hit(self) -> str:
-        """Enter na busca: pula para a próxima ocorrência (circular)."""
+        """Enter / ▼: próxima ocorrência (circular)."""
         if not self._hits:
             return "break"
         self._hit_idx = (self._hit_idx + 1) % len(self._hits)
@@ -878,11 +906,34 @@ class NotesWindow:
         return "break"
 
     def _prev_hit(self) -> str:
-        """Shift+Enter na busca: volta para a ocorrência anterior (circular)."""
+        """Shift+Enter / ▲: ocorrência anterior (circular)."""
         if not self._hits:
             return "break"
         self._hit_idx = (self._hit_idx - 1) % len(self._hits)
         self._mark_current_hit()
+        return "break"
+
+    def _reset_find(self) -> str:
+        """Zera a busca interna (nova nota / Esc): campo, hits, contador e realces."""
+        self.find_var.set("")
+        self._hits = []
+        self._hit_idx = -1
+        self.find_count_var.set("")
+        self.note_view.tag_remove("hit", "1.0", "end")
+        self.note_view.tag_remove("hit_current", "1.0", "end")
+        return "break"
+
+    def _show_find_bar(self) -> None:
+        if not self.find_bar.winfo_ismapped():
+            self.find_bar.pack(fill="x", pady=(0, 6), before=self.view_frame)
+
+    def _hide_find_bar(self) -> None:
+        self.find_bar.pack_forget()
+
+    def _focus_find(self) -> str:
+        """Ctrl+F: foca a barra de busca da nota (quando visível)."""
+        if self.find_bar.winfo_ismapped():
+            self._find_entry.focus_set()
         return "break"
 
     # -- janela -----------------------------------------------------------------

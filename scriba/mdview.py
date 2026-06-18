@@ -107,6 +107,26 @@ def expand_all(t: tk.Text) -> None:
         set_section_collapsed(t, key, False)
 
 
+def section_head_index(t: tk.Text, title: str) -> str | None:
+    """Índice (head_start) do cabeçalho da seção cujo título casa (case-insensitive),
+    ou None. Serve para escopar a busca (stopindex) e rolar até a seção."""
+    want = title.strip().lower()
+    for meta in getattr(t, "_mdsections", {}).values():
+        if meta.get("title", "").strip().lower() == want:
+            return meta["head_start"]
+    return None
+
+
+def expand_section(t: tk.Text, title: str) -> bool:
+    """Descolapsa a seção cujo título casa (case-insensitive). True se achou."""
+    want = title.strip().lower()
+    for key, meta in getattr(t, "_mdsections", {}).items():
+        if meta.get("title", "").strip().lower() == want:
+            set_section_collapsed(t, key, False)
+            return True
+    return False
+
+
 # ------------------------------------------------------------------ tabelas ----
 
 
