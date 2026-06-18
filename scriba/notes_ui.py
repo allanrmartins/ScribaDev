@@ -195,6 +195,7 @@ class NotesWindow:
         self._current_view_key: Path | None = None
         self._showing_note = False
         self._progress_animating = False
+        self._hl_query = ""  # última busca já destacada na nota aberta
 
     # -- lista ----------------------------------------------------------------
 
@@ -525,8 +526,11 @@ class NotesWindow:
         self.note_client_var.set(self._client_of(path))
         self._update_voice_button(path)
         # mesma nota já renderizada: não re-renderiza (preserva a rolagem E o painel
-        # Presentes, inclusive aberto/fechado, durante o poll)
+        # Presentes durante o poll). MAS se a busca mudou, re-destaca e rola até a
+        # ocorrência — senão buscar com a nota já aberta não levava à palavra.
         if self._showing_note and self._current_view_key == path:
+            if self.search_var.get().strip() != self._hl_query:
+                self._highlight_hits()
             return
         self._show_note_pane()
         try:
@@ -798,6 +802,7 @@ class NotesWindow:
     def _highlight_hits(self) -> None:
         """Marca as ocorrências da busca na nota renderizada e rola até a primeira."""
         query = self.search_var.get().strip()
+        self._hl_query = query  # registra o que já foi destacado (evita refazer no poll)
         t = self.note_view
         t.tag_configure("hit", background="#6e3a3a", foreground="#ffffff")
         t.tag_remove("hit", "1.0", "end")
