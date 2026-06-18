@@ -284,15 +284,20 @@ def _until_bound(until: str) -> str:
     return u + "T23:59:59" if len(u) == 10 else u
 
 
+_FTS_NO_TRANSCRIPT = "{title client participants body}"  # colunas exceto `transcript`
+
+
 def search(query=None, participant=None, client=None, since=None, until=None,
-           status=None, limit=50) -> list[dict]:
+           status=None, limit=50, include_transcript=True) -> list[dict]:
     """Busca reuniões no índice. Filtros opcionais combinam (AND):
 
     - `query`       — full-text (FTS5) em título/cliente/participantes/resumo;
     - `participant` — nome (casa parcial, case-insensitive) entre os participantes;
     - `client`      — cliente (casa parcial);
     - `since`/`until` — intervalo por `started_at` (ISO 'YYYY-MM-DD' ou completo);
-    - `status`      — status exato (ex.: 'done').
+    - `status`      — status exato (ex.: 'done');
+    - `include_transcript` — quando False, a busca de texto IGNORA a transcrição
+      (só resumo/título/cliente/participantes). True = tudo (default).
 
     Devolve dicts (com a lista `participants`) ordenados por `started_at` desc.
     """
@@ -303,7 +308,11 @@ def search(query=None, participant=None, client=None, since=None, until=None,
             # FTS5 exige o NOME da tabela no MATCH (alias vira "no such column")
             joins += " JOIN meetings_fts ON meetings_fts.rowid = m.id"
             where.append("meetings_fts MATCH ?")
-            params.append(_fts_query(query))
+            fq = _fts_query(query)
+            if not include_transcript:
+                # filtro de coluna do FTS5: restringe os termos às colunas != transcript
+                fq = f"{_FTS_NO_TRANSCRIPT} : ({fq})"
+            params.append(fq)
         if participant:
             where.append("m.id IN (SELECT meeting_id FROM participants WHERE name LIKE ?)")
             params.append(f"%{participant}%")

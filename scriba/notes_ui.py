@@ -66,14 +66,22 @@ class NotesWindow:
         left.pack(side="left", fill="y")
         tk.Label(left, text="Reuniões", bg=_BG, fg=PALETTE["text"], font=FONT_BOLD).pack(anchor="w")
 
-        # busca por conteúdo — via índice (#10/#11): full-text resumo+transcrição
+        # busca por conteúdo — via índice (#10/#11). Por padrão só no resumo; o
+        # checkbox abaixo inclui a transcrição (FTS escopado por coluna).
         search_row = tk.Frame(left, bg=_BG)
         search_row.pack(fill="x", pady=(6, 0))
         self.search_var = tk.StringVar()
         se = make_entry(search_row, self.search_var, width=22)
         se.pack(side="left", fill="x", expand=True, ipady=3)
-        add_placeholder(se, self.search_var, "buscar no resumo e na transcrição…")
+        add_placeholder(se, self.search_var, "buscar no resumo…")
         LinkLabel(search_row, "✕", self._clear_search).pack(side="left", padx=(6, 0))
+        self.search_transcript_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            left, text="buscar também na transcrição", variable=self.search_transcript_var,
+            bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), activebackground=_BG,
+            activeforeground=PALETTE["text"], selectcolor=PALETTE["field"], bd=0,
+            highlightthickness=0, anchor="w", takefocus=False,
+        ).pack(fill="x", pady=(3, 0))
 
         # filtros estruturados (#11) — usam o índice de busca
         self.filter_participant_var = tk.StringVar()
@@ -115,7 +123,7 @@ class NotesWindow:
 
         self._search_job = None
         for _v in (self.search_var, self.filter_participant_var, self.filter_client_var,
-                   self.filter_since_var, self.filter_until_var):
+                   self.filter_since_var, self.filter_until_var, self.search_transcript_var):
             _v.trace_add("write", lambda *a: self._debounced_search())
 
         self.notes_tree = ttk.Treeview(left, show="tree", selectmode="browse")
@@ -394,6 +402,7 @@ class NotesWindow:
             results = meetings_index.search(
                 query=q or None, participant=participant or None, client=client or None,
                 since=since_iso, until=until_iso, status="done", limit=1000,
+                include_transcript=self.search_transcript_var.get(),
             )
         except Exception:
             return self._bruteforce_text(q) if q else []
@@ -415,8 +424,10 @@ class NotesWindow:
         return out
 
     def _bruteforce_text(self, q: str) -> list:
-        """Fallback (índice ainda vazio): varre os .md por substring — o jeito antigo."""
+        """Fallback (índice ainda vazio): varre os .md por substring — o jeito antigo.
+        Respeita o checkbox: sem transcrição, busca só antes do marcador."""
         ql = q.lower()
+        incl_tr = self.search_transcript_var.get()
         out: list = []
         try:
             files = list(self._notes_dir().glob("*.md"))
@@ -424,9 +435,14 @@ class NotesWindow:
             return out
         for f in files:
             try:
-                if ql not in f.read_text(encoding="utf-8", errors="replace").lower():
-                    continue
+                text = f.read_text(encoding="utf-8", errors="replace")
             except OSError:
+                continue
+            if not incl_tr:
+                i = text.find("## Transcrição completa")
+                if i != -1:
+                    text = text[:i]
+            if ql not in text.lower():
                 continue
             dt, dur, title = self._note_info(f)
             out.append((dt, "note", (f, dur, title)))

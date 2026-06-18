@@ -87,6 +87,16 @@ class MeetingsIndexTests(unittest.TestCase):
         mi.index_meeting(self.rec / "a")
         self.assertEqual(len(mi.search(query="SONATRANSCRICAOZZ")), 1)
 
+    def test_include_transcript_escopa_a_busca(self):
+        self._make_meeting("a", started_at="2026-06-10T09:00:00",
+                            body="ASSUNTODORESUMO", transcript_token="SOTRANSCRICAOQ")
+        mi.index_meeting(self.rec / "a")
+        # termo só na transcrição: incluído (default) acha; excluído NÃO acha
+        self.assertEqual(len(mi.search(query="SOTRANSCRICAOQ", include_transcript=True)), 1)
+        self.assertEqual(mi.search(query="SOTRANSCRICAOQ", include_transcript=False), [])
+        # termo no resumo: achado mesmo com a transcrição fora
+        self.assertEqual(len(mi.search(query="ASSUNTODORESUMO", include_transcript=False)), 1)
+
     # -- filtros -------------------------------------------------------------
     def test_busca_por_participante(self):
         self._make_meeting("a", started_at="2026-06-10T09:00:00",
