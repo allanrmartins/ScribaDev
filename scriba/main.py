@@ -247,10 +247,23 @@ class ScribaApp:
         só ESTA reunião espera, e nunca para sempre.
         """
         dz = self.cfg.diarization
-        if dz.enabled and dz.ask_speakers:
+        # se o nº de participantes já foi definido na pílula durante a call (#13),
+        # dispensa a janela do fim e enfileira direto.
+        if dz.enabled and dz.ask_speakers and not self._meta_has_speakers(folder):
             self.ui(lambda: self._ask_speakers_then_enqueue(folder))
         else:
             self.jobs.put(folder)
+
+    def _meta_has_speakers(self, folder) -> bool:
+        """True se o meta da gravação já tem num_speakers (definido na pílula, #13)."""
+        import json
+        from pathlib import Path
+
+        try:
+            meta = json.loads((Path(folder) / "meta.json").read_text(encoding="utf-8"))
+            return bool(meta.get("num_speakers"))
+        except Exception:
+            return False
 
     def _ask_speakers_then_enqueue(self, folder) -> None:
         """(thread de UI) Abre a janela e enfileira a reunião quando ela resolver."""
@@ -286,6 +299,15 @@ class ScribaApp:
             log.info("nº de participantes informado (%d): %s", n, getattr(folder, "name", folder))
         except Exception:
             log.exception("não consegui gravar num_speakers no meta de %s", getattr(folder, "name", folder))
+
+    def _set_speakers_live(self, n: int) -> None:
+        """Pílula definiu o nº de participantes durante a call (#13): grava no meta da
+        gravação ATIVA. O fim da call lê isso e dispensa a janela de perguntar."""
+        with self.rec_lock:
+            rec = self.rec
+        if rec is not None:
+            self._save_num_speakers(rec.folder, n)
+            util.update_state(last_num_speakers=int(n))
 
     # ------------------------------------------------------------- janelas --
 
@@ -384,6 +406,7 @@ class ScribaApp:
                 on_record=lambda: threading.Thread(
                     target=self.start_recording, args=("manual",), daemon=True
                 ).start(),
+                on_speakers=self._set_speakers_live,  # #13: nº de participantes ao vivo
             )
         return self.pill
 
@@ -393,6 +416,7 @@ class ScribaApp:
             return
         pill = self._ensure_pill()
         pill.set_mode("recording")
+        pill.reset_speakers(util.read_state().get("last_num_speakers") or 0)  # #13: sugere o último
         pill.show()
         self._tick_pill()
 

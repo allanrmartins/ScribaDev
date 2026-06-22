@@ -15,7 +15,7 @@ _MUTED = "#9a9aa8"
 _RED = "#e54545"
 _RED_DIM = "#7a2626"
 _KEY = "#000001"  # cor-chave que vira transparente (cantos arredondados)
-_W, _H, _R = 220, 44, 21
+_W, _H, _R = 264, 44, 21  # largura abriga o stepper de nº de participantes (#13)
 
 
 def _load_pos() -> list[int] | None:
@@ -111,15 +111,19 @@ class RecordingPill:
         on_stop: Callable[[], None],
         on_discard: Callable[[], None],
         on_record: Callable[[], None] | None = None,
+        on_speakers: Callable[[int], None] | None = None,
     ):
         self.on_stop = on_stop
         self.on_discard = on_discard
         self.on_record = on_record
+        self.on_speakers = on_speakers
         self.mode = "recording"
         self._destroyed = False
         self._pulse_on = True
         self._status_mode = False  # True = mostrando texto fixo (ex.: "finalizando…")
         self._shown = False        # pílula visível agora? (keep-visible só roda quando sim)
+        self._spk = 1              # nº de participantes sugerido (#13)
+        self._spk_committed = False  # usuário ajustou/confirmou? senão, pergunta no fim
 
         self.win = tk.Toplevel(root)
         self.win.withdraw()
@@ -147,6 +151,16 @@ class RecordingPill:
             _W - 28, _H // 2, text="×", fill=_MUTED, font=("Segoe UI", 15, "bold"), tags=("btn", "discard")
         )
 
+        # nº de participantes (#13): stepper "− N +" (modo gravação). Define o
+        # num_speakers ao vivo; ao encerrar, se confirmado, dispensa a janela do fim.
+        _cy = _H // 2
+        self.spk_minus = c.create_text(150, _cy, text="−", fill=_MUTED, font=("Segoe UI", 13, "bold"),
+                                       state="hidden", tags=("btn", "spk_dec"))
+        self.spk_count = c.create_text(168, _cy, text="1", fill=_MUTED, font=("Segoe UI", 11, "bold"),
+                                       state="hidden", tags=("btn", "spk_set"))
+        self.spk_plus = c.create_text(186, _cy, text="+", fill=_MUTED, font=("Segoe UI", 13, "bold"),
+                                      state="hidden", tags=("btn", "spk_inc"))
+
         # modo idle: botão de gravar (anel + ponto, estilo REC) + rótulo
         cy = _H // 2
         self.idle_ring = c.create_oval(15, cy - 8, 31, cy + 8, outline=_RED, width=2,
@@ -164,6 +178,12 @@ class RecordingPill:
             c.tag_bind(tag, "<Leave>", lambda e, i=item, f=(_FG if tag == "stop" else _MUTED): c.itemconfigure(i, fill=f))
         c.tag_bind("rec", "<Enter>", lambda e: c.itemconfigure(self.idle_label, fill=_RED))
         c.tag_bind("rec", "<Leave>", lambda e: c.itemconfigure(self.idle_label, fill=_FG))
+        c.tag_bind("spk_dec", "<Button-1>", lambda e: self._spk_adjust(-1))
+        c.tag_bind("spk_inc", "<Button-1>", lambda e: self._spk_adjust(+1))
+        c.tag_bind("spk_set", "<Button-1>", lambda e: self._spk_confirm())  # confirma o valor à mostra
+        for tag, item in (("spk_dec", self.spk_minus), ("spk_inc", self.spk_plus)):
+            c.tag_bind(tag, "<Enter>", lambda e, i=item: c.itemconfigure(i, fill=_FG))
+            c.tag_bind(tag, "<Leave>", lambda e, i=item: c.itemconfigure(i, fill=_MUTED))
 
         # arrastar (em qualquer ponto que não seja botão)
         c.bind("<Button-1>", self._drag_start)
@@ -227,7 +247,8 @@ class RecordingPill:
         """Alterna entre "recording" (●/cronômetro/■/×) e "idle" (⏺ Gravar reunião)."""
         self.mode = mode
         self._status_mode = False
-        rec_items = (self.dot, self.time_text, self.stop_btn, self.discard_btn)
+        rec_items = (self.dot, self.time_text, self.stop_btn, self.discard_btn,
+                     self.spk_minus, self.spk_count, self.spk_plus)
         idle_items = (self.idle_ring, self.idle_dot, self.idle_label)
         show, hide = (rec_items, idle_items) if mode == "recording" else (idle_items, rec_items)
         try:
@@ -237,6 +258,38 @@ class RecordingPill:
                 self.canvas.itemconfigure(item, state="hidden")
         except tk.TclError:
             pass
+
+    # -- nº de participantes (#13) -------------------------------------------
+
+    def reset_speakers(self, suggested: int) -> None:
+        """Nova gravação: zera o nº de participantes. Mostra o último valor como
+        SUGESTÃO (cinza), mas só vira "definido" quando o usuário ajustar/confirmar —
+        senão a janela do fim ainda pergunta."""
+        self._spk = max(1, int(suggested) if suggested else 1)
+        self._spk_committed = False
+        self._render_spk()
+
+    def _render_spk(self) -> None:
+        try:
+            self.canvas.itemconfigure(self.spk_count, text=str(self._spk),
+                                      fill=_FG if self._spk_committed else _MUTED)
+        except tk.TclError:
+            pass
+
+    def _spk_adjust(self, delta: int) -> str:
+        self._spk = max(1, min(20, self._spk + delta))
+        self._commit_speakers()
+        return "break"
+
+    def _spk_confirm(self) -> str:
+        self._commit_speakers()  # confirma o valor à mostra, sem mudar
+        return "break"
+
+    def _commit_speakers(self) -> None:
+        self._spk_committed = True
+        self._render_spk()
+        if self.on_speakers is not None:
+            self.on_speakers(self._spk)
 
     def _pos_visible(self, x: int, y: int) -> bool:
         """Valida (x,y) contra a área visível: bounding rect de todos os monitores
