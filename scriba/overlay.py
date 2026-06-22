@@ -119,6 +119,7 @@ class RecordingPill:
         self._destroyed = False
         self._pulse_on = True
         self._status_mode = False  # True = mostrando texto fixo (ex.: "finalizando…")
+        self._shown = False        # pílula visível agora? (keep-visible só roda quando sim)
 
         self.win = tk.Toplevel(root)
         self.win.withdraw()
@@ -216,6 +217,8 @@ class RecordingPill:
         try:
             if self.mode == "recording":
                 self.canvas.itemconfigure(self.dot, fill=_RED if self._pulse_on else _RED_DIM)
+            if self._shown:
+                self._ensure_visible()  # mantém no topo/visível se algo roubar o foco
             self.win.after(600, self._pulse)
         except tk.TclError:
             pass
@@ -243,6 +246,19 @@ class RecordingPill:
             rect = (0, 0, self.win.winfo_screenwidth(), self.win.winfo_screenheight())
         return _pos_in_bounds(x, y, *rect)
 
+    def _ensure_visible(self) -> None:
+        """Mantém a pílula no topo e visível durante a gravação: um app em tela cheia
+        ou o Teams compartilhando pode roubar o `-topmost` ou ocultá-la. Re-assere o
+        topmost e reexibe se a janela foi escondida. NÃO mexe na captura — segue oculta
+        no compartilhamento via WDA_EXCLUDEFROMCAPTURE (#9)."""
+        try:
+            self.win.attributes("-topmost", True)
+            if not self.win.winfo_viewable():
+                self.win.deiconify()
+                self.win.lift()
+        except tk.TclError:
+            pass
+
     def show(self):
         self.clear_status()
         pos = _load_pos()
@@ -257,10 +273,14 @@ class RecordingPill:
         if x is None:  # sem posição salva, inválida, ou fora de qualquer tela
             x, y = _default_pos(self.win)
         self.win.geometry(f"{_W}x{_H}+{x}+{y}")
+        self._shown = True
         self.win.deiconify()
         self.win.lift()
+        _exclude_from_capture(self.win)  # reaplica a exclusão de captura (defensivo)
+        self._ensure_visible()
 
     def hide(self):
+        self._shown = False
         try:
             self.win.withdraw()
         except tk.TclError:
