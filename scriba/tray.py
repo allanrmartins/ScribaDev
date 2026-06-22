@@ -37,10 +37,14 @@ class Tray:
                 pystray.MenuItem("Abrir ScribaDev", self._open_main, default=True),
                 pystray.MenuItem("Notas", self._open_notes_win),
                 pystray.MenuItem("Configurações", self._open_settings),
-                pystray.MenuItem(
-                    lambda item: "Parar gravação" if self.app.is_recording() else "Gravar agora",
-                    self._toggle_recording,
-                ),
+                pystray.MenuItem("Gravar agora", self._start_recording,
+                                 visible=lambda item: not self.app.is_recording()),
+                pystray.MenuItem("Parar gravação", self._stop_recording,
+                                 visible=lambda item: self.app.is_recording()),
+                pystray.MenuItem("Descartar gravação", self._discard_recording,
+                                 visible=lambda item: self.app.is_recording()),
+                pystray.MenuItem("Participantes", self._speakers_menu(),
+                                 visible=lambda item: self.app.is_recording()),
                 pystray.MenuItem("Abrir pasta de reuniões", self._open_meetings),
                 pystray.MenuItem("Abrir pasta de notas", self._open_notes),
                 pystray.MenuItem("Processar pendentes", self._process_pending),
@@ -67,11 +71,29 @@ class Tray:
     def _open_notes_win(self, icon, item):
         self.app.show_notes()
 
-    def _toggle_recording(self, icon, item):
-        if self.app.is_recording():
-            self._bg(self.app.stop_recording, False)
-        else:
-            self._bg(self.app.start_recording, "manual")
+    def _start_recording(self, icon, item):
+        self._bg(self.app.start_recording, "manual")
+
+    def _stop_recording(self, icon, item):
+        self._bg(self.app.stop_recording, False, True)  # keep=True: intenção explícita
+
+    def _discard_recording(self, icon, item):
+        self._bg(self.app.stop_recording, True)  # discard=True
+
+    def _speakers_menu(self) -> "pystray.Menu":
+        """Submenu 'Participantes' (1–8): define o nº na gravação ativa (#13/#14).
+        Ação (icon,item) e checked (item) fecham sobre n — pystray só aceita
+        callables com argcount <= 2."""
+        def mk(n: int):
+            def act(icon, item):
+                self._bg(self.app._set_speakers_live, n)
+
+            def chk(item):
+                return self.app.current_speakers() == n
+
+            return pystray.MenuItem(str(n), act, checked=chk, radio=True)
+
+        return pystray.Menu(*[mk(n) for n in range(1, 9)])
 
     def _open_meetings(self, icon, item):
         util.open_path(self.app.cfg.output.resolved_recordings_dir())

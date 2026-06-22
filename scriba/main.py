@@ -136,8 +136,31 @@ class ScribaApp:
 
     def status_text(self) -> str:
         if self.is_recording():
-            return f"ScribaDev — gravando ({self.current_call_app() or 'manual'})"
+            s = int(self.recording_duration())
+            t = f"{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60}:{s % 60:02d}"
+            return f"ScribaDev — gravando {t} ({self.current_call_app() or 'manual'})"
         return f"ScribaDev — monitorando {self.detection_label()}"
+
+    def current_speakers(self) -> int | None:
+        """Nº de participantes já definido na gravação ATIVA (pílula/bandeja, #13/#14)."""
+        import json
+
+        with self.rec_lock:
+            rec = self.rec
+        if rec is None:
+            return None
+        try:
+            return json.loads((rec.folder / "meta.json").read_text(encoding="utf-8")).get("num_speakers")
+        except Exception:
+            return None
+
+    def _tick_tray(self) -> None:
+        """Atualiza o tooltip da bandeja com o tempo de gravação ao vivo (#14). A
+        bandeja é o indicador confiável (não some como a pílula)."""
+        if self.tray and self.is_recording():
+            self.tray.set_recording(True, self.status_text())
+            if self.root is not None and not self.stop_event.is_set():
+                self.root.after(1000, self._tick_tray)
 
     # --------------------------------------------------------------- call --
 
@@ -188,6 +211,7 @@ class ScribaApp:
         self._toast("Gravando reunião", "O áudio está sendo capturado localmente.")
         if self.tray:
             self.tray.set_recording(True, self.status_text())
+            self.ui(self._tick_tray)  # #14: tooltip da bandeja com o tempo ao vivo
         self.ui(self._show_pill)
         # O modelo só é carregado quando a gravação terminar (em stop_recording):
         # nada de segurar a VRAM da GPU durante a call inteira.
