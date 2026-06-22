@@ -44,6 +44,22 @@ def _pos_in_bounds(x: int, y: int, vx: int, vy: int, vw: int, vh: int) -> bool:
     return vx <= x <= vx + vw - _W and vy <= y <= vy + vh - _H
 
 
+# Posição-padrão da pílula: canto inferior-direito do monitor mais à direita, junto
+# ao relógio da barra de tarefas. Margens da borda (direita, inferior) da tela.
+_EDGE_GAP_X, _EDGE_GAP_Y = 90, 8
+
+
+def _default_pos(win) -> tuple[int, int]:
+    """(x, y) padrão = canto inferior-direito da área de TODOS os monitores (= canto
+    do monitor mais à direita), recuado p/ ficar ao lado do relógio. Cai no
+    topo-central do primário se o retângulo virtual não estiver disponível."""
+    rect = util.virtual_screen_rect()
+    if rect is None:
+        return (win.winfo_screenwidth() - _W) // 2, 10
+    vx, vy, vw, vh = rect
+    return vx + vw - _W - _EDGE_GAP_X, vy + vh - _H - _EDGE_GAP_Y
+
+
 def _round_rect(c: tk.Canvas, x1, y1, x2, y2, r, **kw):
     pts = [
         x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2,
@@ -239,8 +255,7 @@ class RecordingPill:
             if px is not None and self._pos_visible(px, py):
                 x, y = px, py
         if x is None:  # sem posição salva, inválida, ou fora de qualquer tela
-            x = (self.win.winfo_screenwidth() - _W) // 2
-            y = 10
+            x, y = _default_pos(self.win)
         self.win.geometry(f"{_W}x{_H}+{x}+{y}")
         self.win.deiconify()
         self.win.lift()
