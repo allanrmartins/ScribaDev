@@ -32,6 +32,12 @@ SCHEMA_VERSION = 2  # v2 (#11): transcrição agora também entra no FTS
 # escreve este cabeçalho no notas.md antes da transcrição.
 _TRANSCRIPT_MARKER = "## Transcrição completa"
 
+# Tombstone de exclusão pela UI (#16): uma pasta com este arquivo foi "excluída" pelo
+# usuário MANTENDO o áudio como backup. O índice a ignora (não a ressuscita no reindex);
+# (re)indexar explicitamente — ex.: re-summarize via build_notes → index_meeting —
+# remove o tombstone e traz a nota de volta.
+_DELETED_MARKER = ".deleted"
+
 _DDL = (
     """CREATE TABLE IF NOT EXISTS meetings (
         id            INTEGER PRIMARY KEY,
@@ -122,8 +128,11 @@ def _transcript_text(md: str) -> str:
 
 def _extract(folder: Path) -> dict | None:
     """Lê `meta.json` (+ `notas.md`) de uma pasta e monta o registro a indexar.
-    None se não há `meta.json` (não é pasta de reunião)."""
+    None se não há `meta.json` (não é pasta de reunião) ou se a nota foi excluída pela
+    UI (#16) mantendo o áudio — o tombstone `.deleted` impede o reindex de ressuscitá-la."""
     folder = Path(folder)
+    if (folder / _DELETED_MARKER).exists():
+        return None
     meta = _read_json(folder / "meta.json")
     if not meta:
         return None
@@ -192,9 +201,17 @@ def _upsert(conn: sqlite3.Connection, rec: dict) -> int:
 
 def index_meeting(folder) -> bool:
     """(Re)indexa UMA reunião. Idempotente. NUNCA levanta — falha de índice não pode
-    quebrar o pipeline de gravação; só loga e devolve False."""
+    quebrar o pipeline de gravação; só loga e devolve False.
+
+    (Re)indexar explicitamente DESFAZ uma exclusão pela UI (#16): remove o tombstone
+    `.deleted` antes de extrair, então um re-summarize (build_notes) traz a nota de volta."""
     try:
-        rec = _extract(Path(folder))
+        folder = Path(folder)
+        try:
+            (folder / _DELETED_MARKER).unlink(missing_ok=True)
+        except OSError:
+            pass
+        rec = _extract(folder)
         if rec is None:
             return False
         conn = _connect()
@@ -226,6 +243,20 @@ def remove_meeting(folder) -> bool:
     except Exception:
         log.exception("falha ao remover %s do índice", folder)
         return False
+
+
+def mark_deleted(folder) -> None:
+    """Exclusão pela UI (#16) MANTENDO o áudio: tira a reunião do índice agora E deixa um
+    tombstone `.deleted` na pasta para o reindex não trazê-la de volta. O áudio + meta
+    seguem como backup (recuperável via re-summarize, que limpa o tombstone ao reindexar).
+    Para exclusão TOTAL (apagando a pasta), use `remove_meeting` + rmtree da pasta."""
+    folder = Path(folder)
+    remove_meeting(folder)
+    if folder.is_dir():
+        try:
+            (folder / _DELETED_MARKER).write_text("", encoding="utf-8")
+        except OSError:
+            log.warning("não consegui marcar %s como excluída (tombstone)", folder)
 
 
 def reindex(recordings_dir=None) -> int:

@@ -7,6 +7,7 @@ conteúdo, título editável e botão "Gerar Prompt de Contexto".
 
 from __future__ import annotations
 
+import logging
 import re
 import tkinter as tk
 from datetime import date, datetime, timedelta
@@ -29,6 +30,7 @@ from .widgets import (
 )
 
 _BG = PALETTE["bg"]
+log = logging.getLogger("scriba.notes_ui")
 
 
 class NotesWindow:
@@ -154,6 +156,9 @@ class NotesWindow:
         # rotular vozes (#1): só aparece quando a reunião selecionada tem diarização
         # (voices.json na pasta da gravação) — empacotado sob demanda
         self.label_voices_btn = ModernButton(copy_row, "Rotular vozes…", self._open_speaker_labeler, width=130)
+        # excluir nota (#16): ação destrutiva — fica à direita, separada das ações
+        # seguras, e só aparece com uma nota aberta (done). Sempre pede confirmação.
+        self.delete_btn = ModernButton(copy_row, "Excluir nota…", self._ask_delete_note, width=120)
 
         # painel "Presentes" colapsável (abaixo dos botões): o palpite da IA de quem é
         # cada voz, lido do resumo. Só aparece quando a nota tem a seção Participantes.
@@ -359,6 +364,11 @@ class NotesWindow:
             )
             self._show_note_pane()
             self._hide_find_bar()
+            if self.delete_btn.winfo_ismapped():
+                self.delete_btn.pack_forget()
+            if self.label_voices_btn.winfo_ismapped():
+                self.label_voices_btn.pack_forget()
+            self.presentes_panel.pack_forget()
             self._showing_note = False  # msg na área da nota: força re-render ao voltar
             mdview.render(self.note_view, msg)
             self._schedule_poll(True)  # segue vigiando: uma call nova deve aparecer sozinha
@@ -520,6 +530,8 @@ class NotesWindow:
         self._show_progress_pane()
         if self.label_voices_btn.winfo_ismapped():
             self.label_voices_btn.pack_forget()  # reunião em andamento: nada a rotular
+        if self.delete_btn.winfo_ismapped():
+            self.delete_btn.pack_forget()  # reunião em andamento: não excluir em processamento
         self.presentes_panel.pack_forget()
         self._hide_find_bar()  # reunião em andamento: nada para buscar dentro
         self._showing_note = False
@@ -566,6 +578,8 @@ class NotesWindow:
         self.note_title_var.set(title or "")
         self.note_client_var.set(self._client_of(path))
         self._update_voice_button(path)
+        if not self.delete_btn.winfo_ismapped():
+            self.delete_btn.pack(side="right")
         # mesma nota já renderizada: não re-renderiza (preserva rolagem, Presentes e a
         # busca interna ativa durante o poll)
         if self._showing_note and self._current_view_key == path:
@@ -770,6 +784,119 @@ class NotesWindow:
         except (OSError, ValueError):
             return {}
         return {str(v): notes.guess_voice_name(str(v), presentes.get(str(v), "")) for v in voices}
+
+    # -- exclusão de nota (#16) ------------------------------------------------
+
+    def _ask_delete_note(self) -> None:
+        """Confirmação + exclusão da nota selecionada (.md + índice; opção: gravação)."""
+        sel = self.notes_tree.selection()
+        if not sel or sel[0] not in self._note_items:
+            return
+        path, title, status = self._note_items[sel[0]]
+        if status is not None:
+            return  # reunião em processamento: não excluir (o worker pode estar ativo)
+        self._confirm_delete_dialog(path, title)
+
+    def _confirm_delete_dialog(self, note_path: Path, title: str | None) -> None:
+        """Diálogo dark modal: confirma a exclusão e oferece apagar também a gravação."""
+        folder = self._recording_folder_for(note_path)
+        win = tk.Toplevel(self.win)
+        win.withdraw()  # nasce oculta: posiciona ANTES de exibir (evita nascer fora e "pular")
+        win.title("ScribaDev — Excluir nota")
+        win.configure(bg=_BG, padx=22, pady=18)
+        win.resizable(False, False)
+        win.transient(self.win)
+        try:
+            win.iconbitmap(str(util.ICON_ICO))
+        except Exception:
+            pass
+
+        tk.Label(win, text="Excluir nota?", bg=_BG, fg=PALETTE["accent"],
+                 font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        nome = (title or note_path.stem.replace("_reuniao", "")).strip()
+        if len(nome) > 64:
+            nome = nome[:63] + "…"
+        tk.Label(win, text=nome, bg=_BG, fg=PALETTE["text"], font=FONT_BOLD,
+                 wraplength=380, justify="left").pack(anchor="w", pady=(2, 6))
+        tk.Label(win, text="A nota sai da lista e do índice de busca. Esta ação não pode ser desfeita.",
+                 bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8),
+                 wraplength=380, justify="left").pack(anchor="w")
+
+        also_audio = tk.BooleanVar(value=False)
+        if folder.is_dir():
+            tk.Checkbutton(
+                win, text="Excluir também o áudio/gravação (sem volta)", variable=also_audio,
+                bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), activebackground=_BG,
+                activeforeground=PALETTE["text"], selectcolor=PALETTE["field"], bd=0,
+                highlightthickness=0, takefocus=False, anchor="w",
+            ).pack(anchor="w", pady=(12, 0))
+            tk.Label(win, text="Desmarcado, a gravação fica como backup (recuperável com “scribadev summarize”).",
+                     bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8),
+                     wraplength=380, justify="left").pack(anchor="w")
+
+        btns = tk.Frame(win, bg=_BG)
+        btns.pack(pady=(16, 2), anchor="e")
+
+        def do_delete() -> None:
+            win.destroy()
+            self._do_delete(note_path, folder, bool(also_audio.get()))
+
+        ModernButton(btns, "Cancelar", win.destroy, width=110).pack(side="left", padx=(0, 8))
+        ModernButton(btns, "Excluir", do_delete, kind="primary", width=110).pack(side="left")
+
+        win.bind("<Escape>", lambda e: win.destroy())
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
+        # centraliza sobre a janela de Notas AINDA OCULTA; reqwidth/reqheight valem antes
+        # de exibir (winfo_width seria 1). Só então deiconify → já aparece no lugar certo.
+        win.update_idletasks()
+        w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+        px, py = self.win.winfo_rootx(), self.win.winfo_rooty()
+        pw, ph = self.win.winfo_width(), self.win.winfo_height()
+        win.geometry(f"+{px + max(0, (pw - w) // 2)}+{py + max(0, (ph - h) // 3)}")
+        win.deiconify()
+        enable_dark_titlebar(win)
+        win.lift()
+        win.focus_force()
+        win.grab_set()  # modal: bloqueia a janela de Notas até decidir
+
+    def _do_delete(self, note_path: Path, folder: Path, also_audio: bool) -> None:
+        """Executa a exclusão: .md exportado + índice; opcionalmente a pasta de gravação.
+
+        - sempre apaga o .md (a nota sai da lista) e tira a reunião do índice de busca;
+        - mantendo a gravação (default): tombstone `.deleted` na pasta p/ o reindex não
+          ressuscitar a nota; áudio/meta seguem como backup (re-summarize recupera);
+        - apagando a gravação: rmtree da pasta (respeita o .lock) + poda pastas vazias.
+        """
+        from . import meetings_index
+
+        # 1) o .md exportado — fonte da nota no painel
+        try:
+            note_path.unlink(missing_ok=True)
+        except OSError as e:
+            log.warning("exclusão: falha ao remover %s: %s", note_path.name, e)
+
+        # 2) a gravação + o índice de busca
+        if also_audio and folder.is_dir() and not util.is_locked(folder):
+            import shutil
+
+            from . import retention
+            meetings_index.remove_meeting(folder)  # antes do rmtree: índice sai mesmo se falhar
+            try:
+                shutil.rmtree(folder)
+                retention._prune_empty_dirs(
+                    self.app.cfg.output.resolved_recordings_dir(), folder.parent)
+            except OSError as e:
+                log.warning("exclusão: falha ao remover gravação %s: %s", folder.name, e)
+        else:
+            # mantém a gravação como backup (ou .lock ativo): tombstone p/ não voltar no reindex
+            if also_audio and folder.is_dir():
+                log.info("exclusão: .lock ativo em %s — mantendo a gravação", folder.name)
+            meetings_index.mark_deleted(folder)
+
+        # 3) a nota some na hora: re-render (a seleção cai p/ a 1ª nota ou msg de vazio)
+        self._showing_note = False
+        self._current_view_key = None
+        self._refresh_notes_list()
 
     # -- painel "Presentes" colapsável -----------------------------------------
 

@@ -248,6 +248,49 @@ class MeetingsIndexTests(unittest.TestCase):
         self.assertEqual(mi.reindex_if_needed(self.rec), 1)
         self.assertEqual(mi.count(), 1)
 
+    # -- exclusão pela UI (#16): tombstone .deleted --------------------------
+    def test_extract_pula_pasta_com_tombstone(self):
+        f = self._make_meeting("a", started_at="2026-06-10T09:00:00", title="Excluida")
+        self.assertIsNotNone(mi._extract(f))  # sem tombstone: extrai normal
+        (f / mi._DELETED_MARKER).write_text("", encoding="utf-8")
+        self.assertIsNone(mi._extract(f))  # com tombstone: ignorada
+
+    def test_reindex_nao_ressuscita_tombstone(self):
+        # a nota foi "excluída" mantendo o áudio (tombstone); o reindex NÃO a traz de volta
+        f = self._make_meeting("a", started_at="2026-06-10T09:00:00", body="ACHAVELXYZ")
+        self._make_meeting("b", started_at="2026-06-11T09:00:00", body="OUTRANOTA")
+        self.assertEqual(mi.reindex(self.rec), 2)
+        (f / mi._DELETED_MARKER).write_text("", encoding="utf-8")
+        self.assertEqual(mi.reindex(self.rec), 1)  # só 'b' é indexada
+        self.assertEqual(mi.search(query="ACHAVELXYZ"), [])  # 'a' não ressuscita
+        self.assertEqual(len(mi.search(query="OUTRANOTA")), 1)
+
+    def test_mark_deleted_remove_do_indice_e_tombstona(self):
+        f = self._make_meeting("a", started_at="2026-06-10T09:00:00", body="ACHAVELXYZ")
+        mi.index_meeting(f)
+        self.assertEqual(mi.count(), 1)
+        mi.mark_deleted(f)
+        self.assertEqual(mi.count(), 0)  # sai do índice agora
+        self.assertTrue((f / mi._DELETED_MARKER).exists())  # tombstone gravado
+        self.assertEqual(mi.reindex(self.rec), 0)  # e segue fora após o reindex
+        self.assertEqual(mi.search(query="ACHAVELXYZ"), [])
+
+    def test_index_meeting_limpa_tombstone(self):
+        # re-summarize explícito (build_notes → index_meeting) DESFAZ a exclusão
+        f = self._make_meeting("a", started_at="2026-06-10T09:00:00", body="ACHAVELXYZ")
+        (f / mi._DELETED_MARKER).write_text("", encoding="utf-8")
+        self.assertTrue(mi.index_meeting(f))  # (re)indexar remove o tombstone
+        self.assertFalse((f / mi._DELETED_MARKER).exists())
+        self.assertEqual(len(mi.search(query="ACHAVELXYZ")), 1)
+
+    def test_mark_deleted_sem_pasta_so_remove_do_indice(self):
+        f = self._make_meeting("a", started_at="2026-06-10T09:00:00")
+        mi.index_meeting(f)
+        shutil.rmtree(f)  # pasta já não existe (ex.: apagada à parte)
+        mi.mark_deleted(f)  # não cria tombstone solto, não quebra
+        self.assertEqual(mi.count(), 0)
+        self.assertFalse((f / mi._DELETED_MARKER).exists())
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
