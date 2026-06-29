@@ -74,6 +74,9 @@ def main(argv: list[str] | None = None) -> int:
     p_search.add_argument("--status", default="done", help="status (default: done; use '' p/ todos)")
     p_search.add_argument("--limit", type=int, default=20, help="máximo de resultados (default: 20)")
 
+    p_upd = sub.add_parser("update", help="checa atualizações (e aplica via git pull, se for instalação via git)")
+    p_upd.add_argument("--check", action="store_true", help="só verifica se há nova versão, sem aplicar")
+
     args = parser.parse_args(argv)
 
     if not args.cmd:
@@ -152,6 +155,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "search":
         return cmd_search(args)
+    if args.cmd == "update":
+        return cmd_update(args)
     parser.error(f"comando desconhecido: {args.cmd}")
     return 2
 
@@ -185,6 +190,31 @@ def cmd_search(args) -> int:
             print(f"    {r['export_path']}")
     print(f"\n{len(results)} resultado(s)")
     return 0
+
+
+def cmd_update(args) -> int:
+    """`scribadev update`: checa a última versão no GitHub e, se for instalação via git,
+    aplica com `git pull`. `--check` só informa, sem aplicar."""
+    from . import __version__, updates
+
+    latest = updates.latest_version()
+    if latest is None:
+        print("não consegui checar atualizações (sem internet ou GitHub indisponível).")
+        return 1
+    print(f"versão atual: {__version__}  ·  última publicada: {latest}")
+    if not updates._is_newer(__version__, latest):
+        print("Você já está na versão mais recente.")
+        return 0
+    print(f"Nova versão disponível: v{latest}")
+    if args.check:
+        if updates.is_git_install():
+            print("  rode `scribadev update` (sem --check) para aplicar via git pull.")
+        else:
+            print("  baixe em: " + updates.RELEASES_PAGE)
+        return 0
+    ok, msg = updates.apply_git_update()
+    print(msg)
+    return 0 if ok else 1
 
 
 def main_tray() -> int:
