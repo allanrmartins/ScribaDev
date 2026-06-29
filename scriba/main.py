@@ -92,6 +92,7 @@ class ScribaApp:
         self.settings = None
         self.notes_win = None
         self.wizard_win = None
+        self.log_win = None
         self.main_win = None
         self.hotkey = None
         self.detector: Detector | None = None
@@ -360,6 +361,17 @@ class ScribaApp:
 
             self.notes_win = NotesWindow(self.root, self)
         self.notes_win.show()
+
+    def show_log(self) -> None:
+        """Abre a janela de Log/diagnóstico (chamável de qualquer thread)."""
+        self.ui(self._open_log_ui)
+
+    def _open_log_ui(self) -> None:
+        if self.log_win is None:
+            from .log_ui import LogWindow
+
+            self.log_win = LogWindow(self.root, self)
+        self.log_win.show()
 
     def show_wizard(self) -> None:
         """Abre o assistente de perfil (chamável de qualquer thread)."""

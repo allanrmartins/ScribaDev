@@ -49,6 +49,7 @@ class MainWindow:
         ModernButton(head, "Notas", lambda: self.app.show_notes(), height=32).pack(
             side="right", padx=(0, 8)
         )
+        ModernButton(head, "Log", lambda: self.app.show_log(), height=32).pack(side="right", padx=(0, 8))
 
         # ---- call ao vivo -----------------------------------------------------
         card = tk.Frame(body, bg=_CARD, padx=16, pady=14)

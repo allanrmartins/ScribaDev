@@ -36,6 +36,7 @@ class Tray:
                 # default=True: é o que roda no duplo clique do ícone
                 pystray.MenuItem("Abrir ScribaDev", self._open_main, default=True),
                 pystray.MenuItem("Notas", self._open_notes_win),
+                pystray.MenuItem("Log", self._open_log_win),
                 pystray.MenuItem("Configurações", self._open_settings),
                 pystray.MenuItem("Gravar agora", self._start_recording,
                                  visible=lambda item: not self.app.is_recording()),
@@ -70,6 +71,9 @@ class Tray:
 
     def _open_notes_win(self, icon, item):
         self.app.show_notes()
+
+    def _open_log_win(self, icon, item):
+        self.app.show_log()
 
     def _start_recording(self, icon, item):
         self._bg(self.app.start_recording, "manual")

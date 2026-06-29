@@ -310,6 +310,22 @@ def date_br_to_iso(s: str) -> str:
         return ""
 
 
+def format_time_hhmm(raw: str) -> str:
+    """Máscara HH:MM: mantém só os dígitos (até 4) e insere ':' após 2. '0930' e
+    '09:30' → '09:30'; texto não-numérico é descartado."""
+    digits = re.sub(r"\D", "", raw or "")[:4]
+    return digits if len(digits) <= 2 else digits[:2] + ":" + digits[2:]
+
+
+def time_hhmm_ok(s: str) -> bool:
+    """True se `s` for uma hora 'HH:MM' válida (00:00–23:59)."""
+    try:
+        datetime.strptime((s or "").strip(), "%H:%M")
+        return True
+    except ValueError:
+        return False
+
+
 def date_range_filter(since_br: str, until_br: str) -> tuple[str | None, str | None]:
     """Semântica do filtro de período da busca (datas em DD/MM/AAAA):
 

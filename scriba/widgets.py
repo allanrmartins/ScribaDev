@@ -189,17 +189,48 @@ def mask_date_br(entry: tk.Entry, var: tk.StringVar) -> None:
     do insert e briga com o cursor que o Tk ainda vai posicionar. A cor (vermelho se a
     data completa for inválida, ex.: 19/21/8890) fica num trace separado — mudar cor
     não mexe no cursor, então vale p/ digitação, datepicker e limpar."""
+    # só dígitos e '/' ENTRAM (validate=key): a letra nem aparece (sem "entra e apaga")
+    vcmd = (entry.register(lambda P: P == "" or (len(P) <= 10 and all(c.isdigit() or c == "/" for c in P))), "%P")
+    entry.configure(validate="key", validatecommand=vcmd)
+
     def _reformat(_e=None) -> None:
         s = entry.get()
         new = util.format_date_br(s)
         if new != s:
+            entry.configure(validate="none")  # a validação não pode brigar com o reformat
             entry.delete(0, "end")
             entry.insert(0, new)
+            entry.configure(validate="key")
         entry.icursor("end")
 
     def _color(*_a) -> None:
         s = var.get()
         ok = len(s) < 10 or bool(util.date_br_to_iso(s))
+        entry.configure(fg=PALETTE["text"] if ok else PALETTE["accent"])
+
+    entry.bind("<KeyRelease>", _reformat)
+    var.trace_add("write", lambda *a: _color())
+
+
+def mask_time_br(entry: tk.Entry, var: tk.StringVar) -> None:
+    """Máscara HH:MM num campo de hora: só dígitos ENTRAM (validate=key) e o ':' é
+    inserido ao digitar (KeyRelease). Cor vermelha se a hora completa for inválida."""
+    vcmd = (entry.register(lambda P: P == "" or (len(P) <= 5 and all(c.isdigit() or c == ":" for c in P))), "%P")
+    entry.configure(validate="key", validatecommand=vcmd)
+
+    def _reformat(_e=None) -> None:
+        s = entry.get()
+        new = util.format_time_hhmm(s)
+        if new != s:
+            entry.configure(validate="none")
+            entry.delete(0, "end")
+            entry.insert(0, new)
+            entry.configure(validate="key")
+        entry.icursor("end")
+
+    def _color(*_a) -> None:
+        s = var.get()
+        ok = len(s) < 5 or util.time_hhmm_ok(s)
         entry.configure(fg=PALETTE["text"] if ok else PALETTE["accent"])
 
     entry.bind("<KeyRelease>", _reformat)

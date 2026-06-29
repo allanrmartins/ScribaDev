@@ -231,6 +231,28 @@ class DateMaskTests(unittest.TestCase):
             self.assertEqual(util.date_br_to_iso(s), "", s)
 
 
+class TimeMaskTests(unittest.TestCase):
+    """util.format_time_hhmm + time_hhmm_ok: máscara e validação do filtro de hora."""
+
+    def test_format_acumulando(self):
+        self.assertEqual(util.format_time_hhmm("0"), "0")
+        self.assertEqual(util.format_time_hhmm("09"), "09")
+        self.assertEqual(util.format_time_hhmm("093"), "09:3")
+        self.assertEqual(util.format_time_hhmm("0930"), "09:30")
+        self.assertEqual(util.format_time_hhmm("09:30"), "09:30")
+
+    def test_format_descarta_nao_digito_e_limita_4(self):
+        self.assertEqual(util.format_time_hhmm("asasas"), "")
+        self.assertEqual(util.format_time_hhmm("09h30"), "09:30")
+        self.assertEqual(util.format_time_hhmm("093099"), "09:30")  # cap em 4
+
+    def test_validade(self):
+        for s in ("00:00", "09:30", "23:59"):
+            self.assertTrue(util.time_hhmm_ok(s), s)
+        for s in ("", "9", "24:00", "09:60", "99:99", "ab:cd"):
+            self.assertFalse(util.time_hhmm_ok(s), s)
+
+
 class DateRangeFilterTests(unittest.TestCase):
     """util.date_range_filter: só DE = aquele dia; DE+ATÉ = intervalo (ordem livre)."""
 
