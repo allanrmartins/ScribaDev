@@ -604,6 +604,17 @@ class SettingsWindow:
         self.hotwords = make_text(tab, height=3)
         self.hotwords.pack(fill="x", pady=(0, 2))
 
+        ctx_head = tk.Frame(tab, bg=_BG)
+        ctx_head.pack(fill="x", pady=(12, 3))
+        tk.Label(ctx_head, text="Contexto para IA (cabeçalho da nota)", bg=_BG, fg=PALETTE["text"],
+                 font=FONT_BOLD).pack(side="left")
+        ModernButton(ctx_head, "Restaurar padrão", self._restore_default_context, width=140).pack(side="right")
+        tk.Label(tab, text="Vai no topo de cada nota dizendo à IA como ler o documento. Personalize "
+                          "para a sua área (ou deixe em branco para remover).", bg=_BG,
+                 fg=PALETTE["muted"], font=("Segoe UI", 8), justify="left", wraplength=620).pack(anchor="w", pady=(0, 4))
+        self.context_editor = make_text(tab, height=4)
+        self.context_editor.pack(fill="x", pady=(0, 2))
+
         prompt_head = tk.Frame(tab, bg=_BG)
         prompt_head.pack(fill="x", pady=(12, 3))
         tk.Label(prompt_head, text="Instruções do resumo (prompt.md)", bg=_BG, fg=PALETTE["text"],
@@ -630,6 +641,12 @@ class SettingsWindow:
 
         self.prompt_editor.delete("1.0", "end")
         self.prompt_editor.insert("1.0", DEFAULT_SUMMARY_PROMPT)
+
+    def _restore_default_context(self) -> None:
+        from .notes import AI_CONTEXT_NOTE
+
+        self.context_editor.delete("1.0", "end")
+        self.context_editor.insert("1.0", AI_CONTEXT_NOTE)
 
     # -- provedor de IA (claude CLI / Ollama / OpenAI-compatível) -------------
 
@@ -762,7 +779,7 @@ class SettingsWindow:
 
     def _load_fields(self) -> None:
         from . import autostart
-        from .notes import ensure_prompt_file
+        from .notes import ensure_context_file, ensure_prompt_file
 
         # marca como "não carregado" no começo; só volta a True na última linha,
         # então qualquer exceção no meio deixa a flag em False e bloqueia o _save().
@@ -809,6 +826,8 @@ class SettingsWindow:
         self._on_stt_engine_change()
         self.prompt_editor.delete("1.0", "end")
         self.prompt_editor.insert("1.0", ensure_prompt_file().read_text(encoding="utf-8"))
+        self.context_editor.delete("1.0", "end")
+        self.context_editor.insert("1.0", ensure_context_file().read_text(encoding="utf-8"))
         self.provider_var.set(_PROVIDER_LABELS.get(cfg.summary.provider, "Claude (CLI)"))
         self.base_url_var.set(cfg.summary.base_url)
         self.api_key_var.set(cfg.summary.api_key)
@@ -883,6 +902,8 @@ class SettingsWindow:
 
         # prompt.md (vazio = volta ao padrão na geração)
         util.atomic_write_text(util.PROMPT_PATH, self.prompt_editor.get("1.0", "end").strip() + "\n")
+        # context.md (cabeçalho "Contexto para IA"; vazio = sem cabeçalho na nota)
+        util.atomic_write_text(util.CONTEXT_PATH, self.context_editor.get("1.0", "end").strip() + "\n")
 
         from . import autostart
 

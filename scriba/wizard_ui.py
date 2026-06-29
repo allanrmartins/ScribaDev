@@ -253,7 +253,8 @@ class WizardWindow:
             self.status_var.set("Gere uma prévia primeiro (IA ou modelo pronto).")
             return
         prompt, hotwords = self._result
-        backup = promptgen.apply_prompt(prompt, hotwords or None)
+        context_note = promptgen.context_note_for(self._profile())
+        backup = promptgen.apply_prompt(prompt, hotwords or None, context_note)
         promptgen.mark_wizard_done()
         if self.app is not None:
             try:

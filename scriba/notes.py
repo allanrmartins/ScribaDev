@@ -154,6 +154,23 @@ def load_summary_prompt() -> str:
     return DEFAULT_SUMMARY_PROMPT
 
 
+def ensure_context_file() -> Path:
+    """Garante o context.md editável (criado com o padrão na primeira vez)."""
+    util.ensure_app_dirs()
+    if not util.CONTEXT_PATH.exists():
+        util.atomic_write_text(util.CONTEXT_PATH, AI_CONTEXT_NOTE)
+    return util.CONTEXT_PATH
+
+
+def load_context_note() -> str:
+    """Cabeçalho 'Contexto para IA' editável (context.md). Arquivo AUSENTE → padrão
+    (AI_CONTEXT_NOTE); arquivo VAZIO → '' (o usuário removeu o cabeçalho de propósito)."""
+    try:
+        return util.CONTEXT_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return AI_CONTEXT_NOTE
+
+
 # Pedida pelo código (fora do prompt.md editável) para garantir título e cliente
 # mesmo que o usuário personalize as instruções da ata.
 TITLE_INSTRUCTION = (
@@ -381,7 +398,8 @@ def build_notes(folder: Path) -> Path | None:
 
     # O enquadramento só faz sentido quando há resumo estruturado de verdade;
     # com o placeholder de falha ele referenciaria seções inexistentes.
-    context_note = f"{AI_CONTEXT_NOTE}\n\n" if has_summary else ""
+    note = load_context_note()
+    context_note = f"{note}\n\n" if (has_summary and note) else ""
 
     # linha de metadados visível, sob o título: data · duração · cliente
     meta_line = f"*{when}" + (f" · {duration_min} min" if duration_min else "")

@@ -22,6 +22,7 @@ LOGS_DIR = APP_DIR / "logs"
 CONFIG_PATH = APP_DIR / "config.toml"
 STATE_PATH = APP_DIR / "state.json"
 PROMPT_PATH = APP_DIR / "prompt.md"  # instruções (MD) que geram o resumo — editável
+CONTEXT_PATH = APP_DIR / "context.md"  # cabeçalho "Contexto para IA" da nota — editável
 
 # Recursos EMPACOTADOS (read-only, vão junto no .exe): ícones e, no futuro, templates.
 # Resolvidos de forma compatível com bundle — NUNCA por cwd. Dados do usuário (config,

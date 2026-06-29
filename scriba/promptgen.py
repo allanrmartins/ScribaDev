@@ -414,12 +414,34 @@ def suggest_jargon(profile: Profile, timeout: int = 120) -> str | None:
     return ", ".join(terms) if len(terms) >= 5 else None
 
 
+# cabeçalho "Contexto para IA" da nota, gerado por perfil (espelha o AI_CONTEXT_NOTE
+# SAP/ABAP, mas neutro — serve a qualquer profissão). Editável depois em context.md.
+GENERIC_CONTEXT_NOTE = (
+    "> **Contexto para IA:** registro técnico de uma reunião, derivado de transcrição. As "
+    "seções acima são o resumo estruturado e a **fonte da verdade**; o **Objetivo** declara "
+    "o que fazer — execute essa atividade, não presuma. **Pendências e Ações** lista o que "
+    "ainda não está definido — sinalize as lacunas em vez de presumir. A *Transcrição "
+    "completa* ao final é apenas backup de rastreabilidade."
+)
+
+
+def context_note_for(profile: Profile) -> str:
+    """Cabeçalho 'Contexto para IA' adequado ao perfil: o SAP/ABAP no perfil abap; o
+    genérico (sem jargão de área) nos demais."""
+    if profile.base == "abap":
+        from .notes import AI_CONTEXT_NOTE
+
+        return AI_CONTEXT_NOTE
+    return GENERIC_CONTEXT_NOTE
+
+
 # ------------------------------------------------------------------- aplicar --
 
-def apply_prompt(prompt_text: str, hotwords: str | None) -> Path | None:
-    """Grava o prompt.md (com backup .bak do anterior) e as hotwords no config.
+def apply_prompt(prompt_text: str, hotwords: str | None, context_note: str | None = None) -> Path | None:
+    """Grava o prompt.md (com backup .bak do anterior) e as hotwords no config. Se
+    `context_note` vier, grava também o context.md (com seu próprio .bak).
 
-    hotwords None = não mexer nas atuais. Retorna o caminho do backup (ou None).
+    hotwords/context_note None = não mexer nos atuais. Retorna o backup do prompt (ou None).
     """
     util.ensure_app_dirs()
     backup: Path | None = None
@@ -429,6 +451,12 @@ def apply_prompt(prompt_text: str, hotwords: str | None) -> Path | None:
             backup = util.PROMPT_PATH.with_suffix(".md.bak")
             backup.write_text(old, encoding="utf-8")
     util.atomic_write_text(util.PROMPT_PATH, prompt_text.strip() + "\n")
+    if context_note is not None:
+        if util.CONTEXT_PATH.exists():
+            oldc = util.CONTEXT_PATH.read_text(encoding="utf-8")
+            if oldc.strip() and oldc.strip() != context_note.strip():
+                util.CONTEXT_PATH.with_suffix(".md.bak").write_text(oldc, encoding="utf-8")
+        util.atomic_write_text(util.CONTEXT_PATH, context_note.strip() + "\n")
     if hotwords is not None:
         cfg = config_mod.load()
         config_mod.save(dataclasses.replace(
