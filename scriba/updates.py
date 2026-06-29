@@ -105,9 +105,12 @@ def _http_json(url: str, timeout: float):
 
 def latest_info(timeout: float = 4.0) -> dict | None:
     """Manifesto público de versão: {'version': 'X.Y.Z', 'url': '<download>', 'notes'}.
-    None se indisponível (sem rede) ou malformado. Não levanta."""
+    None se indisponível (sem rede) ou malformado. Não levanta. O `?cb=` fura o cache de
+    CDN do raw do Gist (que servia a versão antiga por minutos), então o aviso é imediato."""
+    import time
+
     try:
-        data = _http_json(MANIFEST_URL, timeout)
+        data = _http_json(f"{MANIFEST_URL}?cb={int(time.time())}", timeout)
         if isinstance(data, dict) and _parse_ver(data.get("version")):
             return data
     except Exception as e:
