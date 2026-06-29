@@ -41,6 +41,7 @@ class MainWindow:
         # ---- cabeçalho --------------------------------------------------------
         head = tk.Frame(body, bg=_BG)
         head.pack(fill="x")
+        self.head = head
         tk.Label(head, text="ScribaDev", bg=_BG, fg=PALETTE["text"], font=("Segoe UI", 16, "bold")).pack(side="left")
         # versão (discreta) ao lado do título — fonte única: scriba.__version__
         tk.Label(head, text=f"v{__version__}", bg=_BG, fg=PALETTE["muted"],
@@ -50,6 +51,15 @@ class MainWindow:
             side="right", padx=(0, 8)
         )
         ModernButton(head, "Log", lambda: self.app.show_log(), height=32).pack(side="right", padx=(0, 8))
+
+        # ---- aviso de nova versão (#19): aparece só quando há atualização ------
+        self._update_ver = None
+        self.update_bar = tk.Frame(body, bg=_CARD, padx=12, pady=8)
+        self.update_lbl = tk.Label(self.update_bar, text="", bg=_CARD, fg=PALETTE["ok"], font=FONT_BOLD)
+        self.update_lbl.pack(side="left")
+        self.update_btn = ModernButton(self.update_bar, "Atualizar agora", self._do_update,
+                                       kind="primary", width=140, height=30)
+        self.update_btn.pack(side="right")
 
         # ---- call ao vivo -----------------------------------------------------
         card = tk.Frame(body, bg=_CARD, padx=16, pady=14)
@@ -107,6 +117,37 @@ class MainWindow:
         else:
             threading.Thread(target=self.app.start_recording, args=("manual",), daemon=True).start()
 
+    # ---- aviso de nova versão (#19) ---------------------------------------------
+
+    def show_update(self, ver: str) -> None:
+        from . import updates
+
+        self._update_ver = ver
+        self.update_lbl.configure(text=f"⬆  Nova versão v{ver} disponível", fg=PALETTE["ok"])
+        self.update_btn.set_text("Atualizar agora" if updates.is_git_install() else "Baixar")
+        if not self.update_bar.winfo_ismapped():
+            self.update_bar.pack(fill="x", after=self.head, pady=(8, 0))
+
+    def _do_update(self) -> None:
+        from . import updates
+
+        if updates.is_git_install():
+            self.update_lbl.configure(text="Atualizando… (git pull)", fg=PALETTE["muted"])
+            self.update_btn.set_text("…")
+            self.app.apply_update(self._update_done)
+        else:
+            import webbrowser
+
+            webbrowser.open(updates.download_url())
+
+    def _update_done(self, ok: bool, msg: str) -> None:
+        self.update_lbl.configure(text=("✓ " if ok else "✗ ") + msg,
+                                  fg=PALETTE["ok"] if ok else PALETTE["accent"])
+        if ok:
+            self.update_btn.pack_forget()
+        else:
+            self.update_btn.set_text("Tentar de novo")
+
     def _tick(self) -> None:
         try:
             visible = self.root.state() not in ("withdrawn", "iconic")
@@ -130,6 +171,8 @@ class MainWindow:
                 self.call_timer.set("—")
                 self.rec_btn.set_text("⏺  Gravar agora")
                 self._call_dot.itemconfigure(self._call_dot_item, fill=PALETTE["muted"])
+        if visible and self.app.update_news and not self.update_bar.winfo_ismapped():
+            self.show_update(self.app.update_news)
         self.root.after(1000, self._tick)
 
     # ---- status dos serviços ------------------------------------------------------

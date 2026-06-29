@@ -10,6 +10,48 @@ from pathlib import Path
 from . import __version__
 
 
+class _StampWriter:
+    """Prefixa cada LINHA com HH:MM:SS — dá timestamp ao process.log do subprocesso de
+    `process` (antes os prints de transcrição/diarização/resumo saíam sem hora)."""
+
+    def __init__(self, stream):
+        self._s = stream
+        self._bol = True  # begin-of-line: a próxima escrita inicia uma linha
+
+    def write(self, text) -> int:
+        import time
+
+        s, bol = self._s, self._bol
+        for i, part in enumerate(str(text).split("\n")):
+            if i > 0:
+                s.write("\n")
+                bol = True
+            if part and bol:
+                s.write(time.strftime("%H:%M:%S "))
+                bol = False
+            if part:
+                s.write(part)
+        self._bol = bol
+        return len(text)
+
+    def flush(self) -> None:
+        try:
+            self._s.flush()
+        except Exception:
+            pass
+
+    def __getattr__(self, name):
+        return getattr(self._s, name)
+
+
+def _timestamp_subprocess_output() -> None:
+    """Liga o HH:MM:SS por linha na saída do subprocesso `process` (vai pro process.log)."""
+    if sys.stdout is not None and not isinstance(sys.stdout, _StampWriter):
+        sys.stdout = _StampWriter(sys.stdout)
+    if sys.stderr is not None and not isinstance(sys.stderr, _StampWriter):
+        sys.stderr = _StampWriter(sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="scribadev",
@@ -109,6 +151,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "process":
         from .pipeline import process_folder, process_when_ready
 
+        _timestamp_subprocess_output()  # process.log com HH:MM:SS por linha
         if args.when_ready:
             return process_when_ready(args.folder)
         return 0 if process_folder(args.folder, num_speakers=args.speakers) else 1

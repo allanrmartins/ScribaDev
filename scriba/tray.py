@@ -49,6 +49,7 @@ class Tray:
                 pystray.MenuItem("Abrir pasta de reuniões", self._open_meetings),
                 pystray.MenuItem("Abrir pasta de notas", self._open_notes),
                 pystray.MenuItem("Processar pendentes", self._process_pending),
+                pystray.MenuItem("Buscar atualizações", self._check_updates),
                 pystray.MenuItem(
                     "Iniciar com o Windows",
                     self._toggle_autostart,
@@ -109,6 +110,9 @@ class Tray:
 
     def _process_pending(self, icon, item):
         self._bg(self.app.scan_pending)
+
+    def _check_updates(self, icon, item):
+        self._bg(self.app.check_updates_now)
 
     def _toggle_autostart(self, icon, item):
         self._bg(autostart.set_autostart, not autostart.is_enabled())

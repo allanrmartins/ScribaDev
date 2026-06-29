@@ -61,8 +61,10 @@ def _setup_logging() -> None:
     fmt = logging.Formatter(
         "%(asctime)s %(levelname)s %(name)s: %(message)s", datefmt="%d/%m/%Y %H:%M:%S"
     )
-    fh = logging.handlers.RotatingFileHandler(
-        util.LOGS_DIR / "scriba.log", maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+    # rotação DIÁRIA (à meia-noite): cada arquivo = 1 dia, então o .log não cresce sem
+    # fim; mantém ~14 dias (scriba.log de hoje + scriba.log.AAAA-MM-DD dos anteriores)
+    fh = logging.handlers.TimedRotatingFileHandler(
+        util.LOGS_DIR / "scriba.log", when="midnight", backupCount=14, encoding="utf-8"
     )
     fh.setFormatter(fmt)
     root.addHandler(fh)
@@ -94,6 +96,7 @@ class ScribaApp:
         self.wizard_win = None
         self.log_win = None
         self.main_win = None
+        self.update_news = None  # versão nova detectada (#19); a capa exibe o aviso
         self.hotkey = None
         self.detector: Detector | None = None
         self.call_started_at: float | None = None
@@ -372,6 +375,59 @@ class ScribaApp:
 
             self.log_win = LogWindow(self.root, self)
         self.log_win.show()
+
+    # -- atualização in-app (#19) ----------------------------------------------
+
+    def _check_updates_boot(self) -> None:
+        """Checagem de versão no boot, no MÁXIMO 1x/dia (gravado no state.json)."""
+        from datetime import date
+
+        try:
+            if util.read_state().get("last_update_check") == date.today().isoformat():
+                return
+        except Exception:
+            pass
+        threading.Thread(target=self._update_check_worker, args=(False,), daemon=True, name="updchk").start()
+
+    def check_updates_now(self) -> None:
+        """Checagem manual (bandeja/capa): roda sempre e avisa mesmo se já atualizado."""
+        self._toast("ScribaDev", "Procurando atualizações…")
+        threading.Thread(target=self._update_check_worker, args=(True,), daemon=True, name="updchk").start()
+
+    def _update_check_worker(self, announce: bool) -> None:
+        from datetime import date
+
+        ver = None
+        try:
+            from . import updates
+
+            ver = updates.update_available()
+        except Exception:
+            log.exception("checagem de atualização falhou")
+        try:
+            util.update_state(last_update_check=date.today().isoformat())
+        except Exception:
+            pass
+        self.ui(lambda: self._on_update_result(ver, announce))
+
+    def _on_update_result(self, ver, announce: bool) -> None:
+        self.update_news = ver
+        if ver:
+            self._toast("ScribaDev — atualização", f"Nova versão v{ver} disponível.")
+            if self.main_win:
+                self.main_win.show_update(ver)
+        elif announce:
+            self._toast("ScribaDev", "Você já está na versão mais recente.")
+
+    def apply_update(self, on_done) -> None:
+        """Aplica a atualização (git pull) em thread; chama on_done(ok, msg) na UI."""
+        def work():
+            from . import updates
+
+            ok, msg = updates.apply_git_update()
+            self.ui(lambda: on_done(ok, msg))
+
+        threading.Thread(target=work, daemon=True, name="updapply").start()
 
     def show_wizard(self) -> None:
         """Abre o assistente de perfil (chamável de qualquer thread)."""
@@ -761,6 +817,7 @@ class ScribaApp:
         self.root.after(8000, self._purge_loop)  # limpeza de gravações antigas (e a cada 6 h)
         self.root.after(2500, self._maybe_offer_wizard)  # 1º uso: assistente de perfil
         self.root.after(5000, self._reindex_search_index)  # índice de busca (#12), só se vazio
+        self.root.after(9000, self._check_updates_boot)    # aviso de nova versão (#19)
 
         if not self.start_hidden:
             self.show_main()  # lançamento manual (atalho): abre a janela na frente
