@@ -79,5 +79,24 @@ class ManifestTests(unittest.TestCase):
         self.assertIsNone(up.update_available())  # igual → nada novo
 
 
+class DescribeTests(unittest.TestCase):
+    def test_na_tag(self):
+        self.assertEqual(up._describe_to_str("v0.3.0", "v0.3.0"), "v0.3.0")
+
+    def test_commits_depois_da_tag(self):
+        self.assertEqual(up._describe_to_str("v0.3.0-3-g9cba847", "v0.3.0"),
+                         "v0.3.0 · +3 · 9cba847")
+
+    def test_modificado(self):
+        self.assertEqual(up._describe_to_str("v0.3.0-3-g9cba847-dirty", "v0.3.0"),
+                         "v0.3.0 · +3 · 9cba847 (modificado)")
+
+    def test_so_hash_sem_tag(self):
+        self.assertEqual(up._describe_to_str("9cba847", "v0.3.0"), "v0.3.0 · 9cba847")
+
+    def test_vazio(self):
+        self.assertEqual(up._describe_to_str("", "v0.3.0"), "v0.3.0")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

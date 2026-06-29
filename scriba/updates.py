@@ -52,6 +52,48 @@ def _is_newer(current, latest) -> bool:
     return bool(c and l and l > c)
 
 
+# -- string de versão p/ exibir (semver + build do git) ---------------------
+
+_BUILD_CACHE = None
+
+
+def _describe_to_str(d: str, base: str) -> str:
+    """(puro) Formata a saída de `git describe` num rótulo a partir de `base` ('vX.Y.Z'):
+    exato na tag → base; N commits depois → 'base · +N · hash'; com mod. local → sufixo."""
+    d = (d or "").strip()
+    if not d:
+        return base
+    dirty = " (modificado)" if d.endswith("-dirty") else ""
+    if dirty:
+        d = d[: -len("-dirty")]
+    m = re.search(r"-(\d+)-g([0-9a-fA-F]+)$", d)
+    if m:
+        return f"{base} · +{m.group(1)} · {m.group(2)}{dirty}"
+    if re.fullmatch(r"v?\d+\.\d+\.\d+", d):  # exatamente numa tag de release
+        return f"{base}{dirty}"
+    return f"{base} · {d}{dirty}"  # só hash (sem tag) etc.
+
+
+def build_string() -> str:
+    """Versão p/ exibir: 'v0.3.0 · +3 · 9cba847' (instalação git — sobe a cada commit)
+    ou 'v0.3.0' (na tag / sem git). Cacheado — não muda durante a execução."""
+    global _BUILD_CACHE
+    if _BUILD_CACHE is not None:
+        return _BUILD_CACHE
+    base = f"v{__version__}"
+    d = ""
+    root = repo_root()
+    if root is not None:
+        try:
+            r = _git(root, "describe", "--tags", "--always", "--dirty", timeout=10)
+            if r.returncode == 0:
+                d = r.stdout.strip()
+        except Exception:
+            d = ""
+    _BUILD_CACHE = _describe_to_str(d, base)
+    return _BUILD_CACHE
+
+
 # -- checagem (manifesto público) -------------------------------------------
 
 def _http_json(url: str, timeout: float):

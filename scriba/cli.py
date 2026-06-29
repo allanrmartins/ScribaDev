@@ -10,6 +10,16 @@ from pathlib import Path
 from . import __version__
 
 
+class _VersionAction(argparse.Action):
+    """`--version` mostra a versão COM o build do git (sobe a cada commit/push)."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        from . import updates
+
+        print(f"scribadev {updates.build_string()}")
+        parser.exit()
+
+
 class _StampWriter:
     """Prefixa cada LINHA com HH:MM:SS — dá timestamp ao process.log do subprocesso de
     `process` (antes os prints de transcrição/diarização/resumo saíam sem hora)."""
@@ -57,7 +67,8 @@ def main(argv: list[str] | None = None) -> int:
         prog="scribadev",
         description="Gravação e transcrição automática de reuniões do Microsoft Teams — local e privada.",
     )
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument("--version", action=_VersionAction, nargs=0,
+                        help="mostra a versão (semver + build do git)")
     sub = parser.add_subparsers(dest="cmd")
 
     p_run = sub.add_parser("run", help="inicia o app de bandeja (monitora calls do Teams)")

@@ -162,12 +162,12 @@ class SettingsWindow:
     # ======================================================= aba Sobre =========
 
     def _build_about_tab(self) -> None:
-        from . import __version__
+        from . import updates
 
         tab = self.tab_about
         tk.Label(tab, text="ScribaDev", bg=_BG, fg=PALETTE["text"],
                  font=("Segoe UI", 18, "bold")).pack(anchor="w")
-        tk.Label(tab, text=f"versão {__version__}", bg=_BG, fg=PALETTE["muted"], font=FONT).pack(anchor="w")
+        tk.Label(tab, text=updates.build_string(), bg=_BG, fg=PALETTE["muted"], font=FONT).pack(anchor="w")
         tk.Label(tab, text="Gravação e transcrição automática de reuniões (Teams, Zoom, Meet) — "
                           "100% local e privado.", bg=_BG, fg=PALETTE["muted"],
                  font=("Segoe UI", 9), wraplength=700, justify="left").pack(anchor="w", pady=(2, 10))
