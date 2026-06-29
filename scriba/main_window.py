@@ -131,6 +131,9 @@ class MainWindow:
     def _do_update(self) -> None:
         from . import updates
 
+        if self.app.is_recording():
+            self.update_lbl.configure(text="Pare a gravação antes de atualizar.", fg=PALETTE["accent"])
+            return
         if updates.is_git_install():
             self.update_lbl.configure(text="Atualizando… (git pull)", fg=PALETTE["muted"])
             self.update_btn.set_text("…")
@@ -141,11 +144,12 @@ class MainWindow:
             webbrowser.open(updates.download_url())
 
     def _update_done(self, ok: bool, msg: str) -> None:
-        self.update_lbl.configure(text=("✓ " if ok else "✗ ") + msg,
-                                  fg=PALETTE["ok"] if ok else PALETTE["accent"])
         if ok:
+            self.update_lbl.configure(text="✓ Atualizado — reiniciando o ScribaDev…", fg=PALETTE["ok"])
             self.update_btn.pack_forget()
+            self.root.after(1500, self.app.relaunch)  # auto-restart: atualiza "sozinho"
         else:
+            self.update_lbl.configure(text="✗ " + msg, fg=PALETTE["accent"])
             self.update_btn.set_text("Tentar de novo")
 
     def _tick(self) -> None:

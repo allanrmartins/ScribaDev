@@ -429,6 +429,29 @@ class ScribaApp:
 
         threading.Thread(target=work, daemon=True, name="updapply").start()
 
+    def relaunch(self) -> None:
+        """Reinicia o app: agenda um novo lançamento DEPOIS que este processo sair
+        (libera o single-instance) e pede quit. É o que faz o update se aplicar
+        'sozinho' (#19), sem o usuário reabrir."""
+        import os
+        import subprocess
+
+        pyw = Path(sys.executable)
+        if pyw.name.lower() == "python.exe":
+            pyw = pyw.with_name("pythonw.exe")  # sem janela de console
+        ps = (f"Wait-Process -Id {os.getpid()} -Timeout 60 -ErrorAction SilentlyContinue; "
+              f"Start-Process '{pyw}' -ArgumentList '-m','scriba.cli','run'")
+        try:
+            subprocess.Popen(
+                ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps],
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                | getattr(subprocess, "DETACHED_PROCESS", 0),
+            )
+        except Exception:
+            log.exception("falha ao agendar o relançamento")
+            return
+        self.request_quit()
+
     def show_wizard(self) -> None:
         """Abre o assistente de perfil (chamável de qualquer thread)."""
         self.ui(self._open_wizard_ui)
