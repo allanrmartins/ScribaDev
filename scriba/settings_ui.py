@@ -187,6 +187,18 @@ class SettingsWindow:
                  font=FONT).pack(side="left")
 
         separator(tab).pack(fill="x", pady=(8, 4))
+        upd = tk.Frame(tab, bg=_BG)
+        upd.pack(fill="x", pady=(2, 2))
+        ModernButton(upd, "Verificar atualizações", self._check_updates_about, width=190).pack(side="left")
+        # "Atualizar agora" — empacotado só quando há versão nova (em _show_about_update)
+        self._about_update_btn = ModernButton(upd, "Atualizar agora", self._do_update_about,
+                                              kind="primary", width=150)
+        self._about_update_status = tk.StringVar(value="")
+        self._about_update_lbl = tk.Label(tab, textvariable=self._about_update_status, bg=_BG,
+                                          fg=PALETTE["muted"], font=FONT, anchor="w", wraplength=600, justify="left")
+        self._about_update_lbl.pack(anchor="w", pady=(4, 0))
+
+        separator(tab).pack(fill="x", pady=(8, 4))
         tk.Label(tab, text="Componentes e versões", bg=_BG, fg=PALETTE["text"],
                  font=FONT_BOLD).pack(anchor="w", pady=(2, 4))
         _LVL = {"ok": PALETTE["muted"], "warn": "#e0b341", "err": PALETTE["accent"]}
@@ -280,6 +292,64 @@ class SettingsWindow:
         import webbrowser
 
         webbrowser.open(url)
+
+    # -- verificar atualizações na aba Sobre -----------------------------------
+
+    def _set_about_status(self, text: str, color: str) -> None:
+        self._about_update_status.set(text)
+        self._about_update_lbl.configure(fg=color)
+
+    def _check_updates_about(self) -> None:
+        import threading
+
+        self._about_update_btn.pack_forget()
+        self._set_about_status("Verificando…", PALETTE["muted"])
+        threading.Thread(target=self._about_update_worker, daemon=True).start()
+
+    def _about_update_worker(self) -> None:
+        from . import updates
+
+        try:
+            latest = updates.latest_version()
+        except Exception:
+            latest = None
+        self.win.after(0, lambda: self._show_about_update(latest))
+
+    def _show_about_update(self, latest) -> None:
+        from . import __version__, updates
+
+        self._about_update_btn.pack_forget()
+        if latest is None:
+            self._set_about_status("Não consegui verificar — sem internet ou serviço indisponível.",
+                                   PALETTE["muted"])
+        elif updates._is_newer(__version__, latest):
+            self._set_about_status(f"Nova versão v{latest} disponível — recomendado atualizar.",
+                                   PALETTE["accent"])
+            self._about_update_btn.set_text("Atualizar agora" if updates.is_git_install() else "Baixar")
+            self._about_update_btn.pack(side="left", padx=(8, 0))
+        else:
+            self._set_about_status(f"✓ Você está na versão mais recente (v{__version__}).", PALETTE["ok"])
+
+    def _do_update_about(self) -> None:
+        from . import updates
+
+        if self.app.is_recording():
+            self._set_about_status("Pare a gravação antes de atualizar.", PALETTE["accent"])
+            return
+        if updates.is_git_install():
+            self._set_about_status("Atualizando… (git pull)", PALETTE["muted"])
+            self.app.apply_update(self._about_update_done)
+        else:
+            import webbrowser
+
+            webbrowser.open(updates.download_url())
+
+    def _about_update_done(self, ok: bool, msg: str) -> None:
+        if ok:
+            self._set_about_status("✓ Atualizado — reiniciando o ScribaDev…", PALETTE["ok"])
+            self.win.after(1500, self.app.relaunch)
+        else:
+            self._set_about_status("✗ " + msg, PALETTE["accent"])
 
     # ==================================================== aba Gravação =========
 
