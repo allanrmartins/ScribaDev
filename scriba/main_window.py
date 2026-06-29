@@ -9,6 +9,7 @@ from __future__ import annotations
 import threading
 import tkinter as tk
 
+from . import __version__
 from .widgets import FONT, FONT_BOLD, PALETTE, LinkLabel, ModernButton, enable_dark_titlebar
 
 _BG = PALETTE["bg"]
@@ -26,7 +27,7 @@ class MainWindow:
         self.app = app
         self.root = root
         self._titlebar_done = False
-        root.title("ScribaDev")
+        root.title(f"ScribaDev v{__version__}")
         root.configure(bg=_BG)
         root.minsize(520, 560)
         root.protocol("WM_DELETE_WINDOW", self.hide)  # X: sai da barra, fica na bandeja
@@ -39,6 +40,9 @@ class MainWindow:
         head = tk.Frame(body, bg=_BG)
         head.pack(fill="x")
         tk.Label(head, text="ScribaDev", bg=_BG, fg=PALETTE["text"], font=("Segoe UI", 16, "bold")).pack(side="left")
+        # versão (discreta) ao lado do título — fonte única: scriba.__version__
+        tk.Label(head, text=f"v{__version__}", bg=_BG, fg=PALETTE["muted"],
+                 font=("Segoe UI", 9)).pack(side="left", padx=(6, 0), anchor="s", pady=(0, 3))
         ModernButton(head, "⚙", lambda: self.app.show_settings(), width=42, height=32).pack(side="right")
         ModernButton(head, "Notas", lambda: self.app.show_notes(), height=32).pack(
             side="right", padx=(0, 8)

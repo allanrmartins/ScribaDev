@@ -7,12 +7,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import __version__
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="scribadev",
         description="Gravação e transcrição automática de reuniões do Microsoft Teams — local e privada.",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="cmd")
 
     p_run = sub.add_parser("run", help="inicia o app de bandeja (monitora calls do Teams)")

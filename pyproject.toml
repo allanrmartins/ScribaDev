@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scribadev"
-version = "0.2.0"
-description = "Fork pessoal/local do Scriba: gravação e transcrição automática de reuniões (Teams, Zoom, Meet) — 100% local e privada, com notas em Markdown prontas para usar como contexto de desenvolvimento."
+dynamic = ["version"]
+description ="Fork pessoal/local do Scriba: gravação e transcrição automática de reuniões (Teams, Zoom, Meet) — 100% local e privada, com notas em Markdown prontas para usar como contexto de desenvolvimento."
 readme = "README.md"
 license = "Elastic-2.0"
 authors = [{ name = "Allan Martins" }]
@@ -53,6 +53,10 @@ scribadev-tray = "scriba.cli:main_tray"
 
 [tool.setuptools]
 packages = ["scriba"]
+
+# versão = fonte única em scriba/__init__.py (__version__); bump = editar lá só
+[tool.setuptools.dynamic]
+version = { attr = "scriba.__version__" }
 
 [tool.setuptools.package-data]
 scriba = ["assets/*.ico", "assets/*.png"]
