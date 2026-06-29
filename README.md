@@ -75,6 +75,8 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 
 **Opção B — sem git:** no GitHub, clique em **Code → Download ZIP**, extraia, abra um PowerShell na pasta extraída e rode `powershell -ExecutionPolicy Bypass -File .\setup.ps1`.
 
+> 💡 A **diarização** (separar as falas em *Participante 1/2/3*) é **opcional** e instalada à parte. Se ela aparecer como `dependências ausentes` no painel **Serviços**, é só seguir [Separar participantes por voz](#separar-participantes-por-voz-opcional).
+
 ### Onde ficam os arquivos
 
 | O quê | Onde (padrão) | Configurável? |
@@ -85,6 +87,21 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 | Config, logs e ambiente Python | `%LOCALAPPDATA%\ScribaDev\` | — |
 
 Todas as pastas de saída são **criadas automaticamente na primeira utilização** — não precisa criar nada à mão em uma máquina nova.
+
+## Atualização
+
+A versão instalada aparece na **barra de título** e na **capa** da janela (e em `scribadev --version`).
+
+**Com git (Opção A)** — atualiza por um comando:
+
+```powershell
+scribadev update --check    # só verifica se há versão nova
+scribadev update            # aplica: git pull + reinstala se as dependências mudaram
+```
+
+Depois de atualizar, **feche e reabra** o ScribaDev (bandeja → **Sair**, depois reabra pelo atalho) para carregar a nova versão.
+
+**Sem git (Opção B — ZIP)**: baixe o ZIP novo no GitHub (**Code → Download ZIP**), extraia por cima da pasta e rode o `setup.ps1` de novo — ele reaproveita o venv e atualiza só o que mudou.
 
 ## Uso
 
@@ -123,6 +140,8 @@ Na primeira execução, o **Assistente de perfil** abre sozinho: você descreve 
 | Comando | Para quê |
 |---|---|
 | `scribadev run` | app de bandeja: detecção + gravação + processamento |
+| `scribadev update` | checa e aplica atualizações (git pull); `--check` só verifica |
+| `scribadev --version` | mostra a versão instalada |
 | `scribadev doctor` | diagnóstico do ambiente (`--toast` testa a notificação) |
 | `scribadev devices` | lista microfones e loopbacks disponíveis |
 | `scribadev record 60` | gravação manual de N segundos (ex.: reunião fora do Teams) |
@@ -227,7 +246,14 @@ O ScribaDev é focado em pt-BR por padrão, mas `language` e `hotwords` aceitam 
 
 Com a **diarização** ativa, as falas dos outros participantes saem como **Participante 1/2/3** em vez de um "Participantes" único — e o resumo tenta associar cada um ao nome/papel citado na conversa. Roda 100% local (pyannote.audio na GPU/CPU):
 
-1. No venv do ScribaDev: `pip install torch --index-url https://download.pytorch.org/whl/cu128` (sem GPU NVIDIA: só `pip install torch`) e depois `pip install pyannote.audio`;
+1. **Instale o torch e o pyannote no venv do ScribaDev** — cole no PowerShell:
+
+   ```powershell
+   $py = "$env:LOCALAPPDATA\ScribaDev\venv\Scripts\python.exe"
+   & $py -m pip install torch --index-url https://download.pytorch.org/whl/cu128   # sem GPU NVIDIA: & $py -m pip install torch
+   & $py -m pip install "pyannote.audio>=4,<5"
+   ```
+
 2. Crie um token de leitura gratuito em [hf.co/settings/tokens](https://huggingface.co/settings/tokens) e **aceite os termos** nas páginas dos modelos [speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) (o que o pyannote 4.x realmente usa), [speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) e [segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0);
 3. Na aba **Gravação**: ligue "Separar participantes por voz" e cole o token. O modelo baixa uma vez e o resto é offline.
 
