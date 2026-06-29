@@ -189,48 +189,92 @@ class SettingsWindow:
         separator(tab).pack(fill="x", pady=(8, 4))
         tk.Label(tab, text="Componentes e versões", bg=_BG, fg=PALETTE["text"],
                  font=FONT_BOLD).pack(anchor="w", pady=(2, 4))
-        for label, value in self._about_components():
+        _LVL = {"ok": PALETTE["muted"], "warn": "#e0b341", "err": PALETTE["accent"]}
+        comps = self._about_components()
+        for label, value, level in comps:
             row = tk.Frame(tab, bg=_BG)
             row.pack(fill="x", pady=1)
             tk.Label(row, text=label, bg=_BG, fg=PALETTE["text"], font=FONT,
-                     width=18, anchor="w").pack(side="left")
-            tk.Label(row, text=value, bg=_BG, fg=PALETTE["muted"], font=FONT,
-                     anchor="w", justify="left").pack(side="left")
+                     width=18, anchor="nw").pack(side="left")
+            tk.Label(row, text=value, bg=_BG, fg=_LVL.get(level, PALETTE["muted"]), font=FONT,
+                     anchor="w", justify="left", wraplength=520).pack(side="left")
+        if any(lvl == "err" for _, _, lvl in comps):
+            tk.Label(tab, text="⚠ Há um problema na instalação (em vermelho acima). Veja o README "
+                              "para instalar/atualizar o que falta.", bg=_BG, fg=PALETTE["accent"],
+                     font=("Segoe UI", 9, "bold"), wraplength=560, justify="left").pack(anchor="w", pady=(8, 0))
 
     def _about_components(self) -> list:
+        """[(rótulo, valor, nível)] — nível: ok | warn | err. 'err' vira vermelho na UI."""
         import sys
 
-        def ver(pkg: str) -> str:
+        def ver(pkg: str):
             try:
                 from importlib.metadata import version
 
                 return version(pkg)
             except Exception:
-                return "—"
+                return None  # não instalado
 
-        pa = ver("pyannote.audio")
-        if pa == "—":
-            diar = "não instalada (extra [diarization])"
-        else:
-            model = getattr(self.app.cfg.diarization, "model", "") or "?"
-            diar = f"pyannote.audio {pa} · modelo: {model}"
+        def core(label: str, text: str, present: bool) -> tuple:
+            return (label, text if present else text + " — AUSENTE (reinstale o app)",
+                    "ok" if present else "err")
+
+        fw, ct, pa = ver("faster-whisper"), ver("ctranslate2"), ver("pyaudiowpatch")
+        diar_msg, diar_lvl = self._diarization_health(ver)
+        torch_v = ver("torch")
+        return [
+            ("Python", sys.version.split()[0], "ok"),
+            core("Transcrição", f"faster-whisper {fw or '?'} · ctranslate2 {ct or '?'}", bool(fw and ct)),
+            ("Diarização", diar_msg, diar_lvl),
+            ("PyTorch", torch_v or "não instalado (opcional — só p/ a diarização)", "ok" if torch_v else "warn"),
+            ("GPU", self._gpu_str(), "ok"),
+            core("Áudio (WASAPI)", f"pyaudiowpatch {pa or '?'}", bool(pa)),
+            ("Bandeja / imagens", f"pystray {ver('pystray') or '—'} · Pillow {ver('Pillow') or '—'}", "ok"),
+            ("Notificações", f"windows-toasts {ver('windows-toasts') or '—'}", "ok"),
+        ]
+
+    def _diarization_health(self, ver) -> tuple:
+        """Saúde da diarização (pyannote) — (mensagem amigável, nível). Leve: usa
+        find_spec (não importa o torch pesado, que travaria a janela)."""
+        import importlib.util as ilu
+
+        try:
+            present = ilu.find_spec("pyannote.audio") is not None
+        except Exception as e:
+            return (f"erro ao checar a instalação — {self._friendly(e)}", "err")
+        if not present:
+            return ("não instalada — falta o extra [diarization] (pyannote + torch). Veja o README.", "err")
+        try:
+            has_torch = ilu.find_spec("torch") is not None
+        except Exception:
+            has_torch = False
+        if not has_torch:
+            return ("pyannote presente, mas o PyTorch (torch) está faltando — reinstale o torch.", "err")
+        pa = ver("pyannote.audio") or "?"
+        dz = self.app.cfg.diarization
+        model = getattr(dz, "model", "") or "?"
+        if not getattr(dz, "hf_token", ""):
+            return (f"pyannote.audio {pa} — falta o token Hugging Face (configure na aba Gravação).", "warn")
+        if not getattr(dz, "enabled", False):
+            return (f"pyannote.audio {pa} · modelo: {model} — desligada na aba Gravação.", "warn")
+        return (f"pyannote.audio {pa} · modelo: {model}", "ok")
+
+    @staticmethod
+    def _friendly(e) -> str:
+        """Mensagem de erro curta e legível (sem traceback)."""
+        if isinstance(e, ModuleNotFoundError) and getattr(e, "name", None):
+            return f"falta o pacote '{e.name}'"
+        return (str(e) or type(e).__name__).splitlines()[0][:140]
+
+    @staticmethod
+    def _gpu_str() -> str:
         try:
             import ctypes
 
             ctypes.WinDLL("nvcuda.dll")
-            gpu = "NVIDIA (CUDA)"
+            return "NVIDIA (CUDA)"
         except OSError:
-            gpu = "CPU (sem GPU NVIDIA)"
-        return [
-            ("Python", sys.version.split()[0]),
-            ("Transcrição", f"faster-whisper {ver('faster-whisper')} · ctranslate2 {ver('ctranslate2')}"),
-            ("Diarização", diar),
-            ("PyTorch", ver("torch")),
-            ("GPU", gpu),
-            ("Áudio (WASAPI)", f"pyaudiowpatch {ver('pyaudiowpatch')}"),
-            ("Bandeja / imagens", f"pystray {ver('pystray')} · Pillow {ver('Pillow')}"),
-            ("Notificações", f"windows-toasts {ver('windows-toasts')}"),
-        ]
+            return "CPU (sem GPU NVIDIA)"
 
     def _open_url(self, url: str) -> None:
         import webbrowser
