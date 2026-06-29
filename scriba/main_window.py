@@ -6,6 +6,7 @@ fechar (X) tira da barra mas o app continua na bandeja.
 
 from __future__ import annotations
 
+import logging
 import threading
 import tkinter as tk
 
@@ -15,6 +16,7 @@ from .widgets import FONT, FONT_BOLD, PALETTE, LinkLabel, ModernButton, enable_d
 _BG = PALETTE["bg"]
 _CARD = "#2d2d37"
 _LEVEL_COLORS = {"ok": PALETTE["ok"], "warn": "#e0b341", "off": PALETTE["muted"]}
+log = logging.getLogger("scriba.main_window")
 
 
 def _fmt(seconds: float) -> str:
@@ -175,66 +177,93 @@ class MainWindow:
 
         # enumeração de áudio em subprocesso: o PortAudio pode abortar com assert
         # de CRT quando os dispositivos mudam — isolado, nunca derruba o app
-        from . import util as util_probe
-
-        audio = util_probe.run_audio_probe()
-        if audio:
-            items.append(("ok", "Microfone", audio.get("mic", "?")))
-            items.append(("ok", "Áudio do sistema", audio.get("loopback", "?")))
-        else:
-            items.append(("warn", "Áudio", "dispositivos indisponíveis no momento — clique em atualizar"))
-
-        gpu = False
         try:
-            import ctypes
+            from . import util as util_probe
 
-            ctypes.WinDLL("nvcuda.dll")
-            gpu = True
-        except OSError:
-            pass
-        w = cfg.whisper
-        if (w.engine or "local").strip().lower() == "cloud":
-            ready = bool(w.cloud_api_key)
-            items.append(("ok" if ready else "warn", "Transcrição (nuvem)",
-                          f"{w.cloud_model} · nuvem" if ready else "falta chave — configure na aba Gravação"))
-        else:
-            device = "GPU" if gpu and w.device != "cpu" else "CPU"
-            items.append(("ok", "Transcrição (Whisper)", f"{w.model} · {device}"))
-
-        from . import util as util_mod
-
-        if cfg.summary.enabled:
-            s = cfg.summary
-            prov = (s.provider or "claude").strip().lower()
-            if prov == "ollama":
-                items.append(("ok", "Resumo (Ollama)", f"{s.ollama_model} · {s.base_url or 'localhost:11434'}"))
-            elif prov == "openai":
-                ready = bool(s.base_url and s.api_key)
-                items.append(("ok" if ready else "warn", "Resumo (OpenAI-compat)",
-                              s.openai_model if ready else "falta endpoint/chave — configure na aba Resumo"))
+            audio = util_probe.run_audio_probe()
+            if audio:
+                items.append(("ok", "Microfone", audio.get("mic", "?")))
+                items.append(("ok", "Áudio do sistema", audio.get("loopback", "?")))
             else:
-                has_claude = util_mod.claude_command() is not None
-                items.append(("ok" if has_claude else "warn", "Resumo (Claude)",
-                              s.model if has_claude else "claude CLI não encontrado"))
-        else:
-            items.append(("off", "Resumo", "desativado"))
+                items.append(("warn", "Áudio", "dispositivos indisponíveis no momento — clique em atualizar"))
+        except Exception as e:
+            log.exception("status: falha na sonda de áudio")
+            items.append(("warn", "Áudio", f"indisponível: {e}"))
 
-        if cfg.diarization.enabled:
-            import importlib.util as ilu
+        try:
+            gpu = False
+            try:
+                import ctypes
 
-            deps = ilu.find_spec("pyannote.audio") is not None
-            if deps and cfg.diarization.hf_token:
-                items.append(("ok", "Diarização", "separando participantes por voz"))
+                ctypes.WinDLL("nvcuda.dll")
+                gpu = True
+            except OSError:
+                pass
+            w = cfg.whisper
+            if (w.engine or "local").strip().lower() == "cloud":
+                ready = bool(w.cloud_api_key)
+                items.append(("ok" if ready else "warn", "Transcrição (nuvem)",
+                              f"{w.cloud_model} · nuvem" if ready else "falta chave — configure na aba Gravação"))
             else:
-                items.append(("warn", "Diarização", "sem token HF" if deps else "dependências ausentes"))
-        else:
-            items.append(("off", "Diarização", "desativada"))
+                device = "GPU" if gpu and w.device != "cpu" else "CPU"
+                items.append(("ok", "Transcrição (Whisper)", f"{w.model} · {device}"))
+        except Exception as e:
+            log.exception("status: falha na transcrição")
+            items.append(("warn", "Transcrição", f"indisponível: {e}"))
 
-        from . import autostart
+        try:
+            from . import util as util_mod
 
-        on = autostart.is_enabled()
-        items.append(("ok" if on else "off", "Iniciar com o Windows", "ligado" if on else "desligado"))
+            if cfg.summary.enabled:
+                s = cfg.summary
+                prov = (s.provider or "claude").strip().lower()
+                if prov == "ollama":
+                    items.append(("ok", "Resumo (Ollama)", f"{s.ollama_model} · {s.base_url or 'localhost:11434'}"))
+                elif prov == "openai":
+                    ready = bool(s.base_url and s.api_key)
+                    items.append(("ok" if ready else "warn", "Resumo (OpenAI-compat)",
+                                  s.openai_model if ready else "falta endpoint/chave — configure na aba Resumo"))
+                else:
+                    has_claude = util_mod.claude_command() is not None
+                    items.append(("ok" if has_claude else "warn", "Resumo (Claude)",
+                                  s.model if has_claude else "claude CLI não encontrado"))
+            else:
+                items.append(("off", "Resumo", "desativado"))
+        except Exception as e:
+            log.exception("status: falha no resumo")
+            items.append(("warn", "Resumo", f"indisponível: {e}"))
 
+        # diarização: por que está (ou não) ativa — o motivo também vai pro log, p/
+        # diagnosticar instalação sem o extra [diarization] ou sem token HF (caso do amigo)
+        try:
+            if cfg.diarization.enabled:
+                import importlib.util as ilu
+
+                deps = ilu.find_spec("pyannote.audio") is not None
+                if deps and cfg.diarization.hf_token:
+                    items.append(("ok", "Diarização", "separando participantes por voz"))
+                else:
+                    reason = ("sem token HF — configure na aba Gravação" if deps
+                              else "dependências ausentes — instale o extra [diarization] (pyannote + torch)")
+                    items.append(("warn", "Diarização", reason))
+                    log.info("diarização não ativa: %s", reason)
+            else:
+                items.append(("off", "Diarização", "desativada no config"))
+        except Exception as e:
+            log.exception("status: falha ao checar diarização")
+            items.append(("warn", "Diarização", f"indisponível: {e}"))
+
+        try:
+            from . import autostart
+
+            on = autostart.is_enabled()
+            items.append(("ok" if on else "off", "Iniciar com o Windows", "ligado" if on else "desligado"))
+        except Exception as e:
+            log.exception("status: falha no autostart")
+            items.append(("warn", "Iniciar com o Windows", f"indisponível: {e}"))
+
+        if not items:  # nada coletou: ainda assim renderiza algo (nunca um painel mudo)
+            items.append(("warn", "Serviços", "não consegui montar a lista — veja o log do app"))
         self.app.ui(lambda: self._render_status(items))
 
     def _render_status(self, items: list[tuple[str, str, str]]) -> None:
