@@ -32,6 +32,7 @@ def ask_num_speakers(
     - None          → "Não sei / automático", timeout esgotado ou janela fechada.
     """
     win = tk.Toplevel(root)
+    win.withdraw()  # posiciona ANTES de exibir (evita nascer fora e "pular")
     win.title("ScribaDev — Participantes")
     win.configure(bg=_BG, padx=22, pady=18)
     win.resizable(False, False)
@@ -111,11 +112,27 @@ def ask_num_speakers(
     if timeout_seconds and int(timeout_seconds) > 0:
         tick()
 
-    # -- centraliza + foco no topo ------------------------------------------
+    # -- centraliza (sobre o app se visível; senão na tela) + foco no topo --
+    # mesma técnica do pop-up de excluir nota: oculta → posiciona → deiconify.
+    # reqwidth/reqheight valem com a janela ainda oculta (winfo_width seria 1).
     win.update_idletasks()
-    sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
-    w, h = win.winfo_width(), win.winfo_height()
-    win.geometry(f"+{(sw - w) // 2}+{(sh - h) // 3}")
+    w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+    x = y = None
+    try:
+        # `root` é a janela do app (dashboard); centraliza sobre ela quando no ar
+        if root is not None and root.state() not in ("withdrawn", "iconic"):
+            root.update_idletasks()
+            rw, rh = root.winfo_width(), root.winfo_height()
+            if rw > 1 and rh > 1:
+                x = root.winfo_rootx() + max(0, (rw - w) // 2)
+                y = root.winfo_rooty() + max(0, (rh - h) // 3)
+    except (tk.TclError, AttributeError):
+        x = y = None
+    if x is None:  # app só na bandeja (sem janela): centraliza na tela, como antes
+        x = (win.winfo_screenwidth() - w) // 2
+        y = (win.winfo_screenheight() - h) // 3
+    win.geometry(f"+{x}+{y}")
+    win.deiconify()
     enable_dark_titlebar(win)
     win.lift()
     win.focus_force()
