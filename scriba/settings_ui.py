@@ -130,11 +130,14 @@ class SettingsWindow:
         self.nb.add(self.tab_detect, text="Detecção")
         self.nb.add(self.tab_dirs, text="Pastas")
         self.nb.add(self.tab_summary, text="Resumo")
+        self.tab_about = tk.Frame(self.nb, bg=_BG, padx=14, pady=14)
+        self.nb.add(self.tab_about, text="Sobre")
 
         self._build_recording_tab()
         self._build_detection_tab()
         self._build_dirs_tab()
         self._build_summary_tab()
+        self._build_about_tab()
 
         # -- rodapé ---------------------------------------------------------------
         foot = tk.Frame(body, bg=_BG)
@@ -155,6 +158,84 @@ class SettingsWindow:
 
     def _open_notes_dir(self) -> None:
         util.open_path(self._notes_dir())
+
+    # ======================================================= aba Sobre =========
+
+    def _build_about_tab(self) -> None:
+        from . import __version__
+
+        tab = self.tab_about
+        tk.Label(tab, text="ScribaDev", bg=_BG, fg=PALETTE["text"],
+                 font=("Segoe UI", 18, "bold")).pack(anchor="w")
+        tk.Label(tab, text=f"versão {__version__}", bg=_BG, fg=PALETTE["muted"], font=FONT).pack(anchor="w")
+        tk.Label(tab, text="Gravação e transcrição automática de reuniões (Teams, Zoom, Meet) — "
+                          "100% local e privado.", bg=_BG, fg=PALETTE["muted"],
+                 font=("Segoe UI", 9), wraplength=700, justify="left").pack(anchor="w", pady=(2, 10))
+
+        repo = tk.Frame(tab, bg=_BG)
+        repo.pack(fill="x", pady=2)
+        tk.Label(repo, text="Repositório", bg=_BG, fg=PALETTE["text"], font=FONT_BOLD,
+                 width=16, anchor="w").pack(side="left")
+        LinkLabel(repo, "github.com/allanrmartins/ScribaDev",
+                  lambda: self._open_url("https://github.com/allanrmartins/ScribaDev")).pack(side="left")
+
+        lic = tk.Frame(tab, bg=_BG)
+        lic.pack(fill="x", pady=2)
+        tk.Label(lic, text="Licença", bg=_BG, fg=PALETTE["text"], font=FONT_BOLD,
+                 width=16, anchor="w").pack(side="left")
+        tk.Label(lic, text="Elastic License 2.0 © Allan Martins", bg=_BG, fg=PALETTE["muted"],
+                 font=FONT).pack(side="left")
+
+        separator(tab).pack(fill="x", pady=(8, 4))
+        tk.Label(tab, text="Componentes e versões", bg=_BG, fg=PALETTE["text"],
+                 font=FONT_BOLD).pack(anchor="w", pady=(2, 4))
+        for label, value in self._about_components():
+            row = tk.Frame(tab, bg=_BG)
+            row.pack(fill="x", pady=1)
+            tk.Label(row, text=label, bg=_BG, fg=PALETTE["text"], font=FONT,
+                     width=18, anchor="w").pack(side="left")
+            tk.Label(row, text=value, bg=_BG, fg=PALETTE["muted"], font=FONT,
+                     anchor="w", justify="left").pack(side="left")
+
+    def _about_components(self) -> list:
+        import sys
+
+        def ver(pkg: str) -> str:
+            try:
+                from importlib.metadata import version
+
+                return version(pkg)
+            except Exception:
+                return "—"
+
+        pa = ver("pyannote.audio")
+        if pa == "—":
+            diar = "não instalada (extra [diarization])"
+        else:
+            model = getattr(self.app.cfg.diarization, "model", "") or "?"
+            diar = f"pyannote.audio {pa} · modelo: {model}"
+        try:
+            import ctypes
+
+            ctypes.WinDLL("nvcuda.dll")
+            gpu = "NVIDIA (CUDA)"
+        except OSError:
+            gpu = "CPU (sem GPU NVIDIA)"
+        return [
+            ("Python", sys.version.split()[0]),
+            ("Transcrição", f"faster-whisper {ver('faster-whisper')} · ctranslate2 {ver('ctranslate2')}"),
+            ("Diarização", diar),
+            ("PyTorch", ver("torch")),
+            ("GPU", gpu),
+            ("Áudio (WASAPI)", f"pyaudiowpatch {ver('pyaudiowpatch')}"),
+            ("Bandeja / imagens", f"pystray {ver('pystray')} · Pillow {ver('Pillow')}"),
+            ("Notificações", f"windows-toasts {ver('windows-toasts')}"),
+        ]
+
+    def _open_url(self, url: str) -> None:
+        import webbrowser
+
+        webbrowser.open(url)
 
     # ==================================================== aba Gravação =========
 

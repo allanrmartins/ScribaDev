@@ -379,14 +379,7 @@ class ScribaApp:
     # -- atualização in-app (#19) ----------------------------------------------
 
     def _check_updates_boot(self) -> None:
-        """Checagem de versão no boot, no MÁXIMO 1x/dia (gravado no state.json)."""
-        from datetime import date
-
-        try:
-            if util.read_state().get("last_update_check") == date.today().isoformat():
-                return
-        except Exception:
-            pass
+        """Checagem de versão a CADA inicialização do app (#19)."""
         threading.Thread(target=self._update_check_worker, args=(False,), daemon=True, name="updchk").start()
 
     def check_updates_now(self) -> None:
