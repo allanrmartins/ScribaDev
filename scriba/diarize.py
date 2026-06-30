@@ -229,12 +229,25 @@ def _extract_embeddings(result, annotation) -> dict[str, list[float]]:
         return {}
 
 
+def _unwrap_result(result):
+    """pyannote 4.0.5+ (batch inference) devolve uma LISTA — 1 item por arquivo; como só
+    passamos um áudio, desembrulha p/ o item único (DiarizeOutput/Annotation). Senão passa
+    direto (Annotation no 3.x/4.0.4). #24: a lista quebrava o _extract_annotation -> o
+    pipeline rodava mas dava "0 voz(es) em 0 trechos"."""
+    if isinstance(result, (list, tuple)) and len(result) == 1:
+        return result[0]
+    return result
+
+
 def _run_pipe(pipe, audio, kwargs) -> tuple[list[Turn], dict[str, list[float]]] | None:
     """Roda o pipeline num áudio (dict ou caminho) e devolve (turns, embeddings),
     ou None se não reconheceu o retorno."""
-    result = pipe(audio, **kwargs)
+    result = _unwrap_result(pipe(audio, **kwargs))
     annotation = _extract_annotation(result)
     if annotation is None:
+        # diagnóstico p/ formatos futuros do pyannote: registra o que veio (#24)
+        log.warning("diarização: retorno do pyannote não reconhecido — tipo=%s, atributos=%s",
+                    type(result).__name__, [a for a in dir(result) if not a.startswith("_")][:25])
         return None
     turns = [
         (float(turn.start), float(turn.end), str(label))
@@ -383,22 +396,39 @@ def _diarize_chunked(pipe, audio, sr: int, chunk_s: int) -> tuple[list[Turn], di
 
 
 def _extract_annotation(result):
-    """Acha a Annotation no retorno do pipeline (a API mudou entre pyannote 3.x e 4.x).
+    """Acha a Annotation no retorno do pipeline (a API muda entre versões do pyannote).
 
-    3.x devolve a Annotation direto; 4.x devolve um objeto (ex.: DiarizeOutput)
-    com ela dentro.
-    """
-    if hasattr(result, "itertracks"):
+    3.x/4.0.4: Annotation direto. 4.x: DiarizeOutput com `.speaker_diarization`. 4.0.5+:
+    batch inference devolve LISTA (já desembrulhada em _unwrap_result; aqui tratamos
+    lista/dict por robustez, caso venham vários itens). None se nada bater."""
+    if result is None:
+        return None
+    if hasattr(result, "itertracks"):  # Annotation direto
         return result
-    for attr in ("speaker_diarization", "diarization", "annotation"):
+    for attr in ("speaker_diarization", "diarization", "annotation"):  # DiarizeOutput & cia
         candidate = getattr(result, attr, None)
         if candidate is not None and hasattr(candidate, "itertracks"):
             return candidate
+    if isinstance(result, (list, tuple)):  # batch inference: 1+ itens
+        for item in result:
+            got = _extract_annotation(item)
+            if got is not None:
+                return got
+        return None
+    if isinstance(result, dict):
+        for item in result.values():
+            got = _extract_annotation(item)
+            if got is not None:
+                return got
+        return None
     # último recurso: qualquer atributo público que pareça uma Annotation
     for attr in dir(result):
         if attr.startswith("_"):
             continue
-        candidate = getattr(result, attr, None)
+        try:
+            candidate = getattr(result, attr, None)
+        except Exception:
+            continue
         if candidate is not None and hasattr(candidate, "itertracks"):
             return candidate
     return None

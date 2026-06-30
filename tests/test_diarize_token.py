@@ -83,5 +83,48 @@ class DiarizeMetaErrorTests(unittest.TestCase):
         self.assertIsNone(diarize.diarize(Path("x.wav"), self._cfg(enabled=True, hf_token="")))
 
 
+class ExtractAnnotationTests(unittest.TestCase):
+    """diarize._extract_annotation / _unwrap_result: tolerância aos formatos de retorno do
+    pyannote, incl. a LISTA do batch inference (4.0.5+) que dava "0 voz(es) em 0 trechos" (#24)."""
+
+    class _Ann:  # simula pyannote.core.Annotation (só precisa de itertracks)
+        def itertracks(self, yield_label=True):
+            return iter(())
+
+    class _DiarizeOutput:  # simula pyannote 4.x: objeto com .speaker_diarization
+        def __init__(self, ann):
+            self.speaker_diarization = ann
+            self.speaker_embeddings = None
+
+    def test_annotation_direta(self):  # 3.x / 4.0.4
+        ann = self._Ann()
+        self.assertIs(diarize._extract_annotation(ann), ann)
+
+    def test_diarize_output_4x(self):
+        ann = self._Ann()
+        self.assertIs(diarize._extract_annotation(self._DiarizeOutput(ann)), ann)
+
+    def test_lista_batch_inference(self):
+        # 4.0.5+: apply() devolve [DiarizeOutput] — o que quebrava a diarização
+        ann = self._Ann()
+        out = self._DiarizeOutput(ann)
+        self.assertIs(diarize._unwrap_result([out]), out)        # desembrulha o item único
+        self.assertIs(diarize._extract_annotation([out]), ann)   # e ainda acha a Annotation
+        self.assertIs(diarize._extract_annotation(diarize._unwrap_result([out])), ann)
+
+    def test_lista_de_annotation(self):
+        ann = self._Ann()
+        self.assertIs(diarize._extract_annotation([ann]), ann)
+
+    def test_formato_irreconhecido_vira_none(self):
+        self.assertIsNone(diarize._extract_annotation("isto nao e diarizacao"))
+        self.assertIsNone(diarize._extract_annotation(None))
+
+    def test_unwrap_so_lista_de_um(self):
+        ann = self._Ann()
+        self.assertIs(diarize._unwrap_result(ann), ann)            # não-lista: passa direto
+        self.assertEqual(diarize._unwrap_result([1, 2]), [1, 2])   # >1 item: não desembrulha
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
