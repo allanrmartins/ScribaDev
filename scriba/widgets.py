@@ -66,19 +66,28 @@ class ModernButton(tk.Canvas):
     """Botão arredondado com hover/press. kind: "secondary" (cinza) ou "primary" (accent)."""
 
     def __init__(self, parent, text: str, command: Callable[[], None],
-                 kind: str = "secondary", width: int | None = None, height: int = 30):
+                 kind: str = "secondary", width: int | None = None, height: int = 30, icon=None):
         bg = parent.cget("bg")
         super().__init__(parent, height=height, bg=bg, highlightthickness=0, cursor="hand2")
         self.command = command
         self._kind = kind
+        self._icon_ref = icon  # segura a referência: sem isso o GC apaga a imagem do Tk
         f = tkfont.Font(family=FONT[0], size=FONT[1])
+        text_w = f.measure(text)
+        icon_w = icon.width() if icon else 0
+        gap = 6 if icon else 0
+        content_w = icon_w + gap + text_w
         # nunca usar self._w: é o caminho Tcl interno do widget no tkinter
-        self._bw = width or f.measure(text) + 34
+        self._bw = width or content_w + 34
         self._bh = height
         self.configure(width=self._bw)
         self._rect = round_rect(self, 1, 1, self._bw - 1, height - 1, 8, fill=self._color("idle"), outline="")
         fg = "#ffffff" if kind == "primary" else PALETTE["text"]
-        self._txt = self.create_text(self._bw // 2, height // 2, text=text, fill=fg, font=FONT)
+        # ícone + texto agrupados e centralizados (sem ícone: texto centralizado, como antes)
+        start = (self._bw - content_w) / 2
+        if icon:
+            self.create_image(start, height / 2, image=icon, anchor="w")
+        self._txt = self.create_text(start + icon_w + gap, height / 2, text=text, fill=fg, font=FONT, anchor="w")
         self.bind("<Enter>", lambda e: self.itemconfigure(self._rect, fill=self._color("hover")))
         self.bind("<Leave>", lambda e: self.itemconfigure(self._rect, fill=self._color("idle")))
         self.bind("<Button-1>", lambda e: self.itemconfigure(self._rect, fill=self._color("press")))
@@ -494,3 +503,22 @@ def make_text(parent, **kw) -> tk.Text:
     )
     defaults.update(kw)
     return tk.Text(parent, **defaults)
+
+
+def app_icon(size: int = 18):
+    """`PhotoImage` do ícone do ScribaDev em ~`size`px, ou None se indisponível. Usado
+    para marcar botões de IA com a marca do app. O CHAMADOR deve guardar a referência
+    retornada (num atributo de janela) — senão o GC do Tk apaga a imagem do botão."""
+    try:
+        from PIL import Image, ImageTk
+
+        im = Image.open(util.ICON_PNG).convert("RGBA").resize((size, size), Image.LANCZOS)
+        return ImageTk.PhotoImage(im)
+    except Exception:
+        pass
+    try:  # fallback sem Pillow: o Tk lê PNG nativamente, mas só reduz por fator inteiro
+        base = tk.PhotoImage(file=str(util.ICON_PNG))
+        factor = max(1, round(base.width() / size))
+        return base.subsample(factor, factor) if factor > 1 else base
+    except Exception:
+        return None

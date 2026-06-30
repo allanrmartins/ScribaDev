@@ -23,6 +23,7 @@ from .widgets import (
     LinkLabel,
     ModernButton,
     add_placeholder,
+    app_icon,
     enable_dark_titlebar,
     make_entry,
     mask_date_br,
@@ -153,7 +154,9 @@ class NotesWindow:
         self.copy_btn.pack(side="left")
         self.copy_tr_btn = ModernButton(copy_row, "Copiar transcrição", self._copy_transcript, width=150)
         self.copy_tr_btn.pack(side="left", padx=(8, 0))
-        self.chat_btn = ModernButton(copy_row, "Perguntar à reunião", self._open_chat, width=165)
+        self._chat_icon = app_icon(18)  # ícone do app no botão p/ destacar que é IA; ref evita GC
+        self.chat_btn = ModernButton(copy_row, "Perguntar à reunião", self._open_chat,
+                                     width=185, icon=self._chat_icon)
         self.chat_btn.pack(side="left", padx=(8, 0))
         # rotular vozes (#1): só aparece quando a reunião selecionada tem diarização
         # (voices.json na pasta da gravação) — empacotado sob demanda
