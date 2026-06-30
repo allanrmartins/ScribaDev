@@ -36,15 +36,20 @@ def _speaker_kwargs(cfg: Diarization, num_speakers: int | None) -> dict:
     """Argumentos de contagem de vozes para o pipeline do pyannote.
 
     num_speakers (informado pelo usuário ao fim da call) trava min=max=N e tem
-    PRECEDÊNCIA sobre max_speakers — no pyannote, max_speakers não tem efeito
-    quando num_speakers é dado, então nunca combinamos os dois. Sem num_speakers,
-    cai no max_speakers do config (0 = automático).
+    PRECEDÊNCIA sobre min/max_speakers — no pyannote, eles não têm efeito quando
+    num_speakers é dado, então nunca os combinamos. Sem num_speakers, cai no
+    min/max_speakers do config (0 = automático em cada um).
     """
     if num_speakers and int(num_speakers) >= 1:
         return {"num_speakers": int(num_speakers)}
-    if cfg.max_speakers and int(cfg.max_speakers) > 1:
-        return {"max_speakers": int(cfg.max_speakers)}
-    return {}
+    hi = int(cfg.max_speakers or 0)
+    lo = int(getattr(cfg, "min_speakers", 0) or 0)
+    kw: dict = {}
+    if hi > 1:
+        kw["max_speakers"] = hi
+    if lo > 1:
+        kw["min_speakers"] = min(lo, hi) if hi > 1 else lo  # mín nunca passa do máx
+    return kw
 
 
 def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None) -> DiarizationResult | None:

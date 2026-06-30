@@ -53,6 +53,25 @@ class SpeakerKwargsTests(unittest.TestCase):
         # 1 voz remota é legítimo (call 1-a-1): trava em 1 cluster, sem diarização espúria
         self.assertEqual(diarize._speaker_kwargs(Diarization(), 1), {"num_speakers": 1})
 
+    def test_min_speakers_sozinho(self):  # #22: mín de vozes na UI
+        self.assertEqual(diarize._speaker_kwargs(Diarization(min_speakers=2), None), {"min_speakers": 2})
+
+    def test_min_speakers_0_ou_1_e_automatico(self):
+        self.assertEqual(diarize._speaker_kwargs(Diarization(min_speakers=1), None), {})
+
+    def test_min_e_max_juntos(self):
+        self.assertEqual(diarize._speaker_kwargs(Diarization(min_speakers=2, max_speakers=5), None),
+                         {"max_speakers": 5, "min_speakers": 2})
+
+    def test_min_nao_passa_do_max(self):
+        # min=6 com max=3 seria rejeitado pelo pyannote -> min clampa no max
+        self.assertEqual(diarize._speaker_kwargs(Diarization(min_speakers=6, max_speakers=3), None),
+                         {"max_speakers": 3, "min_speakers": 3})
+
+    def test_num_speakers_ignora_min_e_max(self):
+        self.assertEqual(diarize._speaker_kwargs(Diarization(min_speakers=2, max_speakers=5), 3),
+                         {"num_speakers": 3})
+
 
 class ExtractEmbeddingsTests(unittest.TestCase):
     def test_casa_label_a_vetor_na_ordem(self):

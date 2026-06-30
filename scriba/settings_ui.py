@@ -50,6 +50,19 @@ _PROVIDER_LABELS = {v: k for k, v in _PROVIDERS.items()}
 _WHISPER_MODELS = ("tiny", "base", "small", "medium", "large-v3", "large-v3-turbo")
 _WHISPER_DEVICES = ("auto", "cuda", "cpu")
 
+# rótulo amigável -> código de idioma do Whisper ("" = autodetecção). Código fora da
+# lista é preservado por passthrough (igual ao modelo do resumo).
+_WHISPER_LANGS = {
+    "Detectar automaticamente": "",
+    "Português": "pt",
+    "Inglês": "en",
+    "Espanhol": "es",
+    "Francês": "fr",
+    "Alemão": "de",
+    "Italiano": "it",
+}
+_WHISPER_LANG_LABELS = {v: k for k, v in _WHISPER_LANGS.items()}
+
 # Motor de transcrição (STT): local (faster-whisper) ou nuvem (Groq/OpenAI-compat)
 _STT_ENGINES = {"Local (faster-whisper)": "local", "Nuvem (Groq / OpenAI-compat)": "cloud"}
 _STT_ENGINE_LABELS = {v: k for k, v in _STT_ENGINES.items()}
@@ -436,6 +449,23 @@ class SettingsWindow:
             bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), justify="left", wraplength=660,
         ).pack(anchor="w", pady=(2, 0))
 
+        mv_row = tk.Frame(tab, bg=_BG)
+        mv_row.pack(fill="x", pady=(6, 0))
+        tk.Label(mv_row, text="Limitar vozes na diarização (0 = automático)", bg=_BG,
+                 fg=PALETTE["text"], font=FONT).pack(side="left")
+        self.max_speakers_var = tk.IntVar(value=0)
+        Stepper(mv_row, self.max_speakers_var, step=1, lo=0, hi=12, suffix="").pack(side="right")
+        tk.Label(mv_row, text="máx", bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8)).pack(side="right", padx=(8, 4))
+        self.min_speakers_var = tk.IntVar(value=0)
+        Stepper(mv_row, self.min_speakers_var, step=1, lo=0, hi=12, suffix="").pack(side="right")
+        tk.Label(mv_row, text="mín", bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8)).pack(side="right", padx=(12, 4))
+        tk.Label(
+            tab,
+            text="Independe do popup acima: vale quando ele está desligado ou cai no automático. "
+                 "Útil em reuniões recorrentes de tamanho conhecido (ex.: daily de 4).",
+            bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), justify="left", wraplength=660,
+        ).pack(anchor="w", pady=(2, 0))
+
         hk_row = tk.Frame(tab, bg=_BG)
         hk_row.pack(fill="x", pady=6)
         tk.Label(hk_row, text="Atalho global gravar/parar", bg=_BG, fg=PALETTE["text"], font=FONT).pack(side="left")
@@ -641,9 +671,16 @@ class SettingsWindow:
         self.whisper_device_var = tk.StringVar()
         ttk.Combobox(wd, textvariable=self.whisper_device_var, values=list(_WHISPER_DEVICES),
                      state="readonly", width=10, font=FONT).pack(side="right")
+        wl = tk.Frame(self._stt_local_frame, bg=_BG)
+        wl.pack(fill="x", pady=6)
+        tk.Label(wl, text="Idioma", bg=_BG, fg=PALETTE["text"], font=FONT).pack(side="left")
+        self.whisper_lang_var = tk.StringVar()
+        self._whisper_lang_combo = ttk.Combobox(wl, textvariable=self.whisper_lang_var, values=list(_WHISPER_LANGS),
+                                                state="readonly", width=22, font=FONT)
+        self._whisper_lang_combo.pack(side="right")
         tk.Label(self._stt_local_frame, justify="left", bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8),
                  text="Modelos maiores transcrevem melhor, porém mais devagar e com mais memória.\n"
-                      "Processamento: auto = GPU se houver, senão CPU. Padrão large-v3-turbo.").pack(anchor="w", pady=(2, 0))
+                      "Processamento: auto = GPU se houver, senão CPU. Idioma fixo ajuda em trechos curtos/ruído.").pack(anchor="w", pady=(2, 0))
 
         # Nuvem (Groq / OpenAI-compatível) — opt-in
         self._stt_cloud_frame = tk.Frame(parent, bg=_BG)
@@ -1064,6 +1101,8 @@ class SettingsWindow:
         self.hf_token_var.set(cfg.diarization.hf_token)
         self.ask_speakers_var.set(cfg.diarization.ask_speakers)
         self.ask_timeout_var.set(int(cfg.diarization.ask_speakers_timeout))
+        self.max_speakers_var.set(int(getattr(cfg.diarization, "max_speakers", 0)))
+        self.min_speakers_var.set(int(getattr(cfg.diarization, "min_speakers", 0)))
         self.hotkey_var.set(cfg.ui.hotkey)
         self.min_secs_var.set(int(cfg.detection.min_call_seconds))
         self.apps_var.set(cfg.detection.apps)
@@ -1077,6 +1116,13 @@ class SettingsWindow:
         self._whisper_model_combo.configure(values=wmodels)
         self.whisper_model_var.set(cfg.whisper.model)
         self.whisper_device_var.set(cfg.whisper.device if cfg.whisper.device in _WHISPER_DEVICES else "auto")
+        # idioma: passthrough de código fora da lista (ex.: 'ja') — igual ao modelo
+        lang = cfg.whisper.language or ""
+        if lang not in _WHISPER_LANG_LABELS:
+            _WHISPER_LANG_LABELS[lang] = lang
+            _WHISPER_LANGS[lang] = lang
+        self._whisper_lang_combo.configure(values=list(_WHISPER_LANGS))
+        self.whisper_lang_var.set(_WHISPER_LANG_LABELS[lang])
         self.stt_engine_var.set(_STT_ENGINE_LABELS.get(cfg.whisper.engine, "Local (faster-whisper)"))
         self.cloud_base_url_var.set(cfg.whisper.cloud_base_url)
         self.cloud_api_key_var.set(cfg.whisper.cloud_api_key)
@@ -1128,6 +1174,7 @@ class SettingsWindow:
                 hotwords=self.hotwords.get("1.0", "end").strip(),
                 model=self.whisper_model_var.get().strip() or cfg.whisper.model,
                 device=self.whisper_device_var.get().strip() or cfg.whisper.device,
+                language=_WHISPER_LANGS.get(self.whisper_lang_var.get(), cfg.whisper.language),
                 engine=_STT_ENGINES.get(self.stt_engine_var.get(), cfg.whisper.engine),
                 cloud_base_url=self.cloud_base_url_var.get().strip(),
                 cloud_api_key=self.cloud_api_key_var.get().strip(),
@@ -1155,6 +1202,8 @@ class SettingsWindow:
                 hf_token=self.hf_token_var.get().strip(),
                 ask_speakers=self.ask_speakers_var.get(),
                 ask_speakers_timeout=int(self.ask_timeout_var.get()),
+                max_speakers=int(self.max_speakers_var.get()),
+                min_speakers=int(self.min_speakers_var.get()),
             ),
         )
         config_mod.save(new_cfg)

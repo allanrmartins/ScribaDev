@@ -75,7 +75,8 @@ cloud_model = "whisper-large-v3-turbo"
 enabled = false
 hf_token = ""
 model = "pyannote/speaker-diarization-3.1"
-max_speakers = 0         # 0 = automático
+max_speakers = 0         # 0 = automático (máx. de vozes; ajuda o pyannote a não inventar)
+min_speakers = 0         # 0 = automático (mín. de vozes; evita colapsar 2 remotos em 1)
 # Ao fim da call, perguntar nº de participantes (vozes remotas) numa janela e
 # travar a diarização nesse número — separa muito melhor que o automático.
 ask_speakers = true
@@ -163,6 +164,7 @@ class Diarization:
     hf_token: str = ""
     model: str = "pyannote/speaker-diarization-3.1"
     max_speakers: int = 0
+    min_speakers: int = 0
     # Ao fim de cada call, perguntar quantos participantes remotos houve e travar
     # a diarização em num_speakers=N (separa muito melhor que o automático). 0 no
     # timeout = espera indefinida; senão cai no automático após N segundos.
@@ -320,7 +322,8 @@ cloud_model = {_s(w.cloud_model)}
 enabled = {_b(dz.enabled)}
 hf_token = {_s(_maybe_protect(dz.hf_token))}
 model = {_s(dz.model)}
-max_speakers = {_n(dz.max_speakers)}         # 0 = automático
+max_speakers = {_n(dz.max_speakers)}         # 0 = automático (máx. de vozes)
+min_speakers = {_n(dz.min_speakers)}         # 0 = automático (mín. de vozes)
 # Ao fim da call, perguntar nº de participantes (vozes remotas) e travar a
 # diarização nesse número — separa muito melhor que o automático.
 ask_speakers = {_b(dz.ask_speakers)}
