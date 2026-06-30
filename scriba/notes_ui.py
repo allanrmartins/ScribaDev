@@ -122,7 +122,9 @@ class NotesWindow:
                    self.filter_since_var, self.filter_until_var):
             _v.trace_add("write", lambda *a: self._debounced_search())
 
-        self.notes_tree = ttk.Treeview(left, show="tree", selectmode="browse")
+        # "extended": Ctrl/Shift-clique seleciona várias p/ excluir em lote (#22); o
+        # clique simples continua selecionando uma só, como antes.
+        self.notes_tree = ttk.Treeview(left, show="tree", selectmode="extended")
         self.notes_tree.column("#0", width=320)
         self.notes_tree.pack(fill="y", expand=True, pady=(6, 6))
         self.notes_tree.bind("<<TreeviewSelect>>", lambda e: self._show_selected_note())
@@ -819,21 +821,31 @@ class NotesWindow:
     # -- exclusão de nota (#16) ------------------------------------------------
 
     def _ask_delete_note(self) -> None:
-        """Confirmação + exclusão da nota selecionada (.md + índice; opção: gravação)."""
-        sel = self.notes_tree.selection()
-        if not sel or sel[0] not in self._note_items:
+        """Confirmação + exclusão das notas selecionadas (.md + índice; opção: gravação).
+        Suporta multi-seleção: ignora nós de data e reuniões em processamento."""
+        targets: list[tuple] = []
+        skipped_busy = 0
+        for item in self.notes_tree.selection():
+            if item not in self._note_items:
+                continue  # nó de dia (não é nota)
+            path, title, status = self._note_items[item]
+            if status is not None:
+                skipped_busy += 1  # em processamento: o worker pode estar ativo
+                continue
+            targets.append((path, title))
+        if not targets:
             return
-        path, title, status = self._note_items[sel[0]]
-        if status is not None:
-            return  # reunião em processamento: não excluir (o worker pode estar ativo)
-        self._confirm_delete_dialog(path, title)
+        self._confirm_delete_dialog(targets, skipped_busy)
 
-    def _confirm_delete_dialog(self, note_path: Path, title: str | None) -> None:
-        """Diálogo dark modal: confirma a exclusão e oferece apagar também a gravação."""
-        folder = self._recording_folder_for(note_path)
+    def _confirm_delete_dialog(self, targets: list, skipped_busy: int = 0) -> None:
+        """Diálogo dark modal: confirma a exclusão de 1+ notas e oferece apagar a gravação.
+        `targets` = [(note_path, title), …]."""
+        n = len(targets)
+        folders = [self._recording_folder_for(p) for p, _ in targets]
+        any_folder = any(f.is_dir() for f in folders)
         win = tk.Toplevel(self.win)
         win.withdraw()  # nasce oculta: posiciona ANTES de exibir (evita nascer fora e "pular")
-        win.title("ScribaDev — Excluir nota")
+        win.title("ScribaDev — Excluir nota" + ("s" if n > 1 else ""))
         win.configure(bg=_BG, padx=22, pady=18)
         win.resizable(False, False)
         win.transient(self.win)
@@ -842,26 +854,40 @@ class NotesWindow:
         except Exception:
             pass
 
-        tk.Label(win, text="Excluir nota?", bg=_BG, fg=PALETTE["accent"],
-                 font=("Segoe UI", 12, "bold")).pack(anchor="w")
-        nome = (title or note_path.stem.replace("_reuniao", "")).strip()
-        if len(nome) > 64:
-            nome = nome[:63] + "…"
-        tk.Label(win, text=nome, bg=_BG, fg=PALETTE["text"], font=FONT_BOLD,
-                 wraplength=380, justify="left").pack(anchor="w", pady=(2, 6))
-        tk.Label(win, text="A nota sai da lista e do índice de busca. Esta ação não pode ser desfeita.",
+        tk.Label(win, text=("Excluir nota?" if n == 1 else f"Excluir {n} notas?"), bg=_BG,
+                 fg=PALETTE["accent"], font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        nomes = [(t or p.stem.replace("_reuniao", "")).strip() for p, t in targets]
+        if n == 1:
+            nome = nomes[0][:63] + "…" if len(nomes[0]) > 64 else nomes[0]
+            tk.Label(win, text=nome, bg=_BG, fg=PALETTE["text"], font=FONT_BOLD,
+                     wraplength=380, justify="left").pack(anchor="w", pady=(2, 6))
+        else:  # lista compacta (até 6) p/ conferir o que vai sair
+            preview = "\n".join("• " + (s[:58] + "…" if len(s) > 58 else s) for s in nomes[:6])
+            if n > 6:
+                preview += f"\n• … e mais {n - 6}"
+            tk.Label(win, text=preview, bg=_BG, fg=PALETTE["text"], font=("Segoe UI", 9),
+                     wraplength=380, justify="left").pack(anchor="w", pady=(2, 6))
+        tk.Label(win, text=("A nota sai" if n == 1 else "As notas saem") +
+                 " da lista e do índice de busca. Esta ação não pode ser desfeita.",
                  bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8),
                  wraplength=380, justify="left").pack(anchor="w")
+        if skipped_busy:
+            plural = skipped_busy > 1
+            tk.Label(win, text=f"({skipped_busy} em processamento {'foram' if plural else 'foi'} "
+                     f"ignorada{'s' if plural else ''}.)", bg=_BG, fg=PALETTE["muted"],
+                     font=("Segoe UI", 8), wraplength=380, justify="left").pack(anchor="w")
 
         also_audio = tk.BooleanVar(value=False)
-        if folder.is_dir():
+        if any_folder:
             tk.Checkbutton(
-                win, text="Excluir também o áudio/gravação (sem volta)", variable=also_audio,
+                win, text="Excluir também " + ("o áudio/gravação" if n == 1 else "os áudios/gravações") +
+                " (sem volta)", variable=also_audio,
                 bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), activebackground=_BG,
                 activeforeground=PALETTE["text"], selectcolor=PALETTE["field"], bd=0,
                 highlightthickness=0, takefocus=False, anchor="w",
             ).pack(anchor="w", pady=(12, 0))
-            tk.Label(win, text="Desmarcado, a gravação fica como backup (recuperável com “scribadev summarize”).",
+            tk.Label(win, text="Desmarcado, " + ("a gravação fica" if n == 1 else "as gravações ficam") +
+                     " como backup (recuperável com “scribadev summarize”).",
                      bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8),
                      wraplength=380, justify="left").pack(anchor="w")
 
@@ -870,7 +896,7 @@ class NotesWindow:
 
         def do_delete() -> None:
             win.destroy()
-            self._do_delete(note_path, folder, bool(also_audio.get()))
+            self._do_delete(list(zip((p for p, _ in targets), folders)), bool(also_audio.get()))
 
         ModernButton(btns, "Cancelar", win.destroy, width=110).pack(side="left", padx=(0, 8))
         ModernButton(btns, "Excluir", do_delete, kind="primary", width=110).pack(side="left")
@@ -890,8 +916,18 @@ class NotesWindow:
         win.focus_force()
         win.grab_set()  # modal: bloqueia a janela de Notas até decidir
 
-    def _do_delete(self, note_path: Path, folder: Path, also_audio: bool) -> None:
-        """Executa a exclusão: .md exportado + índice; opcionalmente a pasta de gravação.
+    def _do_delete(self, targets: list, also_audio: bool) -> None:
+        """Exclui 1+ notas (targets = [(note_path, folder), …]) e re-renderiza UMA vez.
+        Cada item é idempotente — falha em um não impede os demais."""
+        for note_path, folder in targets:
+            self._delete_one(note_path, folder, also_audio)
+        # as notas somem na hora: re-render (a seleção cai p/ a 1ª nota ou msg de vazio)
+        self._showing_note = False
+        self._current_view_key = None
+        self._refresh_notes_list()
+
+    def _delete_one(self, note_path: Path, folder: Path, also_audio: bool) -> None:
+        """Exclui UMA nota: .md exportado + índice; opcionalmente a pasta de gravação.
 
         - sempre apaga o .md (a nota sai da lista) e tira a reunião do índice de busca;
         - mantendo a gravação (default): tombstone `.deleted` na pasta p/ o reindex não
@@ -923,11 +959,6 @@ class NotesWindow:
             if also_audio and folder.is_dir():
                 log.info("exclusão: .lock ativo em %s — mantendo a gravação", folder.name)
             meetings_index.mark_deleted(folder)
-
-        # 3) a nota some na hora: re-render (a seleção cai p/ a 1ª nota ou msg de vazio)
-        self._showing_note = False
-        self._current_view_key = None
-        self._refresh_notes_list()
 
     # -- painel "Presentes" colapsável -----------------------------------------
 
