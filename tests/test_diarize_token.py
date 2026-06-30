@@ -56,5 +56,32 @@ class TestTokenTests(unittest.TestCase):
         self.assertIn("não instalada", msg)
 
 
+class DiarizeMetaErrorTests(unittest.TestCase):
+    """diarize.diarize grava a razão da falha em meta['diarization_error'] p/ o app
+    principal logar no scriba.log central (#22 — pedido do Allan)."""
+
+    @staticmethod
+    def _cfg(**kw):
+        import dataclasses
+
+        from scriba.config import Diarization
+
+        return dataclasses.replace(Diarization(), **kw)
+
+    def test_desabilitada_nao_marca(self):
+        meta: dict = {}
+        self.assertIsNone(diarize.diarize(Path("x.wav"), self._cfg(enabled=False), meta=meta))
+        self.assertNotIn("diarization_error", meta)  # desligada de propósito não é erro
+
+    def test_sem_token_marca_erro(self):
+        meta: dict = {}
+        self.assertIsNone(diarize.diarize(Path("x.wav"), self._cfg(enabled=True, hf_token=""), meta=meta))
+        self.assertIn("token", meta.get("diarization_error", "").lower())
+
+    def test_sem_meta_nao_quebra(self):
+        # meta=None (default) é válido: só loga, não tenta gravar
+        self.assertIsNone(diarize.diarize(Path("x.wav"), self._cfg(enabled=True, hf_token="")))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -88,8 +88,9 @@ def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: Transc
         from . import diarize as diarize_mod
 
         lb_segments = next((seg for st, _sp, seg, _off in pending if st == "loopback"), [])
-        dz_result = diarize_mod.diarize(loopback_wav, cfg.diarization, num_speakers=num_speakers)
+        dz_result = diarize_mod.diarize(loopback_wav, cfg.diarization, num_speakers=num_speakers, meta=meta)
         if dz_result and dz_result.turns:
+            meta.pop("diarization_error", None)  # sucesso: limpa erro de tentativa anterior
             diarized_groups, order = diarize_mod.assign_speakers(lb_segments, dz_result.turns)
             meta["diarization_model"] = cfg.diarization.model
             # enrollment de voz (#1): casa cada "Participante N" ao seu embedding,

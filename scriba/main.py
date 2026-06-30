@@ -714,6 +714,12 @@ class ScribaApp:
             done_meta = json.loads(meta_path.read_text(encoding="utf-8"))
             export_path = done_meta.get("export_path")
             title = done_meta.get("title")
+            # diarização falhou mas o processamento seguiu (com "Participantes"): o erro
+            # ficou no process.log da pasta — repete no scriba.log central p/ ficar visível
+            # na janela de Log e no diagnóstico (pedido do Allan)
+            if done_meta.get("diarization_error"):
+                log.warning("diarização não rodou em %s: %s (detalhes no process.log da pasta)",
+                            folder.name, done_meta["diarization_error"])
         except Exception:
             log.exception("meta.json ilegível pós-processamento")
         if export_path and self.notifier:

@@ -95,7 +95,8 @@ def test_token(model: str, token: str) -> tuple[bool, str]:
     return (True, f"OK — modelo '{model}' carregado. Diarização pronta para usar.")
 
 
-def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None) -> DiarizationResult | None:
+def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None,
+            meta: dict | None = None) -> DiarizationResult | None:
     """Trechos por voz do arquivo, ou None se desabilitado/indisponível (segue sem separar).
 
     num_speakers: nº de vozes remotas (loopback) informado pelo usuário — trava a
@@ -106,8 +107,17 @@ def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None) -> Dia
     """
     if not cfg.enabled:
         return None
+
+    def _fail(msg: str, *, exc: bool = False) -> None:
+        # erro de diarização SEMPRE no log (process.log) + razão no meta, p/ o app
+        # principal repetir no scriba.log central e a UI/diagnóstico verem (pedido do Allan)
+        (log.exception if exc else log.error)("diarização: %s", msg)
+        print(f"AVISO: diarização — {msg}")
+        if meta is not None:
+            meta["diarization_error"] = msg[:200]
+
     if not cfg.hf_token:
-        print("AVISO: diarização habilitada sem hf_token — pulando (configure na aba Gravação)")
+        _fail("habilitada sem token Hugging Face — configure na aba Transcrição")
         return None
     try:
         import warnings
@@ -118,8 +128,7 @@ def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None) -> Dia
         import torch
         from pyannote.audio import Pipeline
     except ImportError as e:
-        log.warning("diarização indisponível: %s", e)
-        print(f"AVISO: diarização habilitada mas dependências ausentes ({e})")
+        _fail(f"dependências ausentes — falta o extra [diarization] ({e})")
         return None
     pipe = None
     try:
@@ -128,10 +137,8 @@ def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None) -> Dia
         except TypeError:  # versões antigas usam use_auth_token
             pipe = Pipeline.from_pretrained(cfg.model, use_auth_token=cfg.hf_token)
         if pipe is None:
-            print(
-                "AVISO: modelo de diarização indisponível — confirme que aceitou os termos "
-                f"de {cfg.model} no Hugging Face com a conta do token"
-            )
+            _fail(f"modelo indisponível — confirme que aceitou os termos de {cfg.model} no "
+                  "Hugging Face com a conta do token")
             return None
         if torch.cuda.is_available():
             pipe.to(torch.device("cuda"))
@@ -158,15 +165,14 @@ def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None) -> Dia
             out = _run_pipe(pipe, audio if audio is not None else str(wav), kwargs)
 
         if out is None:
-            print("AVISO: não reconheci o retorno da diarização")
+            _fail("não reconheci o retorno do pipeline (versão do pyannote?)")
             return None
         turns, embeddings = out
         voices = {label for *_x, label in turns}
         print(f"diarização: {len(voices)} voz(es) distintas em {len(turns)} trechos")
         return DiarizationResult(turns=turns, embeddings=embeddings)
     except Exception as e:
-        log.exception("diarização falhou")
-        print(f"AVISO: diarização falhou ({e}); seguindo com 'Participantes'")
+        _fail(f"falhou ({type(e).__name__}: {e}); seguindo com 'Participantes'", exc=True)
         return None
     finally:
         # libera o modelo + cache CUDA do pyannote LOGO após a diarização: senão ele
