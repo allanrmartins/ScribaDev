@@ -92,10 +92,11 @@ provider = "claude"
 model = "claude-sonnet-4-6"  # provider claude: ou "claude-opus-4-8" (mais capaz, mais caro)
 ollama_model = "llama3.1"    # provider ollama (rode `ollama pull <modelo>` antes)
 openai_model = "gpt-4o-mini" # provider openai-compatível
-# base_url: ollama vazio = http://localhost:11434; openai = endpoint completo (inclua /v1)
-base_url = ""
-# api_key: só o provider openai; sua chave (BYO). Definida pela UI, fica cifrada (DPAPI do Windows).
-api_key = ""
+# URLs/chave POR PROVIDER (a UI grava aqui; permite alternar sem recolar):
+ollama_base_url = ""         # provider ollama: vazio = http://localhost:11434
+openai_base_url = ""         # provider openai: endpoint completo (inclua /v1)
+# chave BYO do provider openai. Definida pela UI, fica cifrada (DPAPI do Windows).
+openai_api_key = ""
 timeout_seconds = 600
 
 [ui]
@@ -182,8 +183,13 @@ class Summary:
     model: str = "claude-sonnet-4-6"  # provider claude
     ollama_model: str = "llama3.1"    # provider ollama
     openai_model: str = "gpt-4o-mini"  # provider openai-compativel
-    base_url: str = ""                # ollama: vazio=localhost:11434 · openai: obrigatorio (.../v1)
-    api_key: str = ""                 # so openai; chave BYO (cifrada com DPAPI ao gravar)
+    # base_url/api_key: LEGADO compartilhado. Lidos só como fallback; a UI grava nos
+    # campos por-provider abaixo. Mantidos para ler configs antigas sem perder nada.
+    base_url: str = ""
+    api_key: str = ""
+    ollama_base_url: str = ""          # provider ollama: vazio = http://localhost:11434
+    openai_base_url: str = ""          # provider openai: endpoint (inclua /v1)
+    openai_api_key: str = ""           # provider openai: chave BYO (cifrada com DPAPI)
     timeout_seconds: int = 600
 
 
@@ -264,7 +270,8 @@ def _decrypt_keys(cfg: Config) -> Config:
     """`cfg` com as chaves secretas decifradas (api_key / cloud_api_key / hf_token)."""
     return replace(
         cfg,
-        summary=replace(cfg.summary, api_key=_maybe_unprotect(cfg.summary.api_key)),
+        summary=replace(cfg.summary, api_key=_maybe_unprotect(cfg.summary.api_key),
+                        openai_api_key=_maybe_unprotect(cfg.summary.openai_api_key)),
         whisper=replace(cfg.whisper, cloud_api_key=_maybe_unprotect(cfg.whisper.cloud_api_key)),
         diarization=replace(cfg.diarization, hf_token=_maybe_unprotect(cfg.diarization.hf_token)),
     )
@@ -337,8 +344,9 @@ provider = {_s(s.provider)}
 model = {_s(s.model)}                # provider claude
 ollama_model = {_s(s.ollama_model)}  # provider ollama
 openai_model = {_s(s.openai_model)}  # provider openai-compatível
-base_url = {_s(s.base_url)}           # ollama: vazio=localhost:11434 · openai: endpoint (inclua /v1)
-api_key = {_s(_maybe_protect(s.api_key))}             # só openai; chave BYO, cifrada (DPAPI do Windows)
+ollama_base_url = {_s(s.ollama_base_url)}   # provider ollama: vazio = http://localhost:11434
+openai_base_url = {_s(s.openai_base_url)}   # provider openai: endpoint (inclua /v1)
+openai_api_key = {_s(_maybe_protect(s.openai_api_key))}   # provider openai: chave BYO, cifrada (DPAPI)
 timeout_seconds = {_n(s.timeout_seconds)}
 
 [ui]

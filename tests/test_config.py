@@ -140,11 +140,11 @@ class DpapiKeyTests(unittest.TestCase):
     def test_save_cifra_no_disco_e_load_decifra(self):
         import dataclasses
         cfg = config.load()
-        config.save(dataclasses.replace(cfg, summary=dataclasses.replace(cfg.summary, api_key="sk-PLAINTEXT")))
+        config.save(dataclasses.replace(cfg, summary=dataclasses.replace(cfg.summary, openai_api_key="sk-PLAINTEXT")))
         raw = util.CONFIG_PATH.read_text(encoding="utf-8")
         self.assertNotIn("sk-PLAINTEXT", raw)   # não vaza em texto plano
         self.assertIn("dpapi:", raw)             # gravado cifrado
-        self.assertEqual(config.load().summary.api_key, "sk-PLAINTEXT")  # decifra na leitura
+        self.assertEqual(config.load().summary.openai_api_key, "sk-PLAINTEXT")  # decifra na leitura
 
     def test_chave_legada_plaintext_carrega(self):
         # config antigo sem marcador (hand-edit) → mantém plaintext (back-compat)

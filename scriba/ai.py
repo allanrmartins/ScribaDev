@@ -123,7 +123,7 @@ def _http_json(url: str, body: dict, *, timeout: int, headers: dict | None = Non
 
 
 def _ollama(cfg, system_prompt, user_payload, *, timeout):
-    base = (cfg.base_url or _OLLAMA_DEFAULT).rstrip("/")
+    base = (cfg.ollama_base_url or cfg.base_url or _OLLAMA_DEFAULT).rstrip("/")
     body = {
         "model": cfg.ollama_model,
         "messages": [
@@ -144,11 +144,12 @@ def _ollama(cfg, system_prompt, user_payload, *, timeout):
 
 
 def _openai(cfg, system_prompt, user_payload, *, timeout):
-    base = (cfg.base_url or "").rstrip("/")
+    base = (cfg.openai_base_url or cfg.base_url or "").rstrip("/")
     if not base:
         print("IA: base_url do provider OpenAI-compatível vazio — configure o endpoint (inclua /v1)")
         return None
-    headers = {"Authorization": f"Bearer {cfg.api_key}"} if cfg.api_key else {}
+    key = cfg.openai_api_key or cfg.api_key
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
     body = {
         "model": cfg.openai_model,
         "messages": [
@@ -183,10 +184,10 @@ def test_connection(cfg=None) -> tuple[bool, str]:
     t = 20
     if provider == "ollama":
         out = _ollama(cfg, sp, payload, timeout=t)
-        base = cfg.base_url or _OLLAMA_DEFAULT
+        base = cfg.ollama_base_url or cfg.base_url or _OLLAMA_DEFAULT
         return (bool(out), f"Ollama respondeu ({base})" if out else "sem resposta do Ollama — ele está rodando? modelo baixado?")
     if provider == "openai":
-        if not cfg.base_url:
+        if not (cfg.openai_base_url or cfg.base_url):
             return (False, "base_url vazio — informe o endpoint (inclua /v1)")
         out = _openai(cfg, sp, payload, timeout=t)
         return (bool(out), "endpoint respondeu" if out else "sem resposta — confira URL, chave e modelo")

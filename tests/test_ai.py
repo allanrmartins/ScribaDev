@@ -89,6 +89,31 @@ class HttpProviderTests(unittest.TestCase):
         self.assertEqual(req.get_header("Authorization"), "Bearer sk-123")
         self.assertEqual(json.loads(req.data)["model"], "gpt-4o-mini")
 
+    def test_openai_campos_por_provider_tem_precedencia(self):  # #22
+        self._patch({"choices": [{"message": {"content": "ok"}}]})
+        cfg = Summary(provider="openai", openai_model="m",
+                      openai_base_url="https://novo/v1", openai_api_key="sk-novo",
+                      base_url="https://legado/v1", api_key="sk-legado")
+        ai._openai(cfg, "s", "u", timeout=5)
+        req = self.captured["req"]
+        self.assertEqual(req.full_url, "https://novo/v1/chat/completions")
+        self.assertEqual(req.get_header("Authorization"), "Bearer sk-novo")
+
+    def test_openai_cai_no_legado_quando_novos_vazios(self):  # #22 retrocompat
+        self._patch({"choices": [{"message": {"content": "ok"}}]})
+        cfg = Summary(provider="openai", openai_model="m", base_url="https://legado/v1", api_key="sk-legado")
+        ai._openai(cfg, "s", "u", timeout=5)
+        req = self.captured["req"]
+        self.assertEqual(req.full_url, "https://legado/v1/chat/completions")
+        self.assertEqual(req.get_header("Authorization"), "Bearer sk-legado")
+
+    def test_ollama_usa_ollama_base_url_com_precedencia(self):  # #22
+        self._patch({"message": {"content": "ok"}})
+        cfg = Summary(provider="ollama", ollama_model="m",
+                      ollama_base_url="http://host:9/", base_url="http://legado:1")
+        ai._ollama(cfg, "s", "u", timeout=5)
+        self.assertEqual(self.captured["req"].full_url, "http://host:9/api/chat")
+
     def test_openai_sem_base_url_nao_faz_request(self):
         self._patch({"choices": [{"message": {"content": "nao deveria"}}]})
         cfg = Summary(provider="openai", base_url="", api_key="sk-1")
@@ -200,15 +225,15 @@ class ConfigRoundTripTests(unittest.TestCase):
         novo = dataclasses.replace(
             cfg,
             summary=dataclasses.replace(
-                cfg.summary, provider="openai", base_url="https://api.x/v1",
-                api_key="sk-secreta", openai_model="qwen2.5",
+                cfg.summary, provider="openai", openai_base_url="https://api.x/v1",
+                openai_api_key="sk-secreta", openai_model="qwen2.5",
             ),
         )
         config.save(novo)
         again = config.load()
         self.assertEqual(again.summary.provider, "openai")
-        self.assertEqual(again.summary.base_url, "https://api.x/v1")
-        self.assertEqual(again.summary.api_key, "sk-secreta")
+        self.assertEqual(again.summary.openai_base_url, "https://api.x/v1")
+        self.assertEqual(again.summary.openai_api_key, "sk-secreta")
         self.assertEqual(again.summary.openai_model, "qwen2.5")
 
     def test_config_antigo_sem_provider_assume_claude(self):

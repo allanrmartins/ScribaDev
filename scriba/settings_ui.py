@@ -959,9 +959,9 @@ class SettingsWindow:
 
         # Ollama (local, sem chave)
         self._ollama_frame = tk.Frame(parent, bg=_BG)
-        self.base_url_var = tk.StringVar()      # compartilhado: ollama (opcional) e openai (obrigatório)
+        self.ollama_base_url_var = tk.StringVar()
         self.ollama_model_var = tk.StringVar()
-        self._labeled_entry(self._ollama_frame, "URL do Ollama", self.base_url_var,
+        self._labeled_entry(self._ollama_frame, "URL do Ollama", self.ollama_base_url_var,
                             "Em branco = http://localhost:11434 (Ollama na própria máquina).")
         self._labeled_entry(self._ollama_frame, "Modelo", self.ollama_model_var,
                             "Modelo já baixado (rode `ollama pull <modelo>`). Ex.: llama3.1, qwen2.5, gemma2.")
@@ -969,7 +969,8 @@ class SettingsWindow:
 
         # OpenAI-compatível (BYO key) — passo a passo guiado
         self._openai_frame = tk.Frame(parent, bg=_BG)
-        self.api_key_var = tk.StringVar()
+        self.openai_base_url_var = tk.StringVar()
+        self.openai_api_key_var = tk.StringVar()
         self.openai_model_var = tk.StringVar()
         tk.Label(self._openai_frame, justify="left", bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8),
                  wraplength=640,
@@ -983,9 +984,9 @@ class SettingsWindow:
                              ("Groq", "https://console.groq.com/keys"),
                              ("OpenRouter", "https://openrouter.ai/keys")):
             LinkLabel(links, _label, lambda u=_url: __import__("webbrowser").open(u)).pack(side="left", padx=3)
-        self._labeled_entry(self._openai_frame, "URL base (inclua /v1)", self.base_url_var,
+        self._labeled_entry(self._openai_frame, "URL base (inclua /v1)", self.openai_base_url_var,
                             "Ex.: https://api.openai.com/v1 · https://api.groq.com/openai/v1")
-        self._labeled_entry(self._openai_frame, "Chave de API (fica só neste computador)", self.api_key_var,
+        self._labeled_entry(self._openai_frame, "Chave de API (fica só neste computador)", self.openai_api_key_var,
                             "Sua própria chave (BYO), guardada em texto no config.toml local.", secret=True)
         self._labeled_entry(self._openai_frame, "Modelo", self.openai_model_var,
                             "ID do modelo no provedor. Ex.: gpt-4o-mini · llama-3.1-70b-versatile · qwen-2.5-72b.")
@@ -1013,8 +1014,9 @@ class SettingsWindow:
         cfg = dataclasses.replace(
             base, provider=prov,
             model=_SUMMARY_MODELS.get(self.summary_model_var.get(), base.model),
-            base_url=self.base_url_var.get().strip(),
-            api_key=self.api_key_var.get().strip(),
+            ollama_base_url=self.ollama_base_url_var.get().strip(),
+            openai_base_url=self.openai_base_url_var.get().strip(),
+            openai_api_key=self.openai_api_key_var.get().strip(),
             ollama_model=self.ollama_model_var.get().strip() or base.ollama_model,
             openai_model=self.openai_model_var.get().strip() or base.openai_model,
         )
@@ -1133,8 +1135,12 @@ class SettingsWindow:
         self.context_editor.delete("1.0", "end")
         self.context_editor.insert("1.0", ensure_context_file().read_text(encoding="utf-8"))
         self.provider_var.set(_PROVIDER_LABELS.get(cfg.summary.provider, "Claude (CLI)"))
-        self.base_url_var.set(cfg.summary.base_url)
-        self.api_key_var.set(cfg.summary.api_key)
+        # campos por-provider com fallback ao legado compartilhado (migra ao salvar);
+        # o base_url legado pertencia ao provider que estava ativo quando foi setado
+        _prov = cfg.summary.provider
+        self.ollama_base_url_var.set(cfg.summary.ollama_base_url or (cfg.summary.base_url if _prov == "ollama" else ""))
+        self.openai_base_url_var.set(cfg.summary.openai_base_url or (cfg.summary.base_url if _prov == "openai" else ""))
+        self.openai_api_key_var.set(cfg.summary.openai_api_key or cfg.summary.api_key)
         self.ollama_model_var.set(cfg.summary.ollama_model)
         self.openai_model_var.set(cfg.summary.openai_model)
         self._on_provider_change()
@@ -1164,8 +1170,11 @@ class SettingsWindow:
             summary=dataclasses.replace(
                 cfg.summary, enabled=self.summary_var.get(), model=model,
                 provider=_PROVIDERS.get(self.provider_var.get(), cfg.summary.provider),
-                base_url=self.base_url_var.get().strip(),
-                api_key=self.api_key_var.get().strip(),
+                base_url="",  # legados migrados para os campos por-provider abaixo
+                api_key="",
+                ollama_base_url=self.ollama_base_url_var.get().strip(),
+                openai_base_url=self.openai_base_url_var.get().strip(),
+                openai_api_key=self.openai_api_key_var.get().strip(),
                 ollama_model=self.ollama_model_var.get().strip() or cfg.summary.ollama_model,
                 openai_model=self.openai_model_var.get().strip() or cfg.summary.openai_model,
             ),
