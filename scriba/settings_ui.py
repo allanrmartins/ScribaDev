@@ -513,6 +513,17 @@ class SettingsWindow:
                 lambda n=url_name: __import__("webbrowser").open(f"https://huggingface.co/pyannote/{n}"),
             ).pack(side="left", padx=3)
 
+        # validar token + termos num clique, sem precisar gravar uma call inteira (#22)
+        test_row = tk.Frame(diar, bg=_BG)
+        test_row.pack(fill="x", pady=(2, 0))
+        self._diar_test_btn = ModernButton(test_row, "Testar diarização", self._test_diarization, width=170)
+        self._diar_test_btn.pack(side="left")
+        self.diar_test_status_var = tk.StringVar(value="")
+        self._diar_test_lbl = tk.Label(diar, textvariable=self.diar_test_status_var, bg=_BG,
+                                       fg=PALETTE["muted"], font=("Segoe UI", 8), justify="left",
+                                       wraplength=640, anchor="w")
+        self._diar_test_lbl.pack(anchor="w", pady=(2, 4))
+
         self.ask_speakers_var = tk.BooleanVar()
         self._toggle_row(diar, "Perguntar o nº de participantes ao fim da call", self.ask_speakers_var)
         to_row = tk.Frame(diar, bg=_BG)
@@ -773,6 +784,40 @@ class SettingsWindow:
         self.win.update_idletasks()
         ok, msg = stt_cloud.test_connection(cfg)
         self.stt_conn_status_var.set(("✓ " if ok else "✗ ") + msg)
+
+    # -- testar diarização (token HF + termos) na hora (#22) -------------------
+
+    def _test_diarization(self) -> None:
+        """Carrega o pipeline de diarização num clique e diz se token/termos estão OK.
+        Em thread (a 1ª vez baixa ~1-2 GB) — não trava a janela."""
+        import threading
+
+        if getattr(self, "_diar_testing", False):
+            return  # já testando — ignora cliques repetidos
+        self._diar_testing = True
+        token = self.hf_token_var.get().strip()
+        model = getattr(self.app.cfg.diarization, "model", "") or ""
+        self._diar_test_btn.set_text("Testando…")
+        self._set_diar_test("Carregando o modelo… na 1ª vez baixa ~1-2 GB, pode demorar.", PALETTE["muted"])
+        threading.Thread(target=self._diar_test_worker, args=(model, token), daemon=True).start()
+
+    def _diar_test_worker(self, model: str, token: str) -> None:
+        from . import diarize
+
+        try:
+            ok, msg = diarize.test_token(model, token)
+        except Exception as e:  # noqa: BLE001 — qualquer falha vira mensagem amigável
+            ok, msg = False, self._friendly(e)
+        self.win.after(0, lambda: self._show_diar_test(ok, msg))
+
+    def _show_diar_test(self, ok: bool, msg: str) -> None:
+        self._diar_testing = False
+        self._diar_test_btn.set_text("Testar diarização")
+        self._set_diar_test(("✓ " if ok else "✗ ") + msg, "#3fb950" if ok else PALETTE["accent"])
+
+    def _set_diar_test(self, text: str, color: str) -> None:
+        self.diar_test_status_var.set(text)
+        self._diar_test_lbl.configure(fg=color)
 
     def _capture_hotkey(self) -> None:
         """Janelinha que captura a próxima combinação de teclas (Esc cancela)."""

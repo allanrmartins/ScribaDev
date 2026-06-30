@@ -52,6 +52,49 @@ def _speaker_kwargs(cfg: Diarization, num_speakers: int | None) -> dict:
     return kw
 
 
+def _classify_hf_error(e: Exception, model: str) -> str:
+    """Traduz a exceção do pyannote/HF numa dica acionável. Heurística por substring
+    (as exceções mudam entre versões) — quando não reconhece, devolve a 1ª linha crua."""
+    msg = str(e) or type(e).__name__
+    low = msg.lower()
+    if any(s in low for s in ("401", "unauthorized", "invalid", "credential", "authentication")):
+        return ("Token inválido ou sem permissão de leitura. Gere um token 'read' em "
+                "hf.co/settings/tokens e cole de novo.")
+    if any(s in low for s in ("403", "gated", "awaiting", "accept", "agree", "terms", "conditions", "access")):
+        return (f"Falta aceitar os termos de '{model}' (e dos modelos relacionados) na sua conta "
+                "do Hugging Face. Abra a página do modelo, aceite e teste de novo.")
+    if any(s in low for s in ("connection", "timeout", "resolve", "network", "ssl", "getaddrinfo", "max retries")):
+        return "Sem conexão com o Hugging Face. Verifique a internet/proxy e tente de novo."
+    return f"Falha ao carregar o modelo: {msg.splitlines()[0][:200]}"
+
+
+def test_token(model: str, token: str) -> tuple[bool, str]:
+    """Valida token + termos carregando o pipeline num clique (#22), SEM precisar gravar
+    uma call inteira. Devolve (ok, mensagem). A 1ª chamada baixa ~1-2 GB — rode em thread
+    na UI. A classificação de erro é best-effort; em último caso devolve a mensagem crua."""
+    if not (token or "").strip():
+        return (False, "Informe o token do Hugging Face antes de testar.")
+    model = (model or "").strip() or "pyannote/speaker-diarization-community-1"
+    try:
+        import warnings
+
+        warnings.filterwarnings("ignore", message="(?s).*torchcodec.*")
+        from pyannote.audio import Pipeline
+    except ImportError as e:
+        return (False, f"Diarização não instalada — falta o extra [diarization] (pyannote + torch). {e}")
+    try:
+        try:
+            pipe = Pipeline.from_pretrained(model, token=token)
+        except TypeError:  # versões antigas usam use_auth_token
+            pipe = Pipeline.from_pretrained(model, use_auth_token=token)
+    except Exception as e:  # noqa: BLE001 — classificamos e seguimos
+        return (False, _classify_hf_error(e, model))
+    if pipe is None:
+        return (False, f"Token OK, mas os termos de '{model}' parecem não aceitos na sua conta do "
+                       "Hugging Face. Abra a página do modelo e aceite os termos.")
+    return (True, f"OK — modelo '{model}' carregado. Diarização pronta para usar.")
+
+
 def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None) -> DiarizationResult | None:
     """Trechos por voz do arquivo, ou None se desabilitado/indisponível (segue sem separar).
 
