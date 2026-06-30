@@ -672,16 +672,30 @@ class NotesWindow:
         self._flash(self.copy_tr_btn, "✓ Copiado", "Copiar transcrição")
 
     def _open_chat(self) -> None:
-        """Abre a janela de chat sobre a nota selecionada (resumo + transcrição) — #22."""
+        """Abre a janela de chat sobre a nota selecionada — #22. Passa resumo e
+        transcrição separados (o chat manda só o resumo por padrão)."""
         md = self._selected_md()
         if md is None:
             self._flash(self.chat_btn, "Selecione uma nota", "Perguntar à reunião")
             return
         from .chat_ui import ChatWindow
 
+        summary, transcript = self._summary_and_transcript(md)
         title = self.note_title_var.get().strip() or "reunião"
-        self._chat = ChatWindow(self.win, self._strip_frontmatter(md), title)  # ref evita GC
+        self._chat = ChatWindow(self.win, summary, transcript, title)  # ref evita GC
         self._chat.show()
+
+    def _summary_and_transcript(self, md: str) -> tuple[str, str | None]:
+        """(resumo SEM a transcrição, transcrição) da nota; transcrição = None se não houver."""
+        pre, secs = mdview.split_sections(self._strip_frontmatter(md))
+        parts = [pre.strip()] if pre.strip() else []
+        transcript = None
+        for title, text in secs:
+            if title.strip().lower() == self._TRANSCRIPT_TITLE:
+                transcript = text.strip() or None
+            else:
+                parts.append(f"## {title}\n{text}".rstrip())
+        return "\n\n".join(p for p in parts if p.strip()).strip(), transcript
 
     def _recording_folder_for(self, note_path: Path) -> Path:
         """Pasta da gravação correspondente à nota exportada.

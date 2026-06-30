@@ -1,8 +1,12 @@
 """Janela de chat: perguntar à transcrição/resumo de uma reunião já gravada (#22).
 
-O multi-turno é mantido no cliente (concatena o histórico no payload) e despachado
-pelo MESMO provider de IA do resumo (ai.complete — claude CLI / Ollama / OpenAI-compat),
+Multi-turno mantido no cliente (concatena o histórico no payload) e despachado pelo
+MESMO provider de IA do resumo (ai.complete — claude CLI / Ollama / OpenAI-compat),
 então é 100% local quando o provider é local. É só consulta: não altera a nota.
+
+Para não reenviar um contexto gigante a cada pergunta: por padrão manda só o RESUMO
+(curto); a transcrição completa entra sob demanda (toggle), e o payload carrega apenas
+as últimas _MAX_TURNS trocas da conversa.
 """
 
 from __future__ import annotations
@@ -12,24 +16,23 @@ import tkinter as tk
 from tkinter import ttk
 
 from . import ai
-from .widgets import PALETTE, ModernButton, enable_dark_titlebar, make_entry, make_text
+from .widgets import PALETTE, ModernButton, ToggleSwitch, enable_dark_titlebar, make_entry, make_text
 
 _BG = PALETTE["bg"]
-_MAX_CONTEXT = 14000  # corta contexto muito longo p/ não estourar a janela/custo do modelo
-_TIMEOUT = 180        # claude CLI pode levar dezenas de s; folga sem travar (roda em thread)
+_MAX_TRANSCRIPT = 14000  # corta a transcrição (quando incluída) p/ não estourar o modelo
+_MAX_TURNS = 6           # reenvia só as últimas N trocas; o resto da conversa não vai no payload
+_TIMEOUT = 180           # claude CLI pode levar dezenas de s; folga sem travar (roda em thread)
 _SYSTEM = (
-    "Você responde perguntas sobre uma reunião cuja transcrição e resumo são dados a seguir. "
-    "Responda em português, de forma direta e fiel ao conteúdo; se a resposta não estiver no "
-    "material, diga que não consta na reunião."
+    "Você responde perguntas sobre uma reunião cujo material (resumo e, se incluída, a "
+    "transcrição) é dado a seguir. Responda em português, de forma direta e fiel ao "
+    "conteúdo; se a resposta não estiver no material, diga que não consta na reunião."
 )
 
 
 class ChatWindow:
-    def __init__(self, root: tk.Misc, context: str, title: str):
-        self._context = (context or "").strip()
-        self._truncated = len(self._context) > _MAX_CONTEXT
-        if self._truncated:
-            self._context = self._context[:_MAX_CONTEXT]
+    def __init__(self, root: tk.Misc, summary: str, transcript: str | None, title: str):
+        self._summary = (summary or "").strip()
+        self._transcript = (transcript or "").strip() or None
         self._history: list[tuple[str, str]] = []
         self._busy = False
 
@@ -45,12 +48,21 @@ class ChatWindow:
 
         conv_frame = tk.Frame(body, bg=_BG)
         conv_frame.pack(fill="both", expand=True)
-        self.conv = make_text(conv_frame, height=16)
+        self.conv = make_text(conv_frame, height=15)
         sb = ttk.Scrollbar(conv_frame, orient="vertical", command=self.conv.yview)
         self.conv.configure(yscrollcommand=sb.set, state="disabled")
         self.conv.tag_configure("who", foreground=PALETTE["accent"])
         sb.pack(side="right", fill="y")
         self.conv.pack(side="left", fill="both", expand=True)
+
+        # toggle "incluir a transcrição completa" — só aparece se a nota tem transcrição
+        self._include_transcript = tk.BooleanVar(value=False)
+        if self._transcript:
+            opt = tk.Frame(body, bg=_BG)
+            opt.pack(fill="x", pady=(6, 0))
+            ToggleSwitch(opt, self._include_transcript).pack(side="left")
+            tk.Label(opt, text="incluir a transcrição completa (mais detalhe, porém mais lento)",
+                     bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8)).pack(side="left", padx=6)
 
         self.status_var = tk.StringVar(value="")
         tk.Label(body, textvariable=self.status_var, bg=_BG, fg=PALETTE["muted"],
@@ -59,16 +71,17 @@ class ChatWindow:
         input_row = tk.Frame(body, bg=_BG)
         input_row.pack(fill="x", pady=(4, 0))
         self.q_var = tk.StringVar()
-        entry = make_entry(input_row, self.q_var)
-        entry.pack(side="left", fill="x", expand=True, ipady=4)
-        entry.bind("<Return>", lambda e: self._ask())
+        self._entry = make_entry(input_row, self.q_var)
+        self._entry.pack(side="left", fill="x", expand=True, ipady=4)
+        self._entry.bind("<Return>", lambda e: self._ask())
         self._send_btn = ModernButton(input_row, "Perguntar", self._ask, kind="primary", width=110)
         self._send_btn.pack(side="left", padx=(8, 0))
-        self._entry = entry
 
-        intro = "Pergunte sobre esta reunião (ex.: \"o que ficou decidido?\", \"quais as pendências?\")."
-        if self._truncated:
-            intro += "\n(A reunião é longa — usei só o início do conteúdo como contexto.)"
+        if self._transcript:
+            intro = ("Pergunte sobre esta reunião — por padrão eu uso o resumo. Para detalhes que "
+                     "só aparecem na fala, ligue \"incluir a transcrição completa\" acima.")
+        else:
+            intro = "Pergunte sobre esta reunião (esta nota não tem transcrição salva; uso o resumo)."
         self._append("ScribaDev", intro)
 
     def show(self) -> None:
@@ -98,8 +111,11 @@ class ChatWindow:
         self.win.after(0, lambda: self._answered(q, out))
 
     def _build_payload(self, q: str) -> str:
-        parts = ["Transcrição e resumo da reunião:", self._context, ""]
-        for pq, pa in self._history:
+        ctx = self._summary or "(sem resumo)"
+        if self._transcript and self._include_transcript.get():
+            ctx += "\n\n## Transcrição completa\n" + self._transcript[:_MAX_TRANSCRIPT]
+        parts = ["Material da reunião:", ctx, ""]
+        for pq, pa in self._history[-_MAX_TURNS:]:  # só as últimas trocas vão no payload
             parts.append(f"Pergunta: {pq}\nResposta: {pa}")
         parts.append(f"Pergunta: {q}\nResposta:")
         return "\n\n".join(parts)
