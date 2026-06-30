@@ -44,20 +44,17 @@ def _pos_in_bounds(x: int, y: int, vx: int, vy: int, vw: int, vh: int) -> bool:
     return vx <= x <= vx + vw - _W and vy <= y <= vy + vh - _H
 
 
-# Posição-padrão da pílula: canto inferior-direito do monitor mais à direita, junto
-# ao relógio da barra de tarefas. Margens da borda (direita, inferior) da tela.
-_EDGE_GAP_X, _EDGE_GAP_Y = 90, 8
+# Margem da borda inferior da tela para a posição-padrão da pílula.
+_EDGE_GAP_Y = 8
 
 
 def _default_pos(win) -> tuple[int, int]:
-    """(x, y) padrão = canto inferior-direito da área de TODOS os monitores (= canto
-    do monitor mais à direita), recuado p/ ficar ao lado do relógio. Cai no
-    topo-central do primário se o retângulo virtual não estiver disponível."""
-    rect = util.virtual_screen_rect()
-    if rect is None:
-        return (win.winfo_screenwidth() - _W) // 2, 10
-    vx, vy, vw, vh = rect
-    return vx + vw - _W - _EDGE_GAP_X, vy + vh - _H - _EDGE_GAP_Y
+    """(x, y) padrão = centro-inferior do monitor primário: centralizado na horizontal
+    e junto à base da tela (#23). Usa winfo_screen* (dimensões do primário, que no
+    Windows tem origem em 0,0) em vez do retângulo virtual de propósito — centralizar
+    no virtual faria a pílula nascer na junção entre dois monitores num setup multi-tela."""
+    sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+    return (sw - _W) // 2, sh - _H - _EDGE_GAP_Y
 
 
 def _round_rect(c: tk.Canvas, x1, y1, x2, y2, r, **kw):
@@ -191,6 +188,12 @@ class RecordingPill:
         c.bind("<ButtonRelease-1>", self._drag_end)
         self._drag_offset = None
 
+        # hint "invisível no compartilhamento" ao passar o mouse pela pílula (#23)
+        self._tip = None       # Toplevel do tooltip (None = oculto)
+        self._tip_job = None   # id do after() que agenda a exibição
+        c.bind("<Enter>", self._tip_schedule, add="+")
+        c.bind("<Leave>", self._tip_hide, add="+")
+
         # oculta a pílula em compartilhamento/captura de tela (issue #9) — uma vez, na
         # criação (a janela nasce withdrawn, então não vaza nem por um frame).
         _exclude_from_capture(self.win)
@@ -227,6 +230,63 @@ class RecordingPill:
         if self._drag_offset is not None:
             self._drag_offset = None
             _save_pos(self.win.winfo_x(), self.win.winfo_y())
+
+    # -- hint "invisível no compartilhamento" (#23) --------------------------
+
+    _TIP_TEXT = "Esta janela não aparece para quem assiste ao seu compartilhamento de tela"
+
+    def _tip_schedule(self, _e=None):
+        """Agenda o tooltip após uma pausa do mouse (evita piscar em passagens rápidas)."""
+        self._tip_cancel()
+        try:
+            self._tip_job = self.win.after(700, self._tip_show)
+        except tk.TclError:
+            pass
+
+    def _tip_cancel(self):
+        if self._tip_job is not None:
+            try:
+                self.win.after_cancel(self._tip_job)
+            except tk.TclError:
+                pass
+            self._tip_job = None
+
+    def _tip_show(self):
+        self._tip_job = None
+        if self._destroyed or self._tip is not None:
+            return
+        try:
+            tip = tk.Toplevel(self.win)
+            tip.withdraw()
+            tip.overrideredirect(True)
+            tip.attributes("-topmost", True)
+            tk.Label(
+                tip, text=self._TIP_TEXT, bg=_BG, fg=_MUTED, font=("Segoe UI", 9),
+                padx=10, pady=5, wraplength=240, justify="center",
+            ).pack()
+            tip.update_idletasks()
+            # acima da pílula; se não couber (pílula colada no topo), abaixo dela.
+            px, py = self.win.winfo_x(), self.win.winfo_y()
+            tw, th = tip.winfo_reqwidth(), tip.winfo_reqheight()
+            tx = px + (_W - tw) // 2
+            ty = py - th - 6
+            if ty < 0:
+                ty = py + _H + 6
+            tip.geometry(f"+{tx}+{ty}")
+            _exclude_from_capture(tip)  # o próprio hint também não vaza no compartilhamento (#9)
+            tip.deiconify()
+            self._tip = tip
+        except tk.TclError:
+            self._tip = None
+
+    def _tip_hide(self, _e=None):
+        self._tip_cancel()
+        if self._tip is not None:
+            try:
+                self._tip.destroy()
+            except tk.TclError:
+                pass
+            self._tip = None
 
     # -- estado --------------------------------------------------------------
 
@@ -334,6 +394,7 @@ class RecordingPill:
 
     def hide(self):
         self._shown = False
+        self._tip_hide()
         try:
             self.win.withdraw()
         except tk.TclError:
@@ -377,6 +438,7 @@ class RecordingPill:
 
     def destroy(self):
         self._destroyed = True
+        self._tip_hide()
         try:
             self.win.destroy()
         except tk.TclError:

@@ -30,6 +30,37 @@ class PosInBoundsTests(unittest.TestCase):
         self.assertTrue(overlay._pos_in_bounds(-1900, 100, -1920, 0, 3840, 1080))
 
 
+class _FakeWin:
+    """Win mínimo p/ _default_pos: só expõe as dimensões do monitor primário."""
+
+    def __init__(self, w: int, h: int):
+        self._w, self._h = w, h
+
+    def winfo_screenwidth(self) -> int:
+        return self._w
+
+    def winfo_screenheight(self) -> int:
+        return self._h
+
+
+class DefaultPosTests(unittest.TestCase):
+    def test_centro_inferior_do_primario(self):
+        x, y = overlay._default_pos(_FakeWin(1920, 1080))
+        self.assertEqual(x, (1920 - overlay._W) // 2)
+        self.assertEqual(y, 1080 - overlay._H - overlay._EDGE_GAP_Y)
+
+    def test_centralizada_na_horizontal(self):
+        # margem esquerda ~= margem direita (centralização exata, fora arredondamento)
+        sw = 2560
+        x, _ = overlay._default_pos(_FakeWin(sw, 1440))
+        self.assertLessEqual(abs(x - (sw - (x + overlay._W))), 1)
+
+    def test_junto_a_base(self):
+        # y deixa a pílula inteira (_H) acima da borda inferior, com a margem padrão
+        _, y = overlay._default_pos(_FakeWin(1366, 768))
+        self.assertEqual(y + overlay._H + overlay._EDGE_GAP_Y, 768)
+
+
 class SavePosTests(unittest.TestCase):
     def setUp(self):
         d = Path(tempfile.mkdtemp(prefix="scriba_st_"))
