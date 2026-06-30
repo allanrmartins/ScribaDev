@@ -82,6 +82,9 @@ class SettingsWindow:
         self.app = app
         self._titlebar_done = False
         self._fitted = False  # clamp de tamanho à tela: só na 1ª exibição (#20)
+        self._level_probe = None  # medidor "Testar microfone" (#22)
+        self._level_job = None
+        self._level_starting = False
         # só vira True quando _load_fields() roda inteiro sem exceção; protege o
         # _save() de gravar campos pela metade (defaults em branco) por cima da
         # config boa do usuário (perda de dados já vista na prática).
@@ -502,6 +505,18 @@ class SettingsWindow:
                  bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8)).pack(side="left")
         LinkLabel(hint, "atualizar lista", self._refresh_device_lists).pack(side="right")
 
+        # medidor "Testar microfone" (#22): confere ANTES da call se está entrando som
+        test_row = tk.Frame(tab, bg=_BG)
+        test_row.pack(fill="x", pady=(2, 2))
+        self._mic_test_btn = ModernButton(test_row, "Testar microfone", self._toggle_level_test, width=150)
+        self._mic_test_btn.pack(side="left")
+        self._level_status = tk.StringVar(value="")
+        tk.Label(test_row, textvariable=self._level_status, bg=_BG, fg=PALETTE["muted"],
+                 font=("Segoe UI", 8)).pack(side="left", padx=8)
+        self._mic_level = self._level_bar(tab, "Eu (microfone)")
+        self._lb_level = self._level_bar(tab, "Participantes (saída)")
+        separator(tab).pack(fill="x", pady=(8, 8))
+
     def _refresh_device_lists(self) -> None:
         """Enumera os dispositivos num SUBPROCESSO (o PortAudio pode abortar com assert
         de CRT ao enumerar) e popula os combos, sem travar a janela."""
@@ -530,6 +545,85 @@ class SettingsWindow:
     def _dev_value(self, var) -> str:
         v = var.get().strip()
         return "" if v == self._DEV_DEFAULT else v
+
+    # -- medidor de nível "Testar microfone" (#22) ----------------------------
+
+    def _level_bar(self, parent, label: str):
+        row = tk.Frame(parent, bg=_BG)
+        row.pack(fill="x", pady=1)
+        tk.Label(row, text=label, bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8),
+                 width=22, anchor="w").pack(side="left")
+        pb = ttk.Progressbar(row, orient="horizontal", mode="determinate", maximum=100,
+                             style="Horizontal.TProgressbar")
+        pb.pack(side="left", fill="x", expand=True)
+        return pb
+
+    def _toggle_level_test(self) -> None:
+        if self._level_probe is not None or self._level_starting:
+            self._stop_level_test()
+            return
+        if self.app.is_recording():
+            self._level_status.set("Pare a gravação para testar.")
+            return
+        import threading
+
+        self._level_starting = True
+        self._level_status.set("abrindo… (verificando o áudio)")
+        self._mic_test_btn.set_text("Parar teste")
+        threading.Thread(target=self._level_probe_worker, daemon=True, name="leveltest").start()
+
+    def _level_probe_worker(self) -> None:
+        # pré-checagem em subprocesso (evita o assert de CRT do PortAudio na bandeja)
+        ok = util.run_audio_probe() is not None
+        self.win.after(0, lambda: self._level_probe_ready(ok))
+
+    def _level_probe_ready(self, ok: bool) -> None:
+        if not self._level_starting:  # usuário parou enquanto a sonda verificava
+            return
+        self._level_starting = False
+        if not ok:
+            self._level_status.set("áudio indisponível agora.")
+            self._mic_test_btn.set_text("Testar microfone")
+            return
+        try:
+            from .recorder import LevelProbe
+
+            self._level_probe = LevelProbe(config_mod.load().audio)
+        except Exception as e:
+            self._level_status.set("falhou: " + (str(e).splitlines() or [""])[0][:50])
+            self._mic_test_btn.set_text("Testar microfone")
+            return
+        self._level_status.set("fale algo — as barras devem mexer")
+        self._poll_levels()
+
+    def _poll_levels(self) -> None:
+        if self._level_probe is None:
+            return
+        try:
+            self._mic_level["value"] = min(100.0, self._level_probe.level("mic") * 100)
+            self._lb_level["value"] = min(100.0, self._level_probe.level("loopback") * 100)
+        except tk.TclError:
+            return
+        self._level_job = self.win.after(80, self._poll_levels)
+
+    def _stop_level_test(self) -> None:
+        self._level_starting = False
+        if self._level_job is not None:
+            try:
+                self.win.after_cancel(self._level_job)
+            except Exception:
+                pass
+            self._level_job = None
+        if self._level_probe is not None:
+            self._level_probe.stop()
+            self._level_probe = None
+        try:
+            self._mic_level["value"] = 0
+            self._lb_level["value"] = 0
+        except Exception:
+            pass
+        self._level_status.set("")
+        self._mic_test_btn.set_text("Testar microfone")
 
     def _build_stt_frames(self, parent) -> None:
         # Local (faster-whisper)
@@ -1124,4 +1218,5 @@ class SettingsWindow:
         self.win.geometry(f"{w}x{h}+{x}+{y}")
 
     def hide(self) -> None:
+        self._stop_level_test()  # não deixa streams de teste de áudio abertos ao fechar
         self.win.withdraw()

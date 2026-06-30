@@ -137,6 +137,104 @@ class _StreamRecorder:
         self.wav.close()
 
 
+# ------------------------------------------------------- seleção de device ---
+
+def _pick_mic(audio_cfg, pa) -> dict:
+    """Microfone configurado (substring do nome, case-insensitive) ou o padrão do
+    Windows se vazio/não encontrado (ex.: headset desplugado entre calls)."""
+    want = (audio_cfg.mic_device or "").strip().lower()
+    if want:
+        import pyaudiowpatch as pyaudio
+
+        try:
+            wasapi = pa.get_host_api_info_by_type(pyaudio.paWASAPI)["index"]
+            for i in range(pa.get_device_count()):
+                d = pa.get_device_info_by_index(i)
+                if (d["hostApi"] == wasapi and not d.get("isLoopbackDevice")
+                        and int(d["maxInputChannels"]) > 0 and want in d["name"].lower()):
+                    return d
+        except Exception:
+            pass  # device sumiu / enumeração falhou -> cai no padrão
+    return pa.get_default_input_device_info()
+
+
+def _pick_loopback(audio_cfg, pa) -> dict:
+    """Saída a capturar (substring do nome) ou o loopback padrão do Windows."""
+    want = (audio_cfg.loopback_device or "").strip().lower()
+    if want:
+        for d in pa.get_loopback_device_info_generator():
+            if want in d["name"].lower():
+                return d
+    return pa.get_default_wasapi_loopback()
+
+
+# ------------------------------------------------ medidor de nível (teste) ---
+
+def peak_level(pcm: bytes) -> float:
+    """Pico de um buffer PCM 16-bit, normalizado em 0..1. Sem numpy/audioop (usa o
+    `array` da stdlib). Pico (não RMS): o objetivo é só responder 'está entrando som?'."""
+    import array
+
+    if not pcm:
+        return 0.0
+    a = array.array("h")
+    a.frombytes(pcm[: len(pcm) - (len(pcm) % 2)])  # alinha em múltiplo de 2 bytes (int16)
+    return max((abs(x) for x in a), default=0) / 32768.0
+
+
+class LevelProbe:
+    """Abre streams de TESTE do mic e do loopback escolhidos e expõe o pico (0..1) de
+    cada um — para o botão 'Testar microfone' das Configurações. Não grava nada.
+
+    Roda no processo principal, então o chamador DEVE rodar util.run_audio_probe()
+    antes (igual ao start_recording) para o PortAudio não abortar com assert de CRT.
+    """
+
+    def __init__(self, audio_cfg):
+        import pyaudiowpatch as pyaudio
+
+        self._levels = {"mic": 0.0, "loopback": 0.0}
+        self._streams: list = []
+        self.pa = pyaudio.PyAudio()
+        try:
+            for name, info in (("mic", _pick_mic(audio_cfg, self.pa)),
+                               ("loopback", _pick_loopback(audio_cfg, self.pa))):
+                ch = max(1, min(2, int(info["maxInputChannels"])))
+                self._streams.append(self.pa.open(
+                    format=pyaudio.paInt16, channels=ch, rate=int(info["defaultSampleRate"]),
+                    input=True, input_device_index=int(info["index"]),
+                    frames_per_buffer=1024, stream_callback=self._make_cb(name),
+                ))
+        except Exception:
+            self.stop()
+            raise
+
+    def _make_cb(self, name: str):
+        import pyaudiowpatch as pyaudio
+
+        def _cb(in_data, frame_count, time_info, status):
+            self._levels[name] = peak_level(bytes(in_data))
+            return (None, pyaudio.paContinue)
+
+        return _cb
+
+    def level(self, name: str) -> float:
+        return self._levels.get(name, 0.0)
+
+    def stop(self) -> None:
+        for st in self._streams:
+            try:
+                st.stop_stream()
+                st.close()
+            except Exception:
+                pass
+        self._streams = []
+        try:
+            self.pa.terminate()
+        except Exception:
+            pass
+
+
 class Recording:
     """Uma gravação de reunião: mic + loopback numa pasta com meta.json."""
 
@@ -150,8 +248,8 @@ class Recording:
         self.folder = self._new_folder()
         self.pa = pyaudio.PyAudio()
         try:
-            mic_info = self._pick_mic(self.pa)
-            lb_info = self._pick_loopback(self.pa)
+            mic_info = _pick_mic(self.cfg, self.pa)
+            lb_info = _pick_loopback(self.cfg, self.pa)
             self.t0 = time.monotonic()
             self.mic = _StreamRecorder(self.pa, "mic", self.folder / "mic.wav", mic_info, self.t0, pad_silence=False)
             self.loopback = _StreamRecorder(
@@ -179,32 +277,6 @@ class Recording:
             folder = base.with_name(f"{base.name}_{n}")
         folder.mkdir(parents=True)
         return folder
-
-    def _pick_mic(self, pa) -> dict:
-        """Microfone configurado (substring do nome, case-insensitive) ou o padrão do
-        Windows se vazio/não encontrado (ex.: headset desplugado entre calls)."""
-        want = (self.cfg.mic_device or "").strip().lower()
-        if want:
-            import pyaudiowpatch as pyaudio
-
-            try:
-                wasapi = pa.get_host_api_info_by_type(pyaudio.paWASAPI)["index"]
-                for i in range(pa.get_device_count()):
-                    d = pa.get_device_info_by_index(i)
-                    if (d["hostApi"] == wasapi and not d.get("isLoopbackDevice")
-                            and int(d["maxInputChannels"]) > 0 and want in d["name"].lower()):
-                        return d
-            except Exception:
-                pass  # device sumiu / enumeração falhou -> cai no padrão
-        return pa.get_default_input_device_info()
-
-    def _pick_loopback(self, pa) -> dict:
-        want = (self.cfg.loopback_device or "").strip().lower()
-        if want:
-            for d in pa.get_loopback_device_info_generator():
-                if want in d["name"].lower():
-                    return d
-        return pa.get_default_wasapi_loopback()
 
     def duration_seconds(self) -> float:
         return time.monotonic() - self.t0

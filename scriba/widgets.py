@@ -436,6 +436,15 @@ def style_notebook(win: tk.Misc) -> None:
         relief="flat",
     )
     style.map("Vertical.TScrollbar", background=[("active", PALETTE["btn_hover"])])
+    # barra do medidor "Testar microfone" (#22): verde = está entrando som
+    style.configure(
+        "Horizontal.TProgressbar",
+        background=PALETTE["ok"],
+        troughcolor=PALETTE["field"],
+        bordercolor=PALETTE["border"],
+        lightcolor=PALETTE["ok"],
+        darkcolor=PALETTE["ok"],
+    )
     style.configure(
         "TCombobox",
         fieldbackground=PALETTE["field"],
