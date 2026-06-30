@@ -112,6 +112,13 @@ class ExtractAnnotationTests(unittest.TestCase):
         self.assertIs(diarize._extract_annotation([out]), ann)   # e ainda acha a Annotation
         self.assertIs(diarize._extract_annotation(diarize._unwrap_result([out])), ann)
 
+    def test_generator_batch_inference(self):
+        # 4.0.5+ real (log do reporter: tipo=generator): apply() devolve um GERADOR lazy
+        ann = self._Ann()
+        out = self._DiarizeOutput(ann)
+        self.assertIs(diarize._unwrap_result(x for x in (out,)), out)  # consome + desembrulha
+        self.assertIs(diarize._extract_annotation(diarize._unwrap_result(x for x in (out,))), ann)
+
     def test_lista_de_annotation(self):
         ann = self._Ann()
         self.assertIs(diarize._extract_annotation([ann]), ann)

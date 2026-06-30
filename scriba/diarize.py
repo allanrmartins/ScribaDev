@@ -230,10 +230,15 @@ def _extract_embeddings(result, annotation) -> dict[str, list[float]]:
 
 
 def _unwrap_result(result):
-    """pyannote 4.0.5+ (batch inference) devolve uma LISTA — 1 item por arquivo; como só
-    passamos um áudio, desembrulha p/ o item único (DiarizeOutput/Annotation). Senão passa
-    direto (Annotation no 3.x/4.0.4). #24: a lista quebrava o _extract_annotation -> o
-    pipeline rodava mas dava "0 voz(es) em 0 trechos"."""
+    """pyannote 4.0.5+ (batch inference) devolve um GERADOR lazy (1 item por arquivo); como
+    só passamos um áudio, CONSOME o gerador e desembrulha p/ o item único (DiarizeOutput/
+    Annotation). Lista/tupla de 1 item também. Senão passa direto (Annotation no 3.x/4.0.4).
+    #24: o diagnóstico mostrou `tipo=generator` no log do reporter — não consumi-lo dava
+    "0 voz(es) em 0 trechos"."""
+    import types
+
+    if isinstance(result, types.GeneratorType):
+        result = list(result)  # consome o gerador -> lista de itens (normalmente 1)
     if isinstance(result, (list, tuple)) and len(result) == 1:
         return result[0]
     return result
