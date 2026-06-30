@@ -27,6 +27,7 @@ from .widgets import (
     enable_dark_titlebar,
     make_entry,
     mask_date_br,
+    ScrollableFrame,
     style_notebook,
 )
 
@@ -133,6 +134,9 @@ class NotesWindow:
         LinkLabel(actions, "Atualizar", self._refresh_notes_list).pack(side="left")
         tk.Label(actions, text="·", bg=_BG, fg=PALETTE["muted"]).pack(side="left", padx=4)
         LinkLabel(actions, "Abrir pasta", self._open_notes_dir).pack(side="left")
+        tk.Label(actions, text="·", bg=_BG, fg=PALETTE["muted"]).pack(side="left", padx=4)
+        # pendências consolidadas de TODAS as reuniões (#22)
+        LinkLabel(actions, "Pendências", self._open_action_items).pack(side="left")
 
         right = tk.Frame(body, bg=_BG)
         right.pack(side="left", fill="both", expand=True, padx=(12, 0))
@@ -265,6 +269,140 @@ class NotesWindow:
 
     def _open_notes_dir(self) -> None:
         util.open_path(self._notes_dir())
+
+    # -- pendências consolidadas de todas as reuniões (#22) --------------------
+
+    def _collect_action_groups(self) -> list:
+        """[(dt, title, md_path, folder, items), …] de toda reunião COM pendências, mais
+        recentes primeiro. Puro (sem UI) — varre os .md exportados."""
+        from . import notes
+
+        groups: list[tuple] = []
+        try:
+            files = list(self._notes_dir().glob("*.md"))
+        except OSError:
+            files = []
+        for f in files:
+            try:
+                md = f.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            items = notes.parse_action_items(md)
+            if not items:
+                continue
+            dt, _dur, title = self._note_info(f)
+            groups.append((dt, title or f.stem, f, self._recording_folder_for(f), items))
+        groups.sort(key=lambda g: g[0], reverse=True)
+        return groups
+
+    def _open_action_items(self) -> None:
+        """Janela 'Minhas pendências': agrega a seção 'Pendências e Ações' de TODAS as
+        reuniões, com checkbox p/ marcar resolvido (estado em .actions.json por pasta).
+        Clicar no título da reunião abre a nota."""
+        from . import notes
+
+        groups = self._collect_action_groups()
+        win = tk.Toplevel(self.win)
+        self._actions_win = win
+        win.withdraw()
+        win.title("ScribaDev — Minhas pendências")
+        win.configure(bg=_BG)
+        win.minsize(520, 360)
+        try:
+            win.iconbitmap(str(util.ICON_ICO))
+        except Exception:
+            pass
+
+        head = tk.Frame(win, bg=_BG, padx=16, pady=12)
+        head.pack(fill="x")
+        tk.Label(head, text="Minhas pendências", bg=_BG, fg=PALETTE["text"],
+                 font=("Segoe UI", 15, "bold")).pack(side="left")
+        count_var = tk.StringVar()
+        tk.Label(head, textvariable=count_var, bg=_BG, fg=PALETTE["muted"],
+                 font=("Segoe UI", 9)).pack(side="left", padx=(10, 0))
+        show_done = tk.BooleanVar(value=False)
+
+        scroll = ScrollableFrame(win)
+        scroll.pack(fill="both", expand=True, padx=16, pady=(0, 12))
+        bodyf = scroll.body
+
+        def render() -> None:
+            for w in bodyf.winfo_children():
+                w.destroy()
+            open_n = done_n = 0
+            any_visible = False
+            for dt, title, md_path, folder, items in groups:
+                state = notes.load_action_state(folder)
+                shown = [it for it in items if show_done.get() or not state.get(it["key"])]
+                done_n += sum(1 for it in items if state.get(it["key"]))
+                open_n += sum(1 for it in items if not state.get(it["key"]))
+                if not shown:
+                    continue
+                any_visible = True
+                hdr = tk.Label(bodyf, text=f"{title}  ·  {dt:%d/%m %H:%M}", bg=_BG,
+                               fg=PALETTE["accent_hover"], font=("Segoe UI", 11, "bold"),
+                               cursor="hand2", anchor="w", justify="left", wraplength=640)
+                hdr.pack(anchor="w", fill="x", pady=(12, 2))
+                hdr.bind("<Button-1>", lambda e, p=md_path: self._reveal_note(p))
+                for it in shown:
+                    self._action_row(bodyf, folder, it, bool(state.get(it["key"])), render)
+            if not any_visible:
+                msg = ("Nenhuma reunião tem pendências." if not groups else
+                       "Tudo resolvido! Marque “mostrar resolvidas” para revê-las.")
+                tk.Label(bodyf, text=msg, bg=_BG, fg=PALETTE["muted"], font=FONT,
+                         wraplength=640, justify="left").pack(anchor="w", pady=10)
+            count_var.set(f"{open_n} aberta(s) · {done_n} resolvida(s)")
+            scroll.bind_mousewheel()
+
+        tk.Checkbutton(head, text="mostrar resolvidas", variable=show_done, command=render,
+                       bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), activebackground=_BG,
+                       activeforeground=PALETTE["text"], selectcolor=PALETTE["field"], bd=0,
+                       highlightthickness=0, takefocus=False).pack(side="right")
+        render()
+
+        w, h = 720, 600
+        win.update_idletasks()
+        px, py = self.win.winfo_rootx(), self.win.winfo_rooty()
+        pw, ph = self.win.winfo_width(), self.win.winfo_height()
+        win.geometry(f"{w}x{h}+{px + max(0, (pw - w) // 2)}+{py + max(0, (ph - h) // 4)}")
+        win.deiconify()
+        enable_dark_titlebar(win)
+        win.lift()
+        win.focus_force()
+
+    def _action_row(self, parent, folder: Path, item: dict, done: bool, on_change) -> None:
+        """Uma linha do checklist: checkbox + texto (cinza/riscado quando resolvido)."""
+        from . import notes
+
+        row = tk.Frame(parent, bg=_BG)
+        row.pack(fill="x", anchor="w", pady=1)
+        var = tk.BooleanVar(value=done)
+
+        def toggle() -> None:
+            notes.set_action_done(folder, item["key"], var.get())
+            on_change()  # re-render (o item some se marcado e "mostrar resolvidas" off)
+
+        tk.Checkbutton(row, variable=var, command=toggle, bg=_BG, activebackground=_BG,
+                       selectcolor=PALETTE["field"], bd=0, highlightthickness=0,
+                       takefocus=False).pack(side="left", anchor="n")
+        text = (f"[{item['label']}] " if item["label"] else "") + (item["text"] or item["raw"])
+        font = ("Segoe UI", 9, "overstrike") if done else ("Segoe UI", 9)
+        tk.Label(row, text=text, bg=_BG, fg=(PALETTE["muted"] if done else PALETTE["text"]),
+                 font=font, justify="left", anchor="w", wraplength=620).pack(side="left", fill="x", expand=True)
+
+    def _reveal_note(self, note_path: Path) -> None:
+        """Seleciona/exibe a nota deste path na árvore (abre o dia, rola até ela).
+        No-op se a nota não está na lista atual (ex.: filtro/busca ativo)."""
+        for item, (p, _t, _s) in list(self._note_items.items()):
+            if p == note_path:
+                parent = self.notes_tree.parent(item)
+                if parent:
+                    self.notes_tree.item(parent, open=True)
+                self.notes_tree.selection_set(item)
+                self.notes_tree.see(item)
+                self.win.lift()
+                self.win.focus_force()
+                return
 
     def _note_info(self, path: Path) -> tuple[datetime, int | None, str | None]:
         """(data/hora, duração, título) da nota: frontmatter > nome do arquivo > mtime."""

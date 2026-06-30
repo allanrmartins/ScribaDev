@@ -310,5 +310,60 @@ class DateRangeFilterTests(unittest.TestCase):
         self.assertEqual(util.date_range_filter("xx", "12/06/2026"), ("2026-06-12", "2026-06-12"))
 
 
+class ActionItemsTests(unittest.TestCase):
+    """notes.parse_action_items / action_item_key: seção 'Pendências e Ações' (#22)."""
+
+    _MD = (
+        "# Reunião\n\n## Decisões\n- decidiu X\n\n"
+        "## Pendências e Ações\n"
+        "- **[BLOQUEANTE — Eu]** Liberar a transport request [00:00:09] [00:29:25]\n"
+        "- **[ABERTO]** Confirmar GRC ou DRC [00:08:33]\n"
+        "- **Indefinido:** prazo do go live não foi dado\n"
+        "Este parágrafo não é um item e deve ser ignorado.\n\n"
+        "## Participantes\n- **Eu** — dev\n"
+    )
+
+    def test_extrai_bullets_com_label_e_texto(self):
+        items = notes.parse_action_items(self._MD)
+        self.assertEqual(len(items), 3)  # 2 com label + 1 "Indefinido"; ignora o parágrafo
+        self.assertEqual(items[0]["label"], "BLOQUEANTE — Eu")
+        self.assertTrue(items[0]["text"].startswith("Liberar"))
+        self.assertEqual(items[2]["label"], "")  # "Indefinido:" não tem **[...]** no começo
+
+    def test_ignora_nada_identificado(self):
+        self.assertEqual(notes.parse_action_items("## Pendências e Ações\n- Nada identificado.\n"), [])
+
+    def test_sem_secao(self):
+        self.assertEqual(notes.parse_action_items("# X\n\n## Resumo\ntexto"), [])
+
+    def test_nao_vaza_proxima_secao(self):
+        items = notes.parse_action_items(self._MD)
+        self.assertNotIn("dev", " ".join(i["text"] for i in items))  # "## Participantes" não entra
+
+    def test_key_ignora_timestamp(self):
+        self.assertEqual(notes.action_item_key("faz X [00:01:02]"), notes.action_item_key("faz X [12:34:56]"))
+
+    def test_key_difere_por_texto(self):
+        self.assertNotEqual(notes.action_item_key("faz X"), notes.action_item_key("faz Y"))
+
+
+class ActionStateTests(unittest.TestCase):
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name)
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def test_marca_e_desmarca(self):
+        notes.set_action_done(self.tmp, "abc", True)
+        self.assertEqual(notes.load_action_state(self.tmp), {"abc": True})
+        notes.set_action_done(self.tmp, "abc", False)
+        self.assertEqual(notes.load_action_state(self.tmp), {})
+
+    def test_load_ausente_vira_vazio(self):
+        self.assertEqual(notes.load_action_state(self.tmp / "nao_existe"), {})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

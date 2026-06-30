@@ -653,6 +653,87 @@ def guess_voice_name(label: str, desc: str) -> str:
     return ""
 
 
+# ---- action items: seção "Pendências e Ações" como checklist (#22) ----------
+_ACTIONS_TITLE = re.compile(r"(?i)^\s*pend[êe]ncias?\s+e\s+a[çc][õo]es\s*$")
+
+
+def _section_body(md: str, title_re: re.Pattern) -> str | None:
+    """Corpo (texto) da 1ª seção H2 cujo título casa `title_re`; None se não houver.
+    Split puro — não usa mdview.split_sections (que importa Tk)."""
+    body: list[str] | None = None
+    for ln in md.splitlines():
+        if ln.startswith("## "):
+            if body is not None:
+                break  # próxima seção H2: a de Ações acabou
+            body = [] if title_re.match(ln[3:].strip()) else None
+        elif body is not None:
+            body.append(ln)
+    return "\n".join(body) if body is not None else None
+
+
+def action_item_key(raw: str) -> str:
+    """Chave estável de um item (p/ casar com o estado salvo): o texto normalizado —
+    sem marcação, sem timestamps [HH:MM:SS], espaços colapsados — em sha1 curto.
+    Re-summarizar reescreve o texto → a chave muda → o 'resolvido' antigo é descartado
+    (comportamento esperado: o item mudou)."""
+    import hashlib
+
+    t = re.sub(r"\[\d{1,2}:\d{2}(?::\d{2})?\]", "", raw)  # tira timestamps
+    t = re.sub(r"[*`\[\]]", "", t).lower()                # tira marcação
+    t = re.sub(r"\s+", " ", t).strip()
+    return hashlib.sha1(t.encode("utf-8")).hexdigest()[:12]
+
+
+def parse_action_items(md: str) -> list[dict]:
+    """Itens da seção '## Pendências e Ações' como [{raw, label, text, key}, …].
+
+    `label` = rótulo entre **[…]** no início (tag/responsável, ex.: "BLOQUEANTE — Eu"),
+    "" se não houver; `text` = o resto. Ignora 'Nada identificado.' e linhas que não são
+    bullets (a IA às vezes escreve um parágrafo)."""
+    body = _section_body(md, _ACTIONS_TITLE)
+    if not body:
+        return []
+    items: list[dict] = []
+    for ln in body.splitlines():
+        s = ln.strip()
+        if not (s.startswith("- ") or s.startswith("* ")):
+            continue
+        raw = s[2:].strip()
+        if not raw or raw.lower().startswith("nada identificad"):
+            continue
+        m = re.match(r"^\*\*\[([^\]]+)\]\*\*\s*(.*)$", raw)
+        label, text = (m.group(1).strip(), m.group(2).strip()) if m else ("", raw)
+        items.append({"raw": raw, "label": label, "text": text, "key": action_item_key(raw)})
+    return items
+
+
+def load_action_state(folder: Path) -> dict:
+    """Estado dos itens resolvidos: {item_key: True}. Sidecar `.actions.json` na pasta da
+    gravação — NÃO reescreve o .md. {} se ausente/ilegível."""
+    try:
+        data = json.loads((Path(folder) / ".actions.json").read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def set_action_done(folder: Path, key: str, done: bool) -> None:
+    """Marca/desmarca um item como resolvido no `.actions.json` da pasta (escrita atômica)."""
+    folder = Path(folder)
+    state = load_action_state(folder)
+    if done:
+        state[key] = True
+    else:
+        state.pop(key, None)
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        util.atomic_write_text(folder / ".actions.json", json.dumps(state, ensure_ascii=False))
+    except OSError as e:
+        import logging
+
+        logging.getLogger("scriba.notes").warning("falha ao salvar .actions.json em %s: %s", folder, e)
+
+
 def set_note_title(md_path: Path, new_title: str) -> None:
     """Atualiza o título de uma nota: linha `titulo:` do frontmatter + primeiro H1."""
     new_title = new_title.strip()
