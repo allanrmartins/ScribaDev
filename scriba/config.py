@@ -38,6 +38,7 @@ max_call_hours = 4       # parada de segurança
 auto_record = true       # gravar sozinho ao detectar a call; desligado, a pílula espera o ⏺
 
 [audio]
+mic_device = ""          # vazio = microfone padrão do Windows; senão, parte do nome (veja: scribadev devices)
 loopback_device = ""     # vazio = saída padrão do Windows; senão, parte do nome (veja: scribadev devices)
 keep_audio = true        # manter o áudio depois de transcrever
 # Formato do áudio guardado (só com keep_audio=true). Whisper/pyannote usam 16 kHz
@@ -126,6 +127,7 @@ class Detection:
 
 @dataclass(frozen=True)
 class Audio:
+    mic_device: str = ""      # vazio = microfone padrão do Windows; senão, parte do nome
     loopback_device: str = ""
     keep_audio: bool = True
     # Formato do áudio guardado (só vale com keep_audio=true). Whisper e pyannote
@@ -289,6 +291,7 @@ max_call_hours = {_n(d.max_call_hours)}       # parada de segurança
 auto_record = {_b(d.auto_record)}       # gravar sozinho ao detectar a call; desligado, a pílula espera o ⏺
 
 [audio]
+mic_device = {_s(a.mic_device)}          # vazio = microfone padrão do Windows (veja: scribadev devices)
 loopback_device = {_s(a.loopback_device)}     # vazio = saída padrão do Windows (veja: scribadev devices)
 keep_audio = {_b(a.keep_audio)}        # manter o áudio depois de transcrever
 archive_format = {_s(a.archive_format)}  # opus (~20 MB/h) | flac (~110 MB/h) | wav (cru ~1,3 GB/h)

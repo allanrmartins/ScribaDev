@@ -190,15 +190,16 @@ def open_path(path) -> None:
     subprocess.Popen(["explorer.exe", str(path)])
 
 
-def run_audio_probe(timeout: float = 12.0) -> dict | None:
-    """Nomes do mic/loopback padrão via subprocesso (ver audioprobe.py). None se indisponível."""
+def _audio_probe(extra_args: list[str], timeout: float) -> dict | None:
+    """Roda a sonda de áudio (scriba.audioprobe) num subprocesso descartável — o
+    PortAudio pode abortar o processo com assert de CRT ao enumerar. None se falhar."""
     import json
     import subprocess
 
     python = Path(sys.prefix) / "Scripts" / "python.exe"
     try:
         proc = subprocess.run(
-            [str(python), "-X", "utf8", "-m", "scriba.audioprobe"],
+            [str(python), "-X", "utf8", "-m", "scriba.audioprobe", *extra_args],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -211,6 +212,17 @@ def run_audio_probe(timeout: float = 12.0) -> dict | None:
     except Exception:
         pass
     return None
+
+
+def run_audio_probe(timeout: float = 12.0) -> dict | None:
+    """Nomes do mic/loopback padrão via subprocesso (ver audioprobe.py). None se indisponível."""
+    return _audio_probe([], timeout)
+
+
+def list_audio_devices(timeout: float = 15.0) -> dict | None:
+    """Listas de mics e loopbacks (nomes) via subprocesso, para os seletores da UI:
+    {'mics':[...], 'loopbacks':[...], 'default_mic':str, 'default_loopback':str} ou None."""
+    return _audio_probe(["list"], timeout)
 
 
 def quiet_crt_asserts() -> None:

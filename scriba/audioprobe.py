@@ -3,6 +3,12 @@
 O PortAudio pode ABORTAR o processo com um assert de CRT (pa_front.c) quando os
 dispositivos mudam durante a enumeração — incapturável em Python. Rodando a
 sonda num subprocesso descartável, o app principal nunca cai por causa disso.
+
+Dois modos:
+- (sem argumento) → {"mic","loopback"}: nomes dos dispositivos PADRÃO (usado na
+  pré-checagem antes de gravar).
+- "list"          → {"mics":[...],"loopbacks":[...],"default_mic","default_loopback"}:
+  listas completas para os seletores da UI (Configurações).
 """
 
 from __future__ import annotations
@@ -11,16 +17,57 @@ import json
 import sys
 
 
+def _dedup(names: list[str]) -> list[str]:
+    """Remove nomes repetidos preservando a ordem (o WASAPI às vezes duplica)."""
+    seen, out = set(), []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
+def _list(pa) -> dict:
+    import pyaudiowpatch as pyaudio
+
+    wasapi = pa.get_host_api_info_by_type(pyaudio.paWASAPI)["index"]
+    mics = []
+    for i in range(pa.get_device_count()):
+        d = pa.get_device_info_by_index(i)
+        if d["hostApi"] == wasapi and not d.get("isLoopbackDevice") and int(d["maxInputChannels"]) > 0:
+            mics.append(str(d["name"]))
+    loopbacks = [str(d["name"]) for d in pa.get_loopback_device_info_generator()]
+
+    def _default(getter) -> str:
+        try:
+            return str(getter()["name"])
+        except Exception:
+            return ""
+
+    return {
+        "mics": _dedup(mics),
+        "loopbacks": _dedup(loopbacks),
+        "default_mic": _default(pa.get_default_input_device_info),
+        "default_loopback": _default(pa.get_default_wasapi_loopback),
+    }
+
+
 def main() -> int:
     import pyaudiowpatch as pyaudio
 
+    mode = sys.argv[1] if len(sys.argv) > 1 else ""
     pa = pyaudio.PyAudio()
     try:
-        mic = pa.get_default_input_device_info()["name"]
-        loopback = pa.get_default_wasapi_loopback()["name"]
+        if mode == "list":
+            out = _list(pa)
+        else:
+            out = {
+                "mic": str(pa.get_default_input_device_info()["name"]),
+                "loopback": str(pa.get_default_wasapi_loopback()["name"]),
+            }
     finally:
         pa.terminate()
-    print(json.dumps({"mic": str(mic), "loopback": str(loopback)}, ensure_ascii=False))
+    print(json.dumps(out, ensure_ascii=False))
     return 0
 
 

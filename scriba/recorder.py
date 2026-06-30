@@ -150,7 +150,7 @@ class Recording:
         self.folder = self._new_folder()
         self.pa = pyaudio.PyAudio()
         try:
-            mic_info = self.pa.get_default_input_device_info()
+            mic_info = self._pick_mic(self.pa)
             lb_info = self._pick_loopback(self.pa)
             self.t0 = time.monotonic()
             self.mic = _StreamRecorder(self.pa, "mic", self.folder / "mic.wav", mic_info, self.t0, pad_silence=False)
@@ -179,6 +179,24 @@ class Recording:
             folder = base.with_name(f"{base.name}_{n}")
         folder.mkdir(parents=True)
         return folder
+
+    def _pick_mic(self, pa) -> dict:
+        """Microfone configurado (substring do nome, case-insensitive) ou o padrão do
+        Windows se vazio/não encontrado (ex.: headset desplugado entre calls)."""
+        want = (self.cfg.mic_device or "").strip().lower()
+        if want:
+            import pyaudiowpatch as pyaudio
+
+            try:
+                wasapi = pa.get_host_api_info_by_type(pyaudio.paWASAPI)["index"]
+                for i in range(pa.get_device_count()):
+                    d = pa.get_device_info_by_index(i)
+                    if (d["hostApi"] == wasapi and not d.get("isLoopbackDevice")
+                            and int(d["maxInputChannels"]) > 0 and want in d["name"].lower()):
+                        return d
+            except Exception:
+                pass  # device sumiu / enumeração falhou -> cai no padrão
+        return pa.get_default_input_device_info()
 
     def _pick_loopback(self, pa) -> dict:
         want = (self.cfg.loopback_device or "").strip().lower()

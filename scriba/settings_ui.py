@@ -386,6 +386,7 @@ class SettingsWindow:
 
     def _build_recording_tab(self) -> None:
         tab = self.tab_rec.body
+        self._build_device_selectors(tab)
         self.auto_record_var = tk.BooleanVar()
         self._toggle_row(tab, "Gravar automaticamente ao detectar a call", self.auto_record_var)
         self.overlay_var = tk.BooleanVar()
@@ -472,6 +473,63 @@ class SettingsWindow:
         self._stt_area = tk.Frame(tab, bg=_BG)
         self._stt_area.pack(fill="x")
         self._build_stt_frames(self._stt_area)
+
+    # -- seletores de dispositivo (mic / loopback) na aba Gravação (#22) -------
+    _DEV_DEFAULT = "Padrão do Windows"
+
+    def _build_device_selectors(self, tab) -> None:
+        self.mic_device_var = tk.StringVar()
+        self.loopback_device_var = tk.StringVar()
+        tk.Label(tab, text="Dispositivos de áudio", bg=_BG, fg=PALETTE["text"],
+                 font=FONT_BOLD).pack(anchor="w", pady=(0, 4))
+        mic_row = tk.Frame(tab, bg=_BG)
+        mic_row.pack(fill="x", pady=2)
+        tk.Label(mic_row, text="Microfone (Eu)", bg=_BG, fg=PALETTE["text"], font=FONT,
+                 width=24, anchor="w").pack(side="left")
+        self._mic_combo = ttk.Combobox(mic_row, textvariable=self.mic_device_var, state="readonly",
+                                       font=FONT, values=[self._DEV_DEFAULT])
+        self._mic_combo.pack(side="right", fill="x", expand=True)
+        lb_row = tk.Frame(tab, bg=_BG)
+        lb_row.pack(fill="x", pady=2)
+        tk.Label(lb_row, text="Capturar saída (Participantes)", bg=_BG, fg=PALETTE["text"], font=FONT,
+                 width=24, anchor="w").pack(side="left")
+        self._lb_combo = ttk.Combobox(lb_row, textvariable=self.loopback_device_var, state="readonly",
+                                      font=FONT, values=[self._DEV_DEFAULT])
+        self._lb_combo.pack(side="right", fill="x", expand=True)
+        hint = tk.Frame(tab, bg=_BG)
+        hint.pack(fill="x", pady=(2, 6))
+        tk.Label(hint, text="Vazio = padrão do Windows. Útil no notebook que alterna headset/mic interno.",
+                 bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8)).pack(side="left")
+        LinkLabel(hint, "atualizar lista", self._refresh_device_lists).pack(side="right")
+
+    def _refresh_device_lists(self) -> None:
+        """Enumera os dispositivos num SUBPROCESSO (o PortAudio pode abortar com assert
+        de CRT ao enumerar) e popula os combos, sem travar a janela."""
+        import threading
+
+        threading.Thread(target=self._device_list_worker, daemon=True, name="devlist").start()
+
+    def _device_list_worker(self) -> None:
+        data = util.list_audio_devices()
+        self.win.after(0, lambda: self._apply_device_lists(data))
+
+    def _apply_device_lists(self, data) -> None:
+        data = data or {}
+        self._fill_combo(self._mic_combo, self.mic_device_var, data.get("mics") or [])
+        self._fill_combo(self._lb_combo, self.loopback_device_var, data.get("loopbacks") or [])
+
+    def _fill_combo(self, combo, var, names) -> None:
+        # preserva o valor atual (substring vinda do config, ou device offline agora)
+        seen, vals = set(), []
+        for v in [self._DEV_DEFAULT, *names, var.get()]:
+            if v and v not in seen:
+                seen.add(v)
+                vals.append(v)
+        combo.configure(values=vals)
+
+    def _dev_value(self, var) -> str:
+        v = var.get().strip()
+        return "" if v == self._DEV_DEFAULT else v
 
     def _build_stt_frames(self, parent) -> None:
         # Local (faster-whisper)
@@ -904,6 +962,9 @@ class SettingsWindow:
         self.overlay_var.set(cfg.ui.overlay)
         self.keep_audio_var.set(cfg.audio.keep_audio)
         self.retention_var.set(int(getattr(cfg.audio, "retention_days", 30)))
+        self.mic_device_var.set(cfg.audio.mic_device or self._DEV_DEFAULT)
+        self.loopback_device_var.set(cfg.audio.loopback_device or self._DEV_DEFAULT)
+        self._refresh_device_lists()  # enumera em subprocesso e popula os combos
         self.autostart_var.set(autostart.is_enabled())
         self.diar_var.set(cfg.diarization.enabled)
         self.hf_token_var.set(cfg.diarization.hf_token)
@@ -981,6 +1042,8 @@ class SettingsWindow:
             ui=dataclasses.replace(cfg.ui, overlay=self.overlay_var.get(), hotkey=self.hotkey_var.get().strip()),
             audio=dataclasses.replace(
                 cfg.audio,
+                mic_device=self._dev_value(self.mic_device_var),
+                loopback_device=self._dev_value(self.loopback_device_var),
                 keep_audio=self.keep_audio_var.get(),
                 retention_days=int(self.retention_var.get()),
             ),
