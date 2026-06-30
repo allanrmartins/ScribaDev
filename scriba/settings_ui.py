@@ -20,6 +20,7 @@ from .widgets import (
     PALETTE,
     LinkLabel,
     ModernButton,
+    ScrollableFrame,
     Stepper,
     ToggleSwitch,
     enable_dark_titlebar,
@@ -80,6 +81,7 @@ class SettingsWindow:
     def __init__(self, root: tk.Misc, app):
         self.app = app
         self._titlebar_done = False
+        self._fitted = False  # clamp de tamanho à tela: só na 1ª exibição (#20)
         # só vira True quando _load_fields() roda inteiro sem exceção; protege o
         # _save() de gravar campos pela metade (defaults em branco) por cima da
         # config boa do usuário (perda de dados já vista na prática).
@@ -90,7 +92,9 @@ class SettingsWindow:
         self.win.title("ScribaDev — Configurações")
         self.win.configure(bg=_BG)
         self.win.attributes("-alpha", 0.97)
-        self.win.minsize(760, 540)
+        # altura mínima baixa de propósito: as abas rolam, então o rodapé (Salvar/
+        # Fechar) cabe até em telas de notebook baixas. show() faz o clamp à tela. (#20)
+        self.win.minsize(720, 380)
         self.win.protocol("WM_DELETE_WINDOW", self.hide)
         style_notebook(self.win)
         try:
@@ -119,34 +123,43 @@ class SettingsWindow:
         tk.Label(status_row, textvariable=self.status_var, bg=_BG, fg=PALETTE["muted"],
                  font=("Segoe UI", 9, "italic")).pack(side="left", padx=6)
 
-        # -- abas ----------------------------------------------------------------
+        # -- rodapé (fixo na base, empacotado ANTES do notebook: em telas baixas o
+        #    conteúdo das abas rola, mas Salvar/Fechar nunca saem da tela) ---- (#20)
+        foot = tk.Frame(body, bg=_BG)
+        foot.pack(fill="x", side="bottom", pady=(10, 0))
+        separator(body).pack(fill="x", side="bottom")
+        self.saved_var = tk.StringVar(value="")
+        self._saved_label = tk.Label(foot, textvariable=self.saved_var, bg=_BG, fg=PALETTE["ok"], font=FONT)
+        self._saved_label.pack(side="left")
+        ModernButton(foot, "Salvar", self._save, kind="primary").pack(side="right")
+        ModernButton(foot, "Fechar", self.hide).pack(side="right", padx=8)
+
+        # -- abas (cada uma rola sozinha quando o conteúdo não couber) ------------
         self.nb = ttk.Notebook(body)
+        self._scrolls: list[ScrollableFrame] = []
+        self.tab_rec = self._add_tab("Gravação")
+        self.tab_detect = self._add_tab("Detecção")
+        self.tab_dirs = self._add_tab("Pastas")
+        self.tab_summary = self._add_tab("Resumo")
+        self.tab_about = self._add_tab("Sobre")
         self.nb.pack(fill="both", expand=True)
-        self.tab_rec = tk.Frame(self.nb, bg=_BG, padx=14, pady=14)
-        self.tab_detect = tk.Frame(self.nb, bg=_BG, padx=14, pady=14)
-        self.tab_dirs = tk.Frame(self.nb, bg=_BG, padx=14, pady=14)
-        self.tab_summary = tk.Frame(self.nb, bg=_BG, padx=14, pady=14)
-        self.nb.add(self.tab_rec, text="Gravação")
-        self.nb.add(self.tab_detect, text="Detecção")
-        self.nb.add(self.tab_dirs, text="Pastas")
-        self.nb.add(self.tab_summary, text="Resumo")
-        self.tab_about = tk.Frame(self.nb, bg=_BG, padx=14, pady=14)
-        self.nb.add(self.tab_about, text="Sobre")
 
         self._build_recording_tab()
         self._build_detection_tab()
         self._build_dirs_tab()
         self._build_summary_tab()
         self._build_about_tab()
+        for s in self._scrolls:
+            s.bind_mousewheel()
 
-        # -- rodapé ---------------------------------------------------------------
-        foot = tk.Frame(body, bg=_BG)
-        foot.pack(fill="x", pady=(10, 0))
-        self.saved_var = tk.StringVar(value="")
-        self._saved_label = tk.Label(foot, textvariable=self.saved_var, bg=_BG, fg=PALETTE["ok"], font=FONT)
-        self._saved_label.pack(side="left")
-        ModernButton(foot, "Salvar", self._save, kind="primary").pack(side="right")
-        ModernButton(foot, "Fechar", self.hide).pack(side="right", padx=8)
+    def _add_tab(self, title: str) -> ScrollableFrame:
+        """Cria uma aba rolável no notebook e a devolve como página (para nb.select).
+        Os _build_*_tab empacotam o conteúdo em `.body` (mesmo padding das abas antigas)."""
+        scroll = ScrollableFrame(self.nb)
+        self.nb.add(scroll, text=title)
+        scroll.body.configure(padx=14, pady=14)
+        self._scrolls.append(scroll)
+        return scroll
 
     # As notas têm janela própria (notes_ui.NotesWindow); aqui ficam só os
     # atalhos de pasta usados pela aba Pastas.
@@ -164,7 +177,7 @@ class SettingsWindow:
     def _build_about_tab(self) -> None:
         from . import updates
 
-        tab = self.tab_about
+        tab = self.tab_about.body
         tk.Label(tab, text="ScribaDev", bg=_BG, fg=PALETTE["text"],
                  font=("Segoe UI", 18, "bold")).pack(anchor="w")
         tk.Label(tab, text=updates.build_string(), bg=_BG, fg=PALETTE["muted"], font=FONT).pack(anchor="w")
@@ -354,7 +367,7 @@ class SettingsWindow:
     # ==================================================== aba Gravação =========
 
     def _build_recording_tab(self) -> None:
-        tab = self.tab_rec
+        tab = self.tab_rec.body
         self.auto_record_var = tk.BooleanVar()
         self._toggle_row(tab, "Gravar automaticamente ao detectar a call", self.auto_record_var)
         self.overlay_var = tk.BooleanVar()
@@ -552,7 +565,7 @@ class SettingsWindow:
     # ==================================================== aba Detecção =========
 
     def _build_detection_tab(self) -> None:
-        tab = self.tab_detect
+        tab = self.tab_detect.body
         tk.Label(
             tab,
             text="Quais apps e reuniões no navegador o ScribaDev monitora (mic aberto = call ativa).\n"
@@ -606,7 +619,7 @@ class SettingsWindow:
     # ====================================================== aba Pastas =========
 
     def _build_dirs_tab(self) -> None:
-        tab = self.tab_dirs
+        tab = self.tab_dirs.body
         self.export_var = tk.StringVar()
         self._path_row(tab, "Pasta das notas (.md)", self.export_var, self._browse_export,
                        "Vazio = Documentos\\ScribaDev")
@@ -641,7 +654,7 @@ class SettingsWindow:
     # ====================================================== aba Resumo =========
 
     def _build_summary_tab(self) -> None:
-        tab = self.tab_summary
+        tab = self.tab_summary.body
         self.summary_var = tk.BooleanVar()
         self._toggle_row(tab, "Gerar resumo estruturado da reunião (IA)", self.summary_var)
 
@@ -698,8 +711,10 @@ class SettingsWindow:
             bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), justify="left", wraplength=620,
         ).pack(anchor="w", pady=(0, 6))
         editor_frame = tk.Frame(tab, bg=_BG)
-        editor_frame.pack(fill="both", expand=True)
-        self.prompt_editor = make_text(editor_frame)
+        editor_frame.pack(fill="x")
+        # altura fixa (a aba inteira rola): expand não estica dentro do ScrollableFrame.
+        # O editor mantém a própria barra para textos longos.
+        self.prompt_editor = make_text(editor_frame, height=14)
         psb = ttk.Scrollbar(editor_frame, orient="vertical", command=self.prompt_editor.yview)
         self.prompt_editor.configure(yscrollcommand=psb.set)
         psb.pack(side="right", fill="y")
@@ -1003,12 +1018,29 @@ class SettingsWindow:
             self._refresh_job = None
         self._load_fields()
         self.win.deiconify()
+        if not self._fitted:
+            self._fitted = True
+            self._fit_to_screen()
         if not self._titlebar_done:
             self._titlebar_done = True
             enable_dark_titlebar(self.win)
         self.win.lift()
         self.win.focus_force()
         self._refresh_status()
+
+    def _fit_to_screen(self) -> None:
+        """Dimensiona a janela para mostrar o máximo do conteúdo SEM ultrapassar a
+        tela e a centraliza. Em telas baixas (notebook / DPI alto) encolhe e as abas
+        rolam — o rodapé com Salvar/Fechar fica sempre visível. (#20)"""
+        self.win.update_idletasks()
+        canvas_req = self._scrolls[0].canvas_reqheight() if self._scrolls else 420
+        chrome = self.win.winfo_reqheight() - canvas_req  # status + abas + rodapé + paddings
+        content = max((s.body.winfo_reqheight() for s in self._scrolls), default=canvas_req)
+        sw, sh = self.win.winfo_screenwidth(), self.win.winfo_screenheight()
+        w = min(max(self.win.winfo_reqwidth(), 720), sw - 40)
+        h = max(380, min(chrome + content, sh - 80))  # 80 ≈ barra de tarefas + título + folga
+        x, y = max(0, (sw - w) // 2), max(0, (sh - h) // 3)
+        self.win.geometry(f"{w}x{h}+{x}+{y}")
 
     def hide(self) -> None:
         self.win.withdraw()

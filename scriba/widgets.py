@@ -7,6 +7,7 @@ import ctypes
 import tkinter as tk
 import tkinter.font as tkfont
 from datetime import date as _date
+from tkinter import ttk
 from typing import Callable
 
 from . import util
@@ -343,6 +344,67 @@ def make_secret_entry(parent, textvariable: tk.StringVar, width: int = 44) -> tk
 
 def separator(parent) -> tk.Frame:
     return tk.Frame(parent, height=1, bg=PALETTE["border"])
+
+
+class ScrollableFrame(tk.Frame):
+    """Área com rolagem vertical (Canvas + Scrollbar). Empacote o conteúdo em `.body`.
+
+    A barra aparece só quando o conteúdo não cabe; a roda do mouse rola a área (mas
+    NÃO sobre widgets tk.Text, que mantêm a própria rolagem). Usado nas abas das
+    Configurações para que telas baixas (notebook / DPI alto) sempre mostrem o rodapé
+    com Salvar/Fechar em vez de empurrá-lo para fora da tela (#20)."""
+
+    def __init__(self, parent, bg: str | None = None):
+        bg = bg or PALETTE["bg"]
+        super().__init__(parent, bg=bg)
+        self._canvas = tk.Canvas(self, bg=bg, highlightthickness=0, bd=0, height=420)
+        self._sb = ttk.Scrollbar(self, orient="vertical", command=self._canvas.yview)
+        self._canvas.configure(yscrollcommand=self._sb.set)
+        self._canvas.pack(side="left", fill="both", expand=True)  # a barra entra sob demanda
+        self.body = tk.Frame(self._canvas, bg=bg)
+        self._item = self._canvas.create_window((0, 0), window=self.body, anchor="nw")
+        self.body.bind("<Configure>", self._on_content)
+        self._canvas.bind("<Configure>", self._on_canvas)
+
+    def _on_content(self, _e=None) -> None:
+        self._canvas.configure(scrollregion=self._canvas.bbox("all"))
+        self._sync_bar()
+
+    def _on_canvas(self, e) -> None:
+        self._canvas.itemconfigure(self._item, width=e.width)  # conteúdo segue a largura
+        self._sync_bar()
+
+    def _sync_bar(self) -> None:
+        """Mostra/oculta a barra conforme haja (ou não) o que rolar."""
+        need = self.body.winfo_reqheight() > self._canvas.winfo_height()
+        mapped = self._sb.winfo_ismapped()
+        if need and not mapped:
+            self._sb.pack(side="right", fill="y")
+        elif not need and mapped:
+            self._canvas.yview_moveto(0.0)
+            self._sb.pack_forget()
+
+    def canvas_reqheight(self) -> int:
+        """Altura-base do canvas (não do conteúdo) — usada para calcular o 'cromo'
+        fixo da janela ao dimensioná-la para a tela."""
+        return self._canvas.winfo_reqheight()
+
+    def bind_mousewheel(self) -> None:
+        """Liga a roda do mouse à rolagem. Chame DEPOIS de popular `.body` (precisa
+        dos widgets já criados). Pula tk.Text, que rola o próprio conteúdo."""
+        self._bind_recursive(self.body)
+        self._canvas.bind("<MouseWheel>", self._on_wheel)
+
+    def _bind_recursive(self, w: tk.Misc) -> None:
+        if not isinstance(w, tk.Text):
+            w.bind("<MouseWheel>", self._on_wheel)
+        for child in w.winfo_children():
+            self._bind_recursive(child)
+
+    def _on_wheel(self, e) -> str:
+        if self.body.winfo_reqheight() > self._canvas.winfo_height():
+            self._canvas.yview_scroll(int(-e.delta / 120), "units")
+        return "break"  # corta a propagação (evita combobox mudar valor com a roda)
 
 
 def style_notebook(win: tk.Misc) -> None:
