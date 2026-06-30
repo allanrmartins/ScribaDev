@@ -451,15 +451,17 @@ def cmd_doctor(args) -> int:
     fmt = ((cfg.audio.archive_format if cfg else "opus") or "wav").strip().lower()
     lvl = util.ffmpeg_status(keep, fmt)
     if lvl == "ok":
-        _print(_OK, "Compressão de áudio (ffmpeg)", "no PATH — áudio guardado é compactado")
+        exe = util.ffmpeg_command()
+        _print(_OK, "Compressão de áudio (ffmpeg)", f"no PATH: {exe[0] if exe else 'ffmpeg'}")
     elif lvl == "err":
         _print(_FAIL, "Compressão de áudio (ffmpeg)",
-               f"AUSENTE no PATH — o áudio fica em WAV cru (~1,3 GB/h), não {fmt} (~20 MB/h). "
-               "Instale: winget install ffmpeg")
+               f"AUSENTE no PATH do Windows — o áudio fica em WAV cru (~1,3 GB/h), não {fmt} (~20 MB/h). "
+               "Instale: winget install ffmpeg (entra no PATH do Windows sozinho — não é uma pasta do "
+               "ScribaDev), feche e reabra o app. Confira com: where ffmpeg")
         failures += 1
     else:
         _print(_WARN, "Compressão de áudio (ffmpeg)",
-               "ausente no PATH — necessário p/ compactar o áudio guardado e re-transcrever áudio comprimido")
+               "ausente no PATH do Windows — necessário p/ compactar o áudio guardado e re-transcrever áudio comprimido")
 
     # Diarização
     if cfg and cfg.diarization.enabled:

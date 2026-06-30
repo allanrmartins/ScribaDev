@@ -269,9 +269,11 @@ class SettingsWindow:
         if lvl == "ok":
             return ("ffmpeg no PATH — áudio guardado é compactado", "ok")
         if lvl == "err":
-            return (f"ffmpeg AUSENTE no PATH — o áudio guardado fica em WAV cru (~1,3 GB/h), não "
-                    f"{fmt} (~20 MB/h). Instale: winget install ffmpeg (e reabra o app)", "err")
-        return ("ffmpeg ausente no PATH — preciso dele p/ compactar o áudio guardado e p/ "
+            return (f"ffmpeg AUSENTE no PATH do Windows — o áudio guardado fica em WAV cru (~1,3 GB/h), "
+                    f"não {fmt} (~20 MB/h). Instale com 'winget install ffmpeg' (entra no PATH do Windows "
+                    f"sozinho — não é uma pasta do ScribaDev), feche e reabra o app. Confira no terminal "
+                    f"com 'where ffmpeg'.", "err")
+        return ("ffmpeg ausente no PATH do Windows — preciso dele p/ compactar o áudio guardado e p/ "
                 "re-transcrever áudio já comprimido", "warn")
 
     def _diarization_health(self, ver) -> tuple:
