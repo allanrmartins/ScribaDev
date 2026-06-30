@@ -220,6 +220,12 @@ class SettingsWindow:
         LinkLabel(repo, "github.com/allanrmartins/ScribaDev",
                   lambda: self._open_url("https://github.com/allanrmartins/ScribaDev")).pack(side="left")
 
+        sup = tk.Frame(tab, bg=_BG)
+        sup.pack(fill="x", pady=2)
+        tk.Label(sup, text="Suporte", bg=_BG, fg=PALETTE["text"], font=FONT_BOLD,
+                 width=16, anchor="w").pack(side="left")
+        LinkLabel(sup, "Reportar um problema (abre o GitHub)", self._report_bug).pack(side="left")
+
         lic = tk.Frame(tab, bg=_BG)
         lic.pack(fill="x", pady=2)
         tk.Label(lic, text="Licença", bg=_BG, fg=PALETTE["text"], font=FONT_BOLD,
@@ -351,6 +357,17 @@ class SettingsWindow:
         import webbrowser
 
         webbrowser.open(url)
+
+    def _report_bug(self) -> None:
+        """Abre o GitHub 'new issue' com ambiente + cauda do log já preenchidos
+        (montados localmente; o usuário revisa e posta no navegador)."""
+        from . import diagnostics
+
+        try:
+            url = diagnostics.bug_report_url()
+        except Exception:
+            url = diagnostics.GH_NEW_ISSUE
+        self._open_url(url)
 
     # -- verificar atualizações na aba Sobre -----------------------------------
 

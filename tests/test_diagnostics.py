@@ -8,6 +8,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import urllib.parse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -133,6 +134,47 @@ class FilterEntriesTests(unittest.TestCase):
         out = dg.filter_entries(self._entries(), date_br="29/06/2026", time_from="11:30")
         self.assertEqual(len(out), 1)               # só a de 12:00
         self.assertEqual(out[0]["level"], "ERROR")
+
+
+class BugReportUrlTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="scriba_bug_"))
+        self._orig_log = dg.LOG_FILE
+
+    def tearDown(self):
+        dg.LOG_FILE = self._orig_log
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _body(self, url: str) -> str:
+        qs = urllib.parse.urlparse(url).query
+        return urllib.parse.parse_qs(qs)["body"][0]
+
+    def test_url_e_corpo_preenchido(self):
+        f = self.tmp / "scriba.log"
+        f.write_text("29/06/2026 10:00:00 ERROR scriba: boom_no_log\n", encoding="utf-8")
+        dg.LOG_FILE = f
+        url = dg.bug_report_url()
+        self.assertTrue(url.startswith(dg.GH_NEW_ISSUE + "?"))
+        body = self._body(url)
+        self.assertIn("## Ambiente", body)
+        self.assertIn("## Log", body)
+        self.assertIn("boom_no_log", body)
+
+    def test_trunca_mantendo_o_fim(self):
+        f = self.tmp / "scriba.log"
+        f.write_text("\n".join(f"linha {i:04d} " + "z" * 60 for i in range(3000)), encoding="utf-8")
+        dg.LOG_FILE = f
+        url = dg.bug_report_url(tail_lines=500, max_url=4000)
+        self.assertLessEqual(len(url), 4000)
+        body = self._body(url)
+        self.assertIn("linha 2999", body)      # a linha mais recente sobrevive
+        self.assertNotIn("linha 2500", body)   # as mais antigas do tail são cortadas
+
+    def test_log_ausente_ainda_gera_url(self):
+        dg.LOG_FILE = self.tmp / "nao_existe.log"
+        url = dg.bug_report_url()
+        self.assertTrue(url.startswith(dg.GH_NEW_ISSUE))
+        self.assertIn("Ambiente", self._body(url))
 
 
 if __name__ == "__main__":

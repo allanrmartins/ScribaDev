@@ -114,6 +114,37 @@ def environment_report() -> str:
     ]) + "\n"
 
 
+GH_NEW_ISSUE = "https://github.com/allanrmartins/ScribaDev/issues/new"
+
+
+def bug_report_url(tail_lines: int = 50, max_url: int = 7500) -> str:
+    """URL do GitHub 'new issue' com título e corpo já preenchidos (ambiente + as
+    últimas linhas do log). O usuário revisa no navegador antes de postar — o corpo é
+    montado 100% local e nada é enviado por aqui. Como o repo é privado, a issue só é
+    criada se ele estiver logado no GitHub. Trunca o tail (mantendo as linhas mais
+    recentes) até a URL caber no limite de querystring do GitHub (~8 KB)."""
+    import urllib.parse
+
+    env = environment_report().rstrip()
+    lines = read_tail(LOG_FILE, n=2000).splitlines()
+    tail = lines[-tail_lines:] if tail_lines > 0 else []
+
+    def make(tail_list: list) -> str:
+        body = (
+            "## O que aconteceu\n\n_(descreva o problema aqui)_\n\n"
+            "## Passos para reproduzir\n\n1. \n2. \n\n"
+            f"## Ambiente\n\n```\n{env}\n```\n\n"
+            f"## Log (últimas {len(tail_list)} linhas)\n\n```\n" + "\n".join(tail_list) + "\n```\n"
+        )
+        return GH_NEW_ISSUE + "?" + urllib.parse.urlencode({"title": "Bug: ", "body": body})
+
+    url = make(tail)
+    while len(url) > max_url and len(tail) > 1:
+        tail = tail[len(tail) // 4 + 1:]  # descarta ~25% das linhas mais antigas, mantém o fim
+        url = make(tail)
+    return url
+
+
 def latest_failed(rec_dir) -> Path | None:
     """Pasta da reunião com falha (status failed/no_audio) mais RECENTE, ou None."""
     best, best_mtime = None, -1.0
