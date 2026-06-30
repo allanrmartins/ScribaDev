@@ -59,6 +59,7 @@ audio archived as Opus (~20 MB/h) ──► folder renamed with the note's title
 | Teams/Zoom (desktop) or browser meetings | auto-detection for both; Meet, Teams web and friends are confirmed via the window title |
 | NVIDIA GPU *(optional)* | ~10× faster transcription; falls back to CPU automatically |
 | [Claude Code](https://claude.com/claude-code) *(optional)* | only for the structured summary; without it you get the plain transcript |
+| [ffmpeg](https://ffmpeg.org/download.html) *(recommended)* | compresses the kept audio: raw WAV ~1.3 GB/h → **Opus ~20 MB/h**. `winget install ffmpeg`, then reopen the app. Without it, recordings stay as raw, huge `.wav` |
 | Headphones *(recommended)* | with speakers, other people's voices leak into your mic and get duplicated as "Me" |
 
 ## Install

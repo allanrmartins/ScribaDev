@@ -247,6 +247,7 @@ class SettingsWindow:
         fw, ct, pa = ver("faster-whisper"), ver("ctranslate2"), ver("pyaudiowpatch")
         diar_msg, diar_lvl = self._diarization_health(ver)
         torch_v = ver("torch")
+        ff_msg, ff_lvl = self._ffmpeg_health()
         return [
             ("Python", sys.version.split()[0], "ok"),
             core("Transcrição", f"faster-whisper {fw or '?'} · ctranslate2 {ct or '?'}", bool(fw and ct)),
@@ -254,9 +255,24 @@ class SettingsWindow:
             ("PyTorch", torch_v or "não instalado (opcional — só p/ a diarização)", "ok" if torch_v else "warn"),
             ("GPU", self._gpu_str(), "ok"),
             core("Áudio (WASAPI)", f"pyaudiowpatch {pa or '?'}", bool(pa)),
+            ("Compressão de áudio", ff_msg, ff_lvl),
             ("Bandeja / imagens", f"pystray {ver('pystray') or '—'} · Pillow {ver('Pillow') or '—'}", "ok"),
             ("Notificações", f"windows-toasts {ver('windows-toasts') or '—'}", "ok"),
         ]
+
+    def _ffmpeg_health(self) -> tuple:
+        """(mensagem, nível) do ffmpeg p/ a aba Sobre. O nível vem de util.ffmpeg_status
+        (mesma regra do `scriba doctor`); aqui só montamos o texto exibido."""
+        a = self.app.cfg.audio
+        fmt = (getattr(a, "archive_format", "opus") or "wav").strip().lower()
+        lvl = util.ffmpeg_status(getattr(a, "keep_audio", False), fmt)
+        if lvl == "ok":
+            return ("ffmpeg no PATH — áudio guardado é compactado", "ok")
+        if lvl == "err":
+            return (f"ffmpeg AUSENTE no PATH — o áudio guardado fica em WAV cru (~1,3 GB/h), não "
+                    f"{fmt} (~20 MB/h). Instale: winget install ffmpeg (e reabra o app)", "err")
+        return ("ffmpeg ausente no PATH — preciso dele p/ compactar o áudio guardado e p/ "
+                "re-transcrever áudio já comprimido", "warn")
 
     def _diarization_health(self, ver) -> tuple:
         """Saúde da diarização (pyannote) — (mensagem amigável, nível). Leve: usa

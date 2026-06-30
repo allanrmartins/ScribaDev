@@ -59,6 +59,7 @@ notas.md ──► exportado para Documentos\ScribaDev\
 | Teams/Zoom (desktop) ou reuniões no navegador | detecção automática em ambos; Meet, Teams web e afins são confirmados pelo título da janela |
 | GPU NVIDIA *(opcional)* | transcrição ~10× mais rápida; sem GPU cai para CPU automaticamente |
 | [Claude Code](https://claude.com/claude-code) *(opcional)* | só para o resumo estruturado; sem ele, sai a transcrição pura |
+| [ffmpeg](https://ffmpeg.org/download.html) *(recomendado)* | comprime o áudio guardado: WAV cru ~1,3 GB/h → **opus ~20 MB/h**. `winget install ffmpeg`, depois reabra o app. Sem ele, as gravações ficam em `.wav` cru e gigantes |
 | Fone de ouvido *(recomendado)* | com caixas de som, a voz dos outros vaza no seu microfone e aparece duplicada como "Eu" |
 
 ## Instalação

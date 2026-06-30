@@ -7,6 +7,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -86,6 +87,29 @@ class ResourcePathTests(unittest.TestCase):
         sys._MEIPASS = r"X:\bundle"
         self.assertEqual(util.resource_path("assets", "scriba.ico"),
                          Path(r"X:\bundle") / "scriba" / "assets" / "scriba.ico")
+
+
+class FfmpegStatusTests(unittest.TestCase):
+    """Regra de diagnóstico do ffmpeg, compartilhada pelo `scriba doctor` e a aba Sobre."""
+
+    def test_presente_eh_ok(self):
+        with mock.patch("shutil.which", return_value=r"C:\ffmpeg\bin\ffmpeg.exe"):
+            self.assertEqual(util.ffmpeg_status(True, "opus"), "ok")
+            self.assertEqual(util.ffmpeg_status(False, "wav"), "ok")
+
+    def test_ausente_querendo_comprimir_eh_err(self):
+        # keep_audio + opus/flac: é o caso em que os .wav ficam gigantes
+        with mock.patch("shutil.which", return_value=None):
+            self.assertEqual(util.ffmpeg_status(True, "opus"), "err")
+            self.assertEqual(util.ffmpeg_status(True, "flac"), "err")
+            self.assertEqual(util.ffmpeg_status(True, "OPUS"), "err")  # case-insensitive
+
+    def test_ausente_sem_impacto_imediato_eh_warn(self):
+        with mock.patch("shutil.which", return_value=None):
+            self.assertEqual(util.ffmpeg_status(False, "opus"), "warn")  # não guarda áudio
+            self.assertEqual(util.ffmpeg_status(True, "wav"), "warn")     # formato cru de propósito
+            self.assertEqual(util.ffmpeg_status(True, ""), "warn")
+            self.assertEqual(util.ffmpeg_status(True, None), "warn")
 
 
 if __name__ == "__main__":

@@ -445,6 +445,22 @@ def cmd_doctor(args) -> int:
         _print(_FAIL, "Dispositivos de áudio", str(e))
         failures += 1
 
+    # Compressão do áudio guardado (ffmpeg): WAV cru -> opus/flac. Sem ele os arquivos
+    # ficam gigantes (~1,3 GB/h); também decodifica áudio comprimido numa re-transcrição.
+    keep = bool(cfg.audio.keep_audio) if cfg else False
+    fmt = ((cfg.audio.archive_format if cfg else "opus") or "wav").strip().lower()
+    lvl = util.ffmpeg_status(keep, fmt)
+    if lvl == "ok":
+        _print(_OK, "Compressão de áudio (ffmpeg)", "no PATH — áudio guardado é compactado")
+    elif lvl == "err":
+        _print(_FAIL, "Compressão de áudio (ffmpeg)",
+               f"AUSENTE no PATH — o áudio fica em WAV cru (~1,3 GB/h), não {fmt} (~20 MB/h). "
+               "Instale: winget install ffmpeg")
+        failures += 1
+    else:
+        _print(_WARN, "Compressão de áudio (ffmpeg)",
+               "ausente no PATH — necessário p/ compactar o áudio guardado e re-transcrever áudio comprimido")
+
     # Diarização
     if cfg and cfg.diarization.enabled:
         try:

@@ -273,6 +273,20 @@ def ffmpeg_command() -> list[str] | None:
     return [exe] if exe else None
 
 
+def ffmpeg_status(keep_audio: bool, archive_format: str) -> str:
+    """Nível de saúde do ffmpeg p/ a compressão do áudio guardado — regra ÚNICA usada
+    pelo `scriba doctor` e pela aba Sobre:
+      'ok'   — ffmpeg no PATH;
+      'err'  — ausente E o usuário quer guardar áudio comprimido (keep + opus/flac):
+               é aí que os .wav ficam gigantes (~1,3 GB/h em vez de ~20 MB/h);
+      'warn' — ausente, mas sem impacto imediato (não guarda áudio, ou formato wav).
+    """
+    if shutil.which("ffmpeg"):
+        return "ok"
+    fmt = (archive_format or "wav").strip().lower()
+    return "err" if (keep_audio and fmt in ("opus", "flac")) else "warn"
+
+
 def claude_command() -> list[str] | None:
     """Prefixo de comando para invocar o claude CLI, ou None se não instalado.
 
