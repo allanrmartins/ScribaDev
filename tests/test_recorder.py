@@ -6,6 +6,7 @@ constante paWASAPI), já que _pick_mic faz `import pyaudiowpatch` lazy.
 
 import struct
 import sys
+import time
 import types
 import unittest
 from pathlib import Path
@@ -13,6 +14,50 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scriba import audioprobe, recorder  # noqa: E402
+from scriba.recorder import _StreamRecorder  # noqa: E402
+
+
+class _FakeStream:
+    def __init__(self, active=True, raises=False):
+        self._active = active
+        self._raises = raises
+
+    def is_active(self):
+        if self._raises:
+            raise OSError("device removido")
+        return self._active
+
+    def stop_stream(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class _FakePaOpen:
+    def __init__(self, raises=False):
+        self.raises = raises
+        self.opened = None
+
+    def open(self, **kw):
+        if self.raises:
+            raise OSError("não consegui abrir")
+        self.opened = kw
+        return types.SimpleNamespace(stop_stream=lambda: None, close=lambda: None)
+
+
+def _sr(rate=48000, channels=2, pad_silence=False, active=True, last_age=0.0, active_raises=False):
+    sr = _StreamRecorder.__new__(_StreamRecorder)  # sem __init__ (não abre PortAudio)
+    sr.rate, sr.channels, sr.pad_silence = rate, channels, pad_silence
+    sr.device_name = "Antigo"
+    sr.last_data = time.monotonic() - last_age
+    sr._callback = lambda *a: None
+    sr.stream = _FakeStream(active=active, raises=active_raises)
+    return sr
+
+
+def _info(rate=48000, ch=2, idx=5, name="Novo Device"):
+    return {"defaultSampleRate": rate, "maxInputChannels": ch, "index": idx, "name": name}
 
 
 def _dev(name, idx, ch=2, host=0, loop=False):
@@ -93,6 +138,60 @@ class PeakLevelTests(unittest.TestCase):
 
     def test_buffer_de_tamanho_impar_nao_quebra(self):
         self.assertIsInstance(recorder.peak_level(b"\x00\x01\x02"), float)
+
+
+class ReopenTests(unittest.TestCase):
+    """_StreamRecorder.reopen: troca o device só se o formato bater com o WAV aberto."""
+
+    def setUp(self):
+        self._had = sys.modules.get("pyaudiowpatch")
+        sys.modules["pyaudiowpatch"] = types.SimpleNamespace(paInt16=8)
+
+    def tearDown(self):
+        if self._had is not None:
+            sys.modules["pyaudiowpatch"] = self._had
+        else:
+            sys.modules.pop("pyaudiowpatch", None)
+
+    def test_reabre_quando_formato_bate(self):
+        sr, pa = _sr(rate=48000, channels=2), _FakePaOpen()
+        self.assertTrue(sr.reopen(pa, _info(rate=48000, ch=2, idx=7, name="Novo Mic")))
+        self.assertEqual(sr.device_name, "Novo Mic")
+        self.assertEqual(pa.opened["input_device_index"], 7)
+
+    def test_rejeita_rate_diferente_sem_abrir(self):
+        sr, pa = _sr(rate=48000, channels=2), _FakePaOpen()
+        old = sr.stream
+        self.assertFalse(sr.reopen(pa, _info(rate=16000)))
+        self.assertIs(sr.stream, old)     # mantém o stream antigo
+        self.assertIsNone(pa.opened)      # nem tentou abrir
+
+    def test_rejeita_canais_diferentes(self):
+        self.assertFalse(_sr(rate=48000, channels=1).reopen(_FakePaOpen(), _info(rate=48000, ch=2)))
+
+    def test_open_que_falha_mantem_o_antigo(self):
+        sr = _sr(rate=48000, channels=2)
+        old = sr.stream
+        self.assertFalse(sr.reopen(_FakePaOpen(raises=True), _info()))
+        self.assertIs(sr.stream, old)
+
+
+class LooksDeadTests(unittest.TestCase):
+    def test_ativo_e_com_dados_recentes_esta_vivo(self):
+        self.assertFalse(_sr(active=True, last_age=0.0, pad_silence=False).looks_dead())
+
+    def test_stream_inativo_esta_morto(self):
+        self.assertTrue(_sr(active=False).looks_dead())
+
+    def test_is_active_que_explode_conta_como_morto(self):
+        self.assertTrue(_sr(active_raises=True).looks_dead())
+
+    def test_mic_travado_sem_dados_esta_morto(self):
+        self.assertTrue(_sr(active=True, last_age=99, pad_silence=False).looks_dead())
+
+    def test_loopback_quieto_em_silencio_nao_eh_morte(self):
+        # loopback (pad_silence=True) fica sem dados em silêncio legítimo — não é morte
+        self.assertFalse(_sr(active=True, last_age=99, pad_silence=True).looks_dead())
 
 
 class DedupTests(unittest.TestCase):

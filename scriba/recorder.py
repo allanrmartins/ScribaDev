@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import queue
 import struct
 import threading
@@ -13,8 +14,12 @@ from pathlib import Path
 from . import util
 from .config import Config
 
+log = logging.getLogger("scriba.recorder")
+
 _HEADER_PATCH_INTERVAL = 5.0  # s
 _SILENCE_THRESHOLD = 0.5  # s atrás do relógio antes de injetar silêncio
+_MIC_STALL_SECONDS = 5.0  # mic sem entregar dados por mais que isso = device caiu (#22)
+_DEVICE_POLL_SECONDS = 2.0  # ronda do watcher de troca de dispositivo
 
 
 class CrashSafeWav:
@@ -96,14 +101,57 @@ class _StreamRecorder:
             stream_callback=self._callback,
         )
         self.offset_seconds = time.monotonic() - t0
+        self.last_data = time.monotonic()  # p/ detectar stream que parou (device caiu)
         self._writer = threading.Thread(target=self._writer_loop, daemon=True, name=f"writer-{name}")
         self._writer.start()
 
     def _callback(self, in_data, frame_count, time_info, status):
         import pyaudiowpatch as pyaudio
 
+        self.last_data = time.monotonic()
         self._q.put(bytes(in_data))
         return (None, pyaudio.paContinue)
+
+    def looks_dead(self) -> bool:
+        """Heurística de 'o device sumiu': o stream não está mais ativo — ou (só p/ o
+        mic, que entrega buffers continuamente) ficou sem dados por muito tempo. O
+        loopback fica quieto em silêncio legítimo, então só conta o is_active dele."""
+        try:
+            if not self.stream.is_active():
+                return True
+        except Exception:
+            return True
+        if not self.pad_silence and (time.monotonic() - self.last_data) > _MIC_STALL_SECONDS:
+            return True
+        return False
+
+    def reopen(self, pa, device_info: dict) -> bool:
+        """Reabre o stream num novo device mantendo o MESMO WAV e thread escritora — só
+        se rate e canais baterem com o WAV já aberto (senão a linha do tempo corromperia;
+        nesse caso retorna False e mantém o stream antigo, degradando com graça)."""
+        import pyaudiowpatch as pyaudio
+
+        if int(device_info["defaultSampleRate"]) != self.rate:
+            return False
+        if max(1, min(2, int(device_info["maxInputChannels"]))) != self.channels:
+            return False
+        try:
+            new_stream = pa.open(
+                format=pyaudio.paInt16, channels=self.channels, rate=self.rate, input=True,
+                input_device_index=int(device_info["index"]), frames_per_buffer=1024,
+                stream_callback=self._callback,
+            )
+        except Exception:
+            return False
+        old, self.stream = self.stream, new_stream
+        self.device_name = str(device_info["name"])
+        self.last_data = time.monotonic()
+        try:
+            old.stop_stream()
+            old.close()
+        except Exception:
+            pass
+        return True
 
     def _pad_if_behind(self) -> None:
         expected = int((time.monotonic() - self.t0) * self.rate)
@@ -255,6 +303,11 @@ class Recording:
             self.loopback = _StreamRecorder(
                 self.pa, "loopback", self.folder / "loopback.wav", lb_info, self.t0, pad_silence=True
             )
+            # watcher de troca de dispositivo (#22): reabre streams que caírem no meio da call
+            self._switches: list = []
+            self._stop_watch = threading.Event()
+            self._watcher = threading.Thread(target=self._device_watch, daemon=True, name="devwatch")
+            self._watcher.start()
         except Exception:
             self.pa.terminate()
             raise
@@ -281,6 +334,37 @@ class Recording:
     def duration_seconds(self) -> float:
         return time.monotonic() - self.t0
 
+    def _device_watch(self) -> None:
+        """Ronda em thread: reabre streams cujo device caiu (ex.: fone desplugado no
+        meio da call). TUDO defensivo — nunca derruba a gravação."""
+        while not self._stop_watch.wait(_DEVICE_POLL_SECONDS):
+            try:
+                self._check_devices()
+            except Exception:
+                log.exception("watcher de dispositivo falhou (ignorado)")
+
+    def _check_devices(self) -> None:
+        dead = [(n, s) for n, s in (("mic", self.mic), ("loopback", self.loopback)) if s.looks_dead()]
+        if not dead:
+            return
+        # só enumera no processo principal DEPOIS que a sonda (subprocesso) confirma que o
+        # PortAudio não vai abortar com assert de CRT durante a troca de dispositivo
+        if util.run_audio_probe() is None:
+            return  # ainda instável — tenta na próxima ronda
+        pickers = {"mic": _pick_mic, "loopback": _pick_loopback}
+        for name, s in dead:
+            try:
+                info = pickers[name](self.cfg, self.pa)
+                if s.reopen(self.pa, info):
+                    self._switches.append({
+                        "stream": name,
+                        "device": str(info["name"]),
+                        "at_seconds": round(self.duration_seconds(), 1),
+                    })
+                    log.info("dispositivo reaberto no meio da call: %s -> %s", name, info["name"])
+            except Exception:
+                log.exception("falha ao reabrir o stream %s", name)
+
     def _write_meta(self, status: str, extra: dict | None = None) -> None:
         meta = {
             "started_at": self.started_at.isoformat(timespec="seconds"),
@@ -292,6 +376,8 @@ class Recording:
         }
         if getattr(self, "meeting_title", ""):
             meta["meeting_title"] = self.meeting_title
+        if getattr(self, "_switches", None):
+            meta["device_switches"] = self._switches  # trocas de dispositivo no meio (#22)
         if extra:
             meta.update(extra)
         util.atomic_write_text(
@@ -314,6 +400,9 @@ class Recording:
 
     def stop(self, status: str = "recorded") -> dict:
         duration = self.duration_seconds()
+        if getattr(self, "_stop_watch", None) is not None:
+            self._stop_watch.set()  # encerra o watcher antes de fechar os streams
+            self._watcher.join(timeout=1)
         self.mic.stop()
         self.loopback.stop()
         self.pa.terminate()
