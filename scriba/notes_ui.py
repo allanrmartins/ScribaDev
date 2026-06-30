@@ -153,6 +153,8 @@ class NotesWindow:
         self.copy_btn.pack(side="left")
         self.copy_tr_btn = ModernButton(copy_row, "Copiar transcrição", self._copy_transcript, width=150)
         self.copy_tr_btn.pack(side="left", padx=(8, 0))
+        self.chat_btn = ModernButton(copy_row, "Perguntar à reunião", self._open_chat, width=165)
+        self.chat_btn.pack(side="left", padx=(8, 0))
         # rotular vozes (#1): só aparece quando a reunião selecionada tem diarização
         # (voices.json na pasta da gravação) — empacotado sob demanda
         self.label_voices_btn = ModernButton(copy_row, "Rotular vozes…", self._open_speaker_labeler, width=130)
@@ -665,6 +667,18 @@ class NotesWindow:
             return
         self._set_clip(tr)
         self._flash(self.copy_tr_btn, "✓ Copiado", "Copiar transcrição")
+
+    def _open_chat(self) -> None:
+        """Abre a janela de chat sobre a nota selecionada (resumo + transcrição) — #22."""
+        md = self._selected_md()
+        if md is None:
+            self._flash(self.chat_btn, "Selecione uma nota", "Perguntar à reunião")
+            return
+        from .chat_ui import ChatWindow
+
+        title = self.note_title_var.get().strip() or "reunião"
+        self._chat = ChatWindow(self.win, self._strip_frontmatter(md), title)  # ref evita GC
+        self._chat.show()
 
     def _recording_folder_for(self, note_path: Path) -> Path:
         """Pasta da gravação correspondente à nota exportada.
