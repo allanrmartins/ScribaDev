@@ -355,6 +355,17 @@ def separator(parent) -> tk.Frame:
     return tk.Frame(parent, height=1, bg=PALETTE["border"])
 
 
+def group_box(parent, title: str) -> tk.LabelFrame:
+    """Caixa com título (tema escuro) p/ agrupar configurações de um mesmo assunto (#22).
+    Empacote os widgets do grupo dentro do retorno; lembre do padding ao usar."""
+    return tk.LabelFrame(
+        parent, text=" " + title + " ",
+        bg=PALETTE["bg"], fg=PALETTE["text"], font=FONT_BOLD,
+        bd=0, highlightthickness=1, highlightbackground=PALETTE["border"],
+        highlightcolor=PALETTE["border"], labelanchor="nw", padx=12, pady=10,
+    )
+
+
 class ScrollableFrame(tk.Frame):
     """Área com rolagem vertical (Canvas + Scrollbar). Empacote o conteúdo em `.body`.
 

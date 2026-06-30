@@ -92,6 +92,7 @@ provider = "claude"
 model = "claude-sonnet-4-6"  # provider claude: ou "claude-opus-4-8" (mais capaz, mais caro)
 ollama_model = "llama3.1"    # provider ollama (rode `ollama pull <modelo>` antes)
 openai_model = "gpt-4o-mini" # provider openai-compatível
+chat_model = ""              # chat "Perguntar à reunião"; vazio = mesmo do resumo (ex.: claude-haiku-4-5)
 # URLs/chave POR PROVIDER (a UI grava aqui; permite alternar sem recolar):
 ollama_base_url = ""         # provider ollama: vazio = http://localhost:11434
 openai_base_url = ""         # provider openai: endpoint completo (inclua /v1)
@@ -183,6 +184,7 @@ class Summary:
     model: str = "claude-sonnet-4-6"  # provider claude
     ollama_model: str = "llama3.1"    # provider ollama
     openai_model: str = "gpt-4o-mini"  # provider openai-compativel
+    chat_model: str = ""              # modelo do chat "Perguntar à reunião"; vazio = mesmo do resumo
     # base_url/api_key: LEGADO compartilhado. Lidos só como fallback; a UI grava nos
     # campos por-provider abaixo. Mantidos para ler configs antigas sem perder nada.
     base_url: str = ""
@@ -344,6 +346,7 @@ provider = {_s(s.provider)}
 model = {_s(s.model)}                # provider claude
 ollama_model = {_s(s.ollama_model)}  # provider ollama
 openai_model = {_s(s.openai_model)}  # provider openai-compatível
+chat_model = {_s(s.chat_model)}      # chat "Perguntar à reunião"; vazio = mesmo do resumo
 ollama_base_url = {_s(s.ollama_base_url)}   # provider ollama: vazio = http://localhost:11434
 openai_base_url = {_s(s.openai_base_url)}   # provider openai: endpoint (inclua /v1)
 openai_api_key = {_s(_maybe_protect(s.openai_api_key))}   # provider openai: chave BYO, cifrada (DPAPI)

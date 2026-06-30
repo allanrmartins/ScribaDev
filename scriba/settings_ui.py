@@ -24,6 +24,7 @@ from .widgets import (
     Stepper,
     ToggleSwitch,
     enable_dark_titlebar,
+    group_box,
     make_entry,
     make_secret_entry,
     make_text,
@@ -35,11 +36,14 @@ _BG = PALETTE["bg"]
 
 # rótulo amigável -> ID real passado ao claude via --model
 _SUMMARY_MODELS = {
+    "Haiku 4.5": "claude-haiku-4-5",
     "Sonnet 4.6": "claude-sonnet-4-6",
     "Opus 4.8": "claude-opus-4-8",
 }
 _MODEL_LABELS = {v: k for k, v in _SUMMARY_MODELS.items()}
-_MODEL_LABELS.update({"sonnet": "Sonnet 4.6", "opus": "Opus 4.8"})  # aliases antigos
+_MODEL_LABELS.update({"sonnet": "Sonnet 4.6", "opus": "Opus 4.8", "haiku": "Haiku 4.5"})  # aliases antigos
+
+_CHAT_MODEL_DEFAULT = "Mesmo do resumo"  # rótulo p/ chat_model vazio (#22)
 
 # rótulo amigável -> id do provedor de IA (camada em scriba/ai.py)
 _PROVIDERS = {"Claude (CLI)": "claude", "Ollama (local)": "ollama", "OpenAI-compatível": "openai"}
@@ -154,16 +158,18 @@ class SettingsWindow:
         self.nb = ttk.Notebook(body)
         self._scrolls: list[ScrollableFrame] = []
         self.tab_rec = self._add_tab("Gravação")
+        self.tab_transcription = self._add_tab("Transcrição")
+        self.tab_ia = self._add_tab("IA")
         self.tab_detect = self._add_tab("Detecção")
         self.tab_dirs = self._add_tab("Pastas")
-        self.tab_summary = self._add_tab("Resumo")
         self.tab_about = self._add_tab("Sobre")
         self.nb.pack(fill="both", expand=True)
 
         self._build_recording_tab()
+        self._build_transcription_tab()
+        self._build_ia_tab()
         self._build_detection_tab()
         self._build_dirs_tab()
-        self._build_summary_tab()
         self._build_about_tab()
         for s in self._scrolls:
             s.bind_mousewheel()
@@ -176,6 +182,12 @@ class SettingsWindow:
         scroll.body.configure(padx=14, pady=14)
         self._scrolls.append(scroll)
         return scroll
+
+    def _group(self, tab, title: str) -> tk.LabelFrame:
+        """Cria um grupo (box com título) já empacotado na aba; popule o retorno. (#22)"""
+        box = group_box(tab, title)
+        box.pack(fill="x", pady=(0, 12))
+        return box
 
     # As notas têm janela própria (notes_ui.NotesWindow); aqui ficam só os
     # atalhos de pasta usados pela aba Pastas.
@@ -402,22 +414,72 @@ class SettingsWindow:
 
     def _build_recording_tab(self) -> None:
         tab = self.tab_rec.body
-        self._build_device_selectors(tab)
-        self.auto_record_var = tk.BooleanVar()
-        self._toggle_row(tab, "Gravar automaticamente ao detectar a call", self.auto_record_var)
-        self.overlay_var = tk.BooleanVar()
-        self._toggle_row(tab, "Mostrar pílula flutuante durante a call", self.overlay_var)
-        self.autostart_var = tk.BooleanVar()
-        self._toggle_row(tab, "Iniciar com o Windows", self.autostart_var)
+        dev = self._group(tab, "Dispositivos de áudio")
+        self._build_device_selectors(dev)
 
+        auto = self._group(tab, "Gravação automática")
+        self.auto_record_var = tk.BooleanVar()
+        self._toggle_row(auto, "Gravar automaticamente ao detectar a call", self.auto_record_var)
+        self.overlay_var = tk.BooleanVar()
+        self._toggle_row(auto, "Mostrar pílula flutuante durante a call", self.overlay_var)
+        self.autostart_var = tk.BooleanVar()
+        self._toggle_row(auto, "Iniciar com o Windows", self.autostart_var)
+
+        hk_row = tk.Frame(auto, bg=_BG)
+        hk_row.pack(fill="x", pady=6)
+        tk.Label(hk_row, text="Atalho global gravar/parar", bg=_BG, fg=PALETTE["text"], font=FONT).pack(side="left")
+        self.hotkey_var = tk.StringVar(value="")
+        LinkLabel(hk_row, "limpar", lambda: self.hotkey_var.set("")).pack(side="right", padx=(8, 0))
+        ModernButton(hk_row, "Gravar atalho", self._capture_hotkey).pack(side="right", padx=(8, 0))
+        self.hotkey_label_var = tk.StringVar(value="desativado")
+        tk.Label(hk_row, textvariable=self.hotkey_label_var, bg=PALETTE["field"], fg=PALETTE["text"],
+                 font=("Consolas", 9), padx=10, pady=4).pack(side="right")
+        self.hotkey_var.trace_add(
+            "write", lambda *a: self.hotkey_label_var.set(self.hotkey_var.get() or "desativado")
+        )
+
+        min_row = tk.Frame(auto, bg=_BG)
+        min_row.pack(fill="x", pady=6)
+        tk.Label(min_row, text="Duração mínima para virar nota", bg=_BG, fg=PALETTE["text"], font=FONT).pack(side="left")
+        self.min_secs_var = tk.IntVar(value=30)
+        Stepper(min_row, self.min_secs_var, step=5, lo=0, hi=600).pack(side="right")
+        tk.Label(
+            auto,
+            text="Gravações automáticas mais curtas que isso são ignoradas (tela de pré-join, teste de microfone).\n"
+            "Não vale para gravações iniciadas por você (⏺ ou ■).",
+            bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), justify="left",
+        ).pack(anchor="w", pady=(2, 0))
+
+    # ================================================= aba Transcrição =========
+
+    def _build_transcription_tab(self) -> None:
+        tab = self.tab_transcription.body
+
+        motor = self._group(tab, "Motor de transcrição")
+        self.stt_conn_status_var = tk.StringVar(value="")
+        eng_row = tk.Frame(motor, bg=_BG)
+        eng_row.pack(fill="x", pady=(0, 6))
+        tk.Label(eng_row, text="Transcrição", bg=_BG, fg=PALETTE["text"], font=FONT).pack(side="left")
+        self.stt_engine_var = tk.StringVar()
+        self._stt_engine_combo = ttk.Combobox(
+            eng_row, textvariable=self.stt_engine_var, values=list(_STT_ENGINES),
+            state="readonly", width=26, font=FONT,
+        )
+        self._stt_engine_combo.pack(side="right")
+        self._stt_engine_combo.bind("<<ComboboxSelected>>", lambda e: self._on_stt_engine_change())
+        self._stt_area = tk.Frame(motor, bg=_BG)
+        self._stt_area.pack(fill="x")
+        self._build_stt_frames(self._stt_area)
+
+        diar = self._group(tab, "Diarização (separar participantes por voz)")
         self.diar_var = tk.BooleanVar()
-        self._toggle_row(tab, "Separar participantes por voz (diarização local)", self.diar_var)
-        tok_row = tk.Frame(tab, bg=_BG)
+        self._toggle_row(diar, "Separar participantes por voz (local)", self.diar_var)
+        tok_row = tk.Frame(diar, bg=_BG)
         tok_row.pack(fill="x", pady=(0, 2))
         tk.Label(tok_row, text="Token Hugging Face", bg=_BG, fg=PALETTE["text"], font=FONT).pack(side="left")
         self.hf_token_var = tk.StringVar()
         make_secret_entry(tok_row, self.hf_token_var, width=34).pack(side="right")
-        hint_row = tk.Frame(tab, bg=_BG)
+        hint_row = tk.Frame(diar, bg=_BG)
         hint_row.pack(fill="x", pady=(0, 6))
         tk.Label(
             hint_row,
@@ -435,23 +497,23 @@ class SettingsWindow:
             ).pack(side="left", padx=3)
 
         self.ask_speakers_var = tk.BooleanVar()
-        self._toggle_row(tab, "Perguntar o nº de participantes ao fim da call", self.ask_speakers_var)
-        to_row = tk.Frame(tab, bg=_BG)
+        self._toggle_row(diar, "Perguntar o nº de participantes ao fim da call", self.ask_speakers_var)
+        to_row = tk.Frame(diar, bg=_BG)
         to_row.pack(fill="x", pady=(0, 2))
         tk.Label(to_row, text="Tempo até cair no automático", bg=_BG, fg=PALETTE["text"], font=FONT).pack(side="left")
         self.ask_timeout_var = tk.IntVar(value=90)
         Stepper(to_row, self.ask_timeout_var, step=15, lo=0, hi=600).pack(side="right")
         tk.Label(
-            tab,
-            text="Com a diarização ligada, ao encerrar a call abre uma janela no topo perguntando quantas "
-                 "pessoas (além de você) participaram — trava a separação por voz nesse número.\n"
-                 "0 s = espera você responder; senão, sem resposta cai no modo automático.",
-            bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), justify="left", wraplength=660,
+            diar,
+            text="Com a diarização ligada, ao encerrar a call abre uma janela perguntando quantas "
+                 "pessoas (além de você) participaram — trava a separação nesse número.\n"
+                 "0 s = espera você responder; senão, sem resposta cai no automático.",
+            bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), justify="left", wraplength=640,
         ).pack(anchor="w", pady=(2, 0))
 
-        mv_row = tk.Frame(tab, bg=_BG)
+        mv_row = tk.Frame(diar, bg=_BG)
         mv_row.pack(fill="x", pady=(6, 0))
-        tk.Label(mv_row, text="Limitar vozes na diarização (0 = automático)", bg=_BG,
+        tk.Label(mv_row, text="Limitar vozes (0 = automático)", bg=_BG,
                  fg=PALETTE["text"], font=FONT).pack(side="left")
         self.max_speakers_var = tk.IntVar(value=0)
         Stepper(mv_row, self.max_speakers_var, step=1, lo=0, hi=12, suffix="").pack(side="right")
@@ -460,52 +522,21 @@ class SettingsWindow:
         Stepper(mv_row, self.min_speakers_var, step=1, lo=0, hi=12, suffix="").pack(side="right")
         tk.Label(mv_row, text="mín", bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8)).pack(side="right", padx=(12, 4))
         tk.Label(
-            tab,
+            diar,
             text="Independe do popup acima: vale quando ele está desligado ou cai no automático. "
                  "Útil em reuniões recorrentes de tamanho conhecido (ex.: daily de 4).",
-            bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), justify="left", wraplength=660,
+            bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), justify="left", wraplength=640,
         ).pack(anchor="w", pady=(2, 0))
 
-        hk_row = tk.Frame(tab, bg=_BG)
-        hk_row.pack(fill="x", pady=6)
-        tk.Label(hk_row, text="Atalho global gravar/parar", bg=_BG, fg=PALETTE["text"], font=FONT).pack(side="left")
-        self.hotkey_var = tk.StringVar(value="")
-        LinkLabel(hk_row, "limpar", lambda: self.hotkey_var.set("")).pack(side="right", padx=(8, 0))
-        ModernButton(hk_row, "Gravar atalho", self._capture_hotkey).pack(side="right", padx=(8, 0))
-        self.hotkey_label_var = tk.StringVar(value="desativado")
-        tk.Label(hk_row, textvariable=self.hotkey_label_var, bg=PALETTE["field"], fg=PALETTE["text"],
-                 font=("Consolas", 9), padx=10, pady=4).pack(side="right")
-        self.hotkey_var.trace_add(
-            "write", lambda *a: self.hotkey_label_var.set(self.hotkey_var.get() or "desativado")
-        )
-
-        min_row = tk.Frame(tab, bg=_BG)
-        min_row.pack(fill="x", pady=6)
-        tk.Label(min_row, text="Duração mínima para virar nota", bg=_BG, fg=PALETTE["text"], font=FONT).pack(side="left")
-        self.min_secs_var = tk.IntVar(value=30)
-        Stepper(min_row, self.min_secs_var, step=5, lo=0, hi=600).pack(side="right")
+        vocab = self._group(tab, "Vocabulário / hotwords")
         tk.Label(
-            tab,
-            text="Gravações automáticas mais curtas que isso são ignoradas (tela de pré-join, teste de microfone).\n"
-            "Não vale para gravações iniciadas por você (⏺ ou ■).",
-            bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), justify="left",
-        ).pack(anchor="w", pady=(2, 0))
-
-        # -- Transcrição (motor local / nuvem) ---------------------------------
-        self.stt_conn_status_var = tk.StringVar(value="")
-        eng_row = tk.Frame(tab, bg=_BG)
-        eng_row.pack(fill="x", pady=(10, 6))
-        tk.Label(eng_row, text="Transcrição", bg=_BG, fg=PALETTE["text"], font=FONT).pack(side="left")
-        self.stt_engine_var = tk.StringVar()
-        self._stt_engine_combo = ttk.Combobox(
-            eng_row, textvariable=self.stt_engine_var, values=list(_STT_ENGINES),
-            state="readonly", width=26, font=FONT,
-        )
-        self._stt_engine_combo.pack(side="right")
-        self._stt_engine_combo.bind("<<ComboboxSelected>>", lambda e: self._on_stt_engine_change())
-        self._stt_area = tk.Frame(tab, bg=_BG)
-        self._stt_area.pack(fill="x")
-        self._build_stt_frames(self._stt_area)
+            vocab,
+            text="Termos e siglas da sua área p/ o Whisper acertar (ex.: SAP ABAP BAPI Fiori). "
+            "Separe por espaço. Em branco = sem vocabulário guiado.",
+            bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), justify="left", wraplength=640,
+        ).pack(anchor="w", pady=(0, 4))
+        self.hotwords = make_text(vocab, height=3)
+        self.hotwords.pack(fill="x", pady=(0, 2))
 
     # -- seletores de dispositivo (mic / loopback) na aba Gravação (#22) -------
     _DEV_DEFAULT = "Padrão do Windows"
@@ -513,8 +544,6 @@ class SettingsWindow:
     def _build_device_selectors(self, tab) -> None:
         self.mic_device_var = tk.StringVar()
         self.loopback_device_var = tk.StringVar()
-        tk.Label(tab, text="Dispositivos de áudio", bg=_BG, fg=PALETTE["text"],
-                 font=FONT_BOLD).pack(anchor="w", pady=(0, 4))
         mic_row = tk.Frame(tab, bg=_BG)
         mic_row.pack(fill="x", pady=2)
         tk.Label(mic_row, text="Microfone (Eu)", bg=_BG, fg=PALETTE["text"], font=FONT,
@@ -545,7 +574,6 @@ class SettingsWindow:
                  font=("Segoe UI", 8)).pack(side="left", padx=8)
         self._mic_level = self._level_bar(tab, "Eu (microfone)")
         self._lb_level = self._level_bar(tab, "Participantes (saída)")
-        separator(tab).pack(fill="x", pady=(8, 8))
 
     def _refresh_device_lists(self) -> None:
         """Enumera os dispositivos num SUBPROCESSO (o PortAudio pode abortar com assert
@@ -773,8 +801,9 @@ class SettingsWindow:
 
     def _build_detection_tab(self) -> None:
         tab = self.tab_detect.body
+        box = self._group(tab, "Apps e reuniões monitorados")
         tk.Label(
-            tab,
+            box,
             text="Quais apps e reuniões no navegador o ScribaDev monitora (mic aberto = call ativa).\n"
             "Listas separadas por vírgula. Os presets SOMAM aos campos, não apagam.",
             bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), justify="left",
@@ -782,22 +811,22 @@ class SettingsWindow:
 
         self.apps_var = tk.StringVar()
         self._labeled_entry(
-            tab, "Apps de reunião monitorados", self.apps_var,
+            box, "Apps de reunião monitorados", self.apps_var,
             "Parte do nome do processo: teams, zoom, webex, slack.",
         )
         self.browsers_var = tk.StringVar()
         self._labeled_entry(
-            tab, "Navegadores monitorados", self.browsers_var,
+            box, "Navegadores monitorados", self.browsers_var,
             "Reunião na web é detectada nestes navegadores. Em branco desliga a camada web.",
         )
         self.titles_var = tk.StringVar()
         self._labeled_entry(
-            tab, "Títulos de janela de reunião no navegador", self.titles_var,
+            box, "Títulos de janela de reunião no navegador", self.titles_var,
             "Palavra no título da aba: Meet, Microsoft Teams, Zoom, Webex. "
             "Em branco = qualquer site usando o microfone conta.",
         )
 
-        preset_row = tk.Frame(tab, bg=_BG)
+        preset_row = tk.Frame(box, bg=_BG)
         preset_row.pack(fill="x", pady=(8, 0))
         tk.Label(preset_row, text="Presets:", bg=_BG, fg=PALETTE["text"], font=FONT).pack(side="left", padx=(0, 4))
         for name in _DETECTION_PRESETS:
@@ -827,30 +856,15 @@ class SettingsWindow:
 
     def _build_dirs_tab(self) -> None:
         tab = self.tab_dirs.body
+        pastas = self._group(tab, "Pastas")
         self.export_var = tk.StringVar()
-        self._path_row(tab, "Pasta das notas (.md)", self.export_var, self._browse_export,
+        self._path_row(pastas, "Pasta das notas (.md)", self.export_var, self._browse_export,
                        "Vazio = Documentos\\ScribaDev")
         self.recordings_var = tk.StringVar()
-        self._path_row(tab, "Pasta das gravações", self.recordings_var, self._browse_recordings,
+        self._path_row(pastas, "Pasta das gravações", self.recordings_var, self._browse_recordings,
                        "Vazio = C:\\temp\\scribadev\\gravacoes (criada automaticamente)")
-        self.keep_audio_var = tk.BooleanVar()
-        self._toggle_row(tab, "Manter o áudio da reunião após transcrever", self.keep_audio_var)
-
-        ret_row = tk.Frame(tab, bg=_BG)
-        ret_row.pack(fill="x", pady=6)
-        tk.Label(ret_row, text="Apagar gravações já transcritas após (dias)", bg=_BG,
-                 fg=PALETTE["text"], font=FONT).pack(side="left")
-        self.retention_var = tk.IntVar(value=30)
-        Stepper(ret_row, self.retention_var, step=5, lo=0, hi=3650, suffix="").pack(side="right")
-        tk.Label(
-            tab,
-            text="0 = nunca apagar. Remove a pasta da gravação (áudio + transcrição) em disco;\n"
-            "a nota final (.md) na pasta de notas NÃO é tocada.",
-            bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), justify="left",
-        ).pack(anchor="w", pady=(2, 8))
-
-        actions = tk.Frame(tab, bg=_BG)
-        actions.pack(anchor="w", pady=(10, 0))
+        actions = tk.Frame(pastas, bg=_BG)
+        actions.pack(anchor="w", pady=(6, 0))
         LinkLabel(actions, "Abrir notas", self._open_notes_dir).pack(side="left")
         tk.Label(actions, text="·", bg=_BG, fg=PALETTE["muted"]).pack(side="left", padx=6)
         LinkLabel(
@@ -858,15 +872,32 @@ class SettingsWindow:
             lambda: util.open_path(self.app.cfg.output.resolved_recordings_dir()),
         ).pack(side="left")
 
+        guardado = self._group(tab, "Áudio guardado")
+        self.keep_audio_var = tk.BooleanVar()
+        self._toggle_row(guardado, "Manter o áudio da reunião após transcrever", self.keep_audio_var)
+        ret_row = tk.Frame(guardado, bg=_BG)
+        ret_row.pack(fill="x", pady=6)
+        tk.Label(ret_row, text="Apagar gravações já transcritas após (dias)", bg=_BG,
+                 fg=PALETTE["text"], font=FONT).pack(side="left")
+        self.retention_var = tk.IntVar(value=30)
+        Stepper(ret_row, self.retention_var, step=5, lo=0, hi=3650, suffix="").pack(side="right")
+        tk.Label(
+            guardado,
+            text="0 = nunca apagar. Remove a pasta da gravação (áudio + transcrição) em disco;\n"
+            "a nota final (.md) na pasta de notas NÃO é tocada.",
+            bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), justify="left",
+        ).pack(anchor="w", pady=(2, 0))
+
     # ====================================================== aba Resumo =========
 
-    def _build_summary_tab(self) -> None:
-        tab = self.tab_summary.body
-        self.summary_var = tk.BooleanVar()
-        self._toggle_row(tab, "Gerar resumo estruturado da reunião (IA)", self.summary_var)
+    def _build_ia_tab(self) -> None:
+        tab = self.tab_ia.body
 
+        res = self._group(tab, "Resumo automático")
+        self.summary_var = tk.BooleanVar()
+        self._toggle_row(res, "Gerar resumo estruturado da reunião (IA)", self.summary_var)
         self.conn_status_var = tk.StringVar(value="")
-        prov_row = tk.Frame(tab, bg=_BG)
+        prov_row = tk.Frame(res, bg=_BG)
         prov_row.pack(fill="x", pady=6)
         tk.Label(prov_row, text="Provedor de IA", bg=_BG, fg=PALETTE["text"], font=FONT).pack(side="left")
         self.provider_var = tk.StringVar()
@@ -877,56 +908,56 @@ class SettingsWindow:
         self._provider_combo.pack(side="right")
         self._provider_combo.bind("<<ComboboxSelected>>", lambda e: self._on_provider_change())
         # área que troca conforme o provedor (frames empilhados, só o ativo é exibido)
-        self._prov_area = tk.Frame(tab, bg=_BG)
+        self._prov_area = tk.Frame(res, bg=_BG)
         self._prov_area.pack(fill="x")
         self._build_provider_frames(self._prov_area)
 
-        hw_head = tk.Frame(tab, bg=_BG)
-        hw_head.pack(fill="x", pady=(12, 3))
-        tk.Label(hw_head, text="Vocabulário / hotwords da transcrição", bg=_BG, fg=PALETTE["text"],
-                 font=FONT_BOLD).pack(side="left")
+        chat_row = tk.Frame(res, bg=_BG)
+        chat_row.pack(fill="x", pady=(10, 0))
+        tk.Label(chat_row, text="Modelo do chat \"Perguntar à reunião\"", bg=_BG, fg=PALETTE["text"],
+                 font=FONT).pack(side="left")
+        self.chat_model_var = tk.StringVar()
+        self._chat_model_combo = ttk.Combobox(
+            chat_row, textvariable=self.chat_model_var, values=[_CHAT_MODEL_DEFAULT, *_SUMMARY_MODELS],
+            state="readonly", width=18, font=FONT,
+        )
+        self._chat_model_combo.pack(side="right")
         tk.Label(
-            tab,
-            text="Termos e siglas da sua área para o Whisper acertar (ex.: SAP ABAP BAPI Fiori). "
-            "Separe por espaço. Em branco = sem vocabulário guiado.",
+            res,
+            text="Use um modelo mais barato/rápido (ex.: Haiku) p/ perguntar à transcrição e mantenha "
+            "o resumo num modelo mais capaz. Aplica-se ao provedor Claude.",
             bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), justify="left", wraplength=620,
-        ).pack(anchor="w", pady=(0, 4))
-        self.hotwords = make_text(tab, height=3)
-        self.hotwords.pack(fill="x", pady=(0, 2))
+        ).pack(anchor="w", pady=(2, 0))
 
-        ctx_head = tk.Frame(tab, bg=_BG)
-        ctx_head.pack(fill="x", pady=(12, 3))
-        tk.Label(ctx_head, text="Contexto para IA (cabeçalho da nota)", bg=_BG, fg=PALETTE["text"],
-                 font=FONT_BOLD).pack(side="left")
-        ModernButton(ctx_head, "Restaurar padrão", self._restore_default_context, width=140).pack(side="right")
-        tk.Label(tab, text="Vai no topo de cada nota dizendo à IA como ler o documento. Personalize "
-                          "para a sua área (ou deixe em branco para remover).", bg=_BG,
-                 fg=PALETTE["muted"], font=("Segoe UI", 8), justify="left", wraplength=620).pack(anchor="w", pady=(0, 4))
-        self.context_editor = make_text(tab, height=4)
-        self.context_editor.pack(fill="x", pady=(0, 2))
-
-        prompt_head = tk.Frame(tab, bg=_BG)
-        prompt_head.pack(fill="x", pady=(12, 3))
-        tk.Label(prompt_head, text="Instruções do resumo (prompt.md)", bg=_BG, fg=PALETTE["text"],
-                 font=FONT_BOLD).pack(side="left")
-        # wizard: gera prompt.md + hotwords pelo perfil (profissão/stack/jargão)
-        LinkLabel(prompt_head, "Assistente de perfil…", lambda: self.app.show_wizard()).pack(side="right")
+        instr = self._group(tab, "Instruções da ata (prompt.md)")
+        head = tk.Frame(instr, bg=_BG)
+        head.pack(fill="x")
+        LinkLabel(head, "Assistente de perfil…", lambda: self.app.show_wizard()).pack(side="right")
         tk.Label(
-            tab,
+            instr,
             text="Este markdown define as seções e regras da ata. A transcrição é anexada após ele. "
             "Salvar grava em " + str(util.PROMPT_PATH),
             bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), justify="left", wraplength=620,
         ).pack(anchor="w", pady=(0, 6))
-        editor_frame = tk.Frame(tab, bg=_BG)
+        editor_frame = tk.Frame(instr, bg=_BG)
         editor_frame.pack(fill="x")
         # altura fixa (a aba inteira rola): expand não estica dentro do ScrollableFrame.
-        # O editor mantém a própria barra para textos longos.
-        self.prompt_editor = make_text(editor_frame, height=14)
+        self.prompt_editor = make_text(editor_frame, height=10)
         psb = ttk.Scrollbar(editor_frame, orient="vertical", command=self.prompt_editor.yview)
         self.prompt_editor.configure(yscrollcommand=psb.set)
         psb.pack(side="right", fill="y")
         self.prompt_editor.pack(side="left", fill="both", expand=True)
-        ModernButton(tab, "Restaurar prompt padrão", self._restore_default_prompt).pack(anchor="e", pady=(8, 0))
+        ModernButton(instr, "Restaurar prompt padrão", self._restore_default_prompt).pack(anchor="e", pady=(8, 0))
+
+        ctx = self._group(tab, "Contexto para IA (cabeçalho da nota)")
+        ctx_head = tk.Frame(ctx, bg=_BG)
+        ctx_head.pack(fill="x")
+        ModernButton(ctx_head, "Restaurar padrão", self._restore_default_context, width=140).pack(side="right")
+        tk.Label(ctx, text="Vai no topo de cada nota dizendo à IA como ler o documento. Personalize "
+                          "para a sua área (ou deixe em branco para remover).", bg=_BG,
+                 fg=PALETTE["muted"], font=("Segoe UI", 8), justify="left", wraplength=620).pack(anchor="w", pady=(0, 4))
+        self.context_editor = make_text(ctx, height=4)
+        self.context_editor.pack(fill="x", pady=(0, 2))
 
     def _restore_default_prompt(self) -> None:
         from .notes import DEFAULT_SUMMARY_PROMPT
@@ -1143,6 +1174,16 @@ class SettingsWindow:
         self.openai_api_key_var.set(cfg.summary.openai_api_key or cfg.summary.api_key)
         self.ollama_model_var.set(cfg.summary.ollama_model)
         self.openai_model_var.set(cfg.summary.openai_model)
+        # modelo do chat: rótulo do ID (passthrough de ID custom), ou "Mesmo do resumo"
+        ccm = cfg.summary.chat_model
+        if not ccm:
+            self.chat_model_var.set(_CHAT_MODEL_DEFAULT)
+        else:
+            label = _MODEL_LABELS.get(ccm, ccm)
+            vals = list(self._chat_model_combo.cget("values"))
+            if label not in vals:
+                self._chat_model_combo.configure(values=[*vals, label])
+            self.chat_model_var.set(label)
         self._on_provider_change()
         self._fields_loaded = True
 
@@ -1160,6 +1201,8 @@ class SettingsWindow:
         # (hotwords, modelos etc.) em vez de revertê-las com valores antigos
         cfg = config_mod.load()
         model = _SUMMARY_MODELS.get(self.summary_model_var.get(), cfg.summary.model)
+        _cm = self.chat_model_var.get()
+        chat_model = "" if _cm == _CHAT_MODEL_DEFAULT else _SUMMARY_MODELS.get(_cm, _cm)
         new_cfg = dataclasses.replace(
             cfg,
             output=dataclasses.replace(
@@ -1175,6 +1218,7 @@ class SettingsWindow:
                 ollama_base_url=self.ollama_base_url_var.get().strip(),
                 openai_base_url=self.openai_base_url_var.get().strip(),
                 openai_api_key=self.openai_api_key_var.get().strip(),
+                chat_model=chat_model,
                 ollama_model=self.ollama_model_var.get().strip() or cfg.summary.ollama_model,
                 openai_model=self.openai_model_var.get().strip() or cfg.summary.openai_model,
             ),
@@ -1270,9 +1314,13 @@ class SettingsWindow:
         chrome = self.win.winfo_reqheight() - canvas_req  # status + abas + rodapé + paddings
         content = max((s.body.winfo_reqheight() for s in self._scrolls), default=canvas_req)
         sw, sh = self.win.winfo_screenwidth(), self.win.winfo_screenheight()
+        # teto a 84% da tela: deixa folga p/ barra de tarefas + título e garante o rodapé
+        # (Salvar/Fechar) visível mesmo quando a maior aba é alta (#20/#22)
+        avail = int(sh * 0.84)
         w = min(max(self.win.winfo_reqwidth(), 720), sw - 40)
-        h = max(380, min(chrome + content, sh - 80))  # 80 ≈ barra de tarefas + título + folga
-        x, y = max(0, (sw - w) // 2), max(0, (sh - h) // 3)
+        # teto absoluto (760): abre compacta — a aba mais alta rola; o usuário amplia se quiser
+        h = max(360, min(chrome + content, avail, 760))
+        x, y = max(0, (sw - w) // 2), max(0, (sh - h) // 5)
         self.win.geometry(f"{w}x{h}+{x}+{y}")
 
     def hide(self) -> None:

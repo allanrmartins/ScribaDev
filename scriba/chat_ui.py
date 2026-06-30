@@ -35,6 +35,9 @@ class ChatWindow:
         self._transcript = (transcript or "").strip() or None
         self._history: list[tuple[str, str]] = []
         self._busy = False
+        from . import config
+
+        self._chat_model = config.load().summary.chat_model or None  # override (ex.: Haiku no chat)
 
         self.win = tk.Toplevel(root)
         self.win.withdraw()
@@ -105,7 +108,7 @@ class ChatWindow:
     def _worker(self, q: str) -> None:
         payload = self._build_payload(q)
         try:
-            out = ai.complete(_SYSTEM, payload, timeout=_TIMEOUT, hidden_window=True)
+            out = ai.complete(_SYSTEM, payload, timeout=_TIMEOUT, hidden_window=True, model=self._chat_model)
         except Exception:
             out = None
         self.win.after(0, lambda: self._answered(q, out))

@@ -30,14 +30,26 @@ def complete(
     timeout: int,
     cwd=None,
     hidden_window: bool = False,
+    model: str | None = None,
 ) -> str | None:
     """Roda o provider de IA configurado sobre (system_prompt, user_payload).
 
     Retorna o texto da resposta, ou None em qualquer falha. `cwd`/`hidden_window`
     só valem para o provider claude (CLI) — são ignorados nos providers HTTP.
+    `model` sobrescreve o modelo do provider ATIVO (ex.: o chat usa um modelo mais
+    barato que o resumo); None = usa o modelo configurado para o resumo.
     """
+    import dataclasses
+
     cfg = config.load().summary
     provider = (cfg.provider or "claude").strip().lower()
+    if model:
+        if provider == "ollama":
+            cfg = dataclasses.replace(cfg, ollama_model=model)
+        elif provider == "openai":
+            cfg = dataclasses.replace(cfg, openai_model=model)
+        else:
+            cfg = dataclasses.replace(cfg, model=model)
     if provider == "ollama":
         return _ollama(cfg, system_prompt, user_payload, timeout=timeout)
     if provider == "openai":

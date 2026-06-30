@@ -203,6 +203,22 @@ class DispatchTests(unittest.TestCase):
     def test_provider_desconhecido_cai_no_claude(self):
         self.assertEqual(self._route("inexistente"), "CLAUDE")
 
+    def test_model_override_aplica_ao_provider_ativo(self):  # #22 (modelo do chat)
+        import types as _t
+        cap = {}
+        config.load = lambda: _t.SimpleNamespace(summary=Summary(provider="claude", model="claude-sonnet-4-6"))
+        ai._claude_cli = lambda cfg, *a, **k: cap.setdefault("model", cfg.model)
+        ai.complete("s", "u", timeout=5, model="claude-haiku-4-5")
+        self.assertEqual(cap["model"], "claude-haiku-4-5")
+
+    def test_sem_override_usa_o_modelo_do_resumo(self):
+        import types as _t
+        cap = {}
+        config.load = lambda: _t.SimpleNamespace(summary=Summary(provider="claude", model="claude-sonnet-4-6"))
+        ai._claude_cli = lambda cfg, *a, **k: cap.setdefault("model", cfg.model)
+        ai.complete("s", "u", timeout=5)
+        self.assertEqual(cap["model"], "claude-sonnet-4-6")
+
 
 class ConfigRoundTripTests(unittest.TestCase):
     """Os 5 campos novos persistem; config antigo carrega como provider=claude."""

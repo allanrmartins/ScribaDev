@@ -442,7 +442,7 @@ def main() -> int:
     util.PROMPT_PATH = demo_prompt
     sw.show()
     sw.win.geometry("860x620+120+100")  # após show(): sobrepõe o auto-fit à tela (#20)
-    sw.nb.select(sw.tab_summary)
+    sw.nb.select(sw.tab_ia)
     app.pump(1.2)
     shoot(sw.win, DOCS / "configuracoes.png")
     sw.hide()
