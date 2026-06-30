@@ -85,8 +85,11 @@ def test_token(model: str, token: str) -> tuple[bool, str]:
     try:
         try:
             pipe = Pipeline.from_pretrained(model, token=token)
-        except TypeError:  # versões antigas usam use_auth_token
-            pipe = Pipeline.from_pretrained(model, use_auth_token=token)
+        except TypeError as e_token:  # token= é a API atual; use_auth_token só em versões antigas
+            try:
+                pipe = Pipeline.from_pretrained(model, use_auth_token=token)
+            except TypeError:
+                raise e_token  # não mascara o erro real do token= (#24)
     except Exception as e:  # noqa: BLE001 — classificamos e seguimos
         return (False, _classify_hf_error(e, model))
     if pipe is None:
@@ -134,8 +137,15 @@ def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None,
     try:
         try:
             pipe = Pipeline.from_pretrained(cfg.model, token=cfg.hf_token)
-        except TypeError:  # versões antigas usam use_auth_token
-            pipe = Pipeline.from_pretrained(cfg.model, use_auth_token=cfg.hf_token)
+        except TypeError as e_token:
+            # token= é a API atual; só pyannote/huggingface_hub ANTIGOS usam use_auth_token.
+            # Se o fallback também falhar (use_auth_token foi REMOVIDO nas versões novas),
+            # propaga o erro do token= — o relevante — em vez de mascará-lo com o TypeError
+            # do use_auth_token (issue #24).
+            try:
+                pipe = Pipeline.from_pretrained(cfg.model, use_auth_token=cfg.hf_token)
+            except TypeError:
+                raise e_token
         if pipe is None:
             _fail(f"modelo indisponível — confirme que aceitou os termos de {cfg.model} no "
                   "Hugging Face com a conta do token")
