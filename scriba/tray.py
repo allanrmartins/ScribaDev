@@ -10,17 +10,22 @@ from PIL import Image, ImageDraw
 from . import autostart, util
 
 
-def _icon_image(recording: bool) -> Image.Image:
-    """Ícone do app (pergaminho + raio). Cai para um círculo desenhado se o asset sumir."""
+def _icon_image(recording: bool, dim: bool = False) -> Image.Image:
+    """Ícone do app (pergaminho + raio). Cai para um círculo desenhado se o asset sumir.
+
+    `dim` (só com recording): variante APAGADA do ícone REC — alternada com a normal a
+    cada tick faz a bandeja PULSAR durante a gravação (#14)."""
     png = util.ICON_REC_PNG if recording else util.ICON_PNG
     try:
-        return Image.open(png).convert("RGBA")
+        img = Image.open(png).convert("RGBA")
     except Exception:
         img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
         d.ellipse([4, 4, 60, 60], fill=(30, 30, 40, 255), outline=(90, 90, 110, 255), width=2)
         d.ellipse([22, 22, 42, 42], fill=(229, 69, 69, 255) if recording else (240, 240, 245, 255))
-        return img
+    if recording and dim:  # pulso "apagado": reduz o alpha p/ o ícone esmaecer e voltar
+        img.putalpha(img.getchannel("A").point(lambda a: int(a * 0.4)))
+    return img
 
 
 class Tray:
@@ -129,9 +134,9 @@ class Tray:
         except Exception:
             pass
 
-    def set_recording(self, recording: bool, title: str):
+    def set_recording(self, recording: bool, title: str, dim: bool = False):
         try:
-            self.icon.icon = _icon_image(recording)
+            self.icon.icon = _icon_image(recording, dim=dim)
             self.icon.title = title
         except Exception:
             pass

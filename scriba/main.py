@@ -159,12 +159,13 @@ class ScribaApp:
             return None
 
     def _tick_tray(self) -> None:
-        """Atualiza o tooltip da bandeja com o tempo de gravação ao vivo (#14). A
-        bandeja é o indicador confiável (não some como a pílula)."""
+        """Atualiza o tooltip da bandeja com o tempo de gravação ao vivo e PULSA o ícone
+        REC (#14). A bandeja é o indicador confiável (não some como a pílula)."""
         if self.tray and self.is_recording():
-            self.tray.set_recording(True, self.status_text())
+            self._tray_pulse = not getattr(self, "_tray_pulse", False)
+            self.tray.set_recording(True, self.status_text(), dim=self._tray_pulse)
             if self.root is not None and not self.stop_event.is_set():
-                self.root.after(1000, self._tick_tray)
+                self.root.after(700, self._tick_tray)  # ritmo de pulso (~como a pílula)
 
     # --------------------------------------------------------------- call --
 
