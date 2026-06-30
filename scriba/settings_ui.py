@@ -1356,10 +1356,13 @@ class SettingsWindow:
             self.win.after_cancel(self._refresh_job)
             self._refresh_job = None
         self._load_fields()
-        self.win.deiconify()
         if not self._fitted:
+            # 1ª exibição: dimensiona/centraliza ANTES de mostrar. Se a janela aparece
+            # (deiconify) e só então o _fit_to_screen aplica a geometria, ela pisca —
+            # surge no tamanho natural (alto) e logo encolhe/recentra na frente do usuário.
             self._fitted = True
             self._fit_to_screen()
+        self.win.deiconify()
         if not self._titlebar_done:
             self._titlebar_done = True
             enable_dark_titlebar(self.win)
