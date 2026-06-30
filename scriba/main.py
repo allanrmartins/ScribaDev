@@ -423,11 +423,24 @@ class ScribaApp:
         threading.Thread(target=work, daemon=True, name="updapply").start()
 
     def relaunch(self) -> None:
-        """Reinicia o app: agenda um novo lançamento DEPOIS que este processo sair
-        (libera o single-instance) e pede quit. É o que faz o update se aplicar
-        'sozinho' (#19), sem o usuário reabrir."""
-        import os
+        """Reinicia o app: avisa o usuário, agenda um novo lançamento para DEPOIS que
+        este processo sair (libera o mutex de instância única) e FORÇA a saída se o
+        encerramento gracioso travar. Sem o 'forçar', um cleanup preso (tray/thread)
+        segura o mutex, a nova instância aborta no single-instance e o app 'não reinicia
+        sozinho'. Auto-restart do update (#19)."""
         import subprocess
+        from pathlib import Path
+        from tkinter import messagebox
+
+        # aviso explícito: o usuário acabou de pedir a atualização e está na frente do app
+        try:
+            messagebox.showinfo(
+                "ScribaDev atualizado",
+                "A atualização foi aplicada com sucesso.\n\n"
+                "O ScribaDev será reiniciado agora para concluir.",
+            )
+        except Exception:
+            pass
 
         pyw = Path(sys.executable)
         if pyw.name.lower() == "python.exe":
@@ -442,8 +455,23 @@ class ScribaApp:
             )
         except Exception:
             log.exception("falha ao agendar o relançamento")
+            try:
+                messagebox.showwarning(
+                    "ScribaDev",
+                    "Não consegui reiniciar automaticamente.\n"
+                    "Feche e abra o ScribaDev para usar a nova versão.",
+                )
+            except Exception:
+                pass
             return
+
+        # encerra gracioso e, se a saída travar, força em 3 s — libera o mutex para o
+        # relançador (Wait-Process) subir a nova instância. daemon=True não atrasa a
+        # saída natural quando ela ocorre antes do timeout.
         self.request_quit()
+        watchdog = threading.Timer(3.0, lambda: os._exit(0))
+        watchdog.daemon = True
+        watchdog.start()
 
     def show_wizard(self) -> None:
         """Abre o assistente de perfil (chamável de qualquer thread)."""
