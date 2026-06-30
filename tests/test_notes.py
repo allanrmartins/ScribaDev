@@ -167,6 +167,32 @@ class ParseParticipantsTests(unittest.TestCase):
     def test_sem_secao_participantes(self):
         self.assertEqual(notes.parse_participants("# Nota\n\n## Resumo\ntexto"), ({}, []))
 
+    # formato real da IA: "## Participantes" com sub-cabeçalhos "### Presentes"/"### Mencionados"
+    _MD_H3 = (
+        "# Reunião\n\n## Participantes\n\n"
+        "### Presentes\n"
+        "- **Eu** — desenvolvedor\n"
+        "- **Participante 1 (Guilherme Lima)** — gerente; conduziu [00:28]\n"
+        "- **Participante 2** — voz não identificada\n"
+        "- **Participante 4 (Carlos)** — diretor\n\n"
+        "### Mencionados (não confirmados como vozes)\n"
+        "- **Célio** — supervisor\n\n"
+        "## Transcrição completa\n**[00:00] Eu:** oi\n"
+    )
+
+    def test_subcabecalho_h3_nao_encerra_secao(self):
+        # regressão: "### Presentes" começa com "## " e fazia o parser parar antes de ler ninguém
+        pres, menc = notes.parse_participants(self._MD_H3)
+        self.assertIn("Participante 1", pres)
+        self.assertIn("Participante 4", pres)
+        self.assertEqual(menc, ["Célio"])  # bullets sob "### Mencionados"
+
+    def test_nome_embutido_no_rotulo(self):
+        pres, _ = notes.parse_participants(self._MD_H3)
+        self.assertNotIn("Participante 1 (Guilherme Lima)", pres)  # chave normalizada p/ "Participante 1"
+        self.assertEqual(notes.guess_voice_name("Participante 1", pres["Participante 1"]), "Guilherme Lima")
+        self.assertEqual(notes.guess_voice_name("Participante 4", pres["Participante 4"]), "Carlos")
+
 
 class GuessVoiceNameTests(unittest.TestCase):
     """notes.guess_voice_name: palpite de nome a partir da descrição da IA."""
@@ -176,6 +202,11 @@ class GuessVoiceNameTests(unittest.TestCase):
 
     def test_nome_no_inicio_entre_parenteses(self):
         self.assertEqual(notes.guess_voice_name("Participante 2", "Alex (identificado: …)"), "Alex")
+
+    def test_nome_composto_no_inicio(self):
+        # nome com sobrenome (vindo do rótulo "Participante 1 (Guilherme Lima)")
+        self.assertEqual(
+            notes.guess_voice_name("Participante 1", "Guilherme Lima (gerente de projeto)"), "Guilherme Lima")
 
     def test_marcador_possivelmente(self):
         self.assertEqual(

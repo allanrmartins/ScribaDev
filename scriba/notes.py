@@ -576,9 +576,18 @@ def relabel_speakers(folder: Path, renames: dict[str, str]) -> bool:
 
 
 _PART_HEADER = re.compile(r"(?i)^\s*##\s+participantes\s*$")
+# sub-blocos: a IA escreve tanto "**Presentes:**" quanto "### Presentes" (sub-cabeçalho)
+_PRES_MARK = re.compile(r"(?i)^(?:#{3,6}\s+|\*\*)\s*presentes")
+_MENC_MARK = re.compile(r"(?i)^(?:#{3,6}\s+|\*\*)\s*mencionad")
+# fim da seção = próximo cabeçalho de nível 1-2; ### internos NÃO encerram (o bug: um
+# "### Presentes" começa com "## " e fazia o parser parar antes de ler os participantes)
+_SECTION_END = re.compile(r"^#{1,2}\s+\S")
 _PART_BULLET = re.compile(r"^[-*]\s+\*\*(.+?)\*\*\s*[—:–-]?\s*(.*)$")
-# palpite de nome: "Alex (identificado: …" no começo, ou "… provavelmente/possivelmente/identificado X"
-_GUESS_LEAD = re.compile(r"^\s*([A-ZÀ-Ý][\wÀ-ÿ/]+)\s+\(")
+# nome embutido no rótulo: "Participante 1 (Guilherme Lima)" -> voz "Participante 1" + nome
+_LABEL_NAME = re.compile(r"(?i)^(participante\s+\d+)\s*\(([^)]+)\)\s*$")
+# palpite de nome: "Alex (…" ou "Guilherme Lima (…" no começo (1-4 palavras capitalizadas),
+# ou "… provavelmente/possivelmente/identificado X"
+_GUESS_LEAD = re.compile(r"^\s*([A-ZÀ-Ý][\wÀ-ÿ/]+(?:\s+[A-ZÀ-Ý][\wÀ-ÿ/]+){0,3})\s*\(")
 _GUESS_MARK = re.compile(
     r"(?i:provavelmente|possivelmente|identificad[oa]|talvez)"   # marcador (case-insensitive)
     r"[\s:]+(?:(?:como|o|a|os|as)\s+)*"                          # separador + 'como'/artigo opcionais
@@ -592,32 +601,37 @@ def parse_participants(md: str) -> tuple[dict[str, str], list[str]]:
 
     `presentes` mapeia o rótulo → a descrição/palpite da IA (ex.: "Participante 2"
     → "Alex (identificado: …)"). `mencionados` é a lista de nomes citados que não
-    falaram. Best-effort: o resumo é texto livre da IA; sem a seção → ({}, [])."""
+    falaram. Tolerante ao formato da IA: os sub-blocos vêm tanto como **Presentes:**
+    quanto como ### Presentes, e o nome pode vir embutido no rótulo ("Participante 1
+    (Guilherme Lima)"). Best-effort: sem a seção → ({}, [])."""
     lines = md.splitlines()
     start = next((i + 1 for i, ln in enumerate(lines) if _PART_HEADER.match(ln)), None)
     if start is None:
         return {}, []
     presentes: dict[str, str] = {}
     mencionados: list[str] = []
-    mode: str | None = None
+    mode = "pres"  # a seção começa em Presentes; só vira "menc" ao achar o marcador
     for ln in lines[start:]:
         s = ln.strip()
-        if s.startswith("## "):  # próxima seção: acabou Participantes
+        if _SECTION_END.match(s):  # próximo H1/H2 (### internos não encerram) = fim
             break
-        low = s.lower()
-        if low.startswith("**presentes"):
+        if _PRES_MARK.match(s):
             mode = "pres"
             continue
-        if low.startswith("**mencionad"):
+        if _MENC_MARK.match(s):
             mode = "menc"
             continue
         mb = _PART_BULLET.match(s)
         if not mb:
             continue
         label, desc = mb.group(1).strip(), mb.group(2).strip()
+        nm = _LABEL_NAME.match(label)
+        if nm:  # "Participante 1 (Guilherme Lima)" -> chave "Participante 1" + nome no começo da desc
+            label = nm.group(1).strip()
+            desc = f"{nm.group(2).strip()} (" + (desc or "presente") + ")"
         if mode == "pres":
             presentes[label] = desc
-        elif mode == "menc":
+        else:
             mencionados.append(label)
     return presentes, mencionados
 
