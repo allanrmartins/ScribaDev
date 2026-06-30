@@ -376,6 +376,31 @@ class ScribaApp:
             self.log_win = LogWindow(self.root, self)
         self.log_win.show()
 
+    # -- exceções não tratadas (#22) -------------------------------------------
+
+    def _on_unhandled(self, exc_info, where: str) -> None:
+        """Handler único dos 3 excepthooks: SEMPRE loga e, se a UI já existe, mostra um
+        diálogo amigável (sem console, uma exceção sumia calada). Crash cedo demais
+        (root ainda None) ou já encerrando → fica só no log."""
+        log.error("exceção não tratada (%s)", where, exc_info=exc_info)
+        if self.root is None or self.stop_event.is_set():
+            return
+        import traceback as _tb
+
+        detail = f"[{where}]\n\n" + "".join(_tb.format_exception(*exc_info))
+        try:
+            self.ui(lambda: self._show_crash(detail))
+        except Exception:
+            pass  # nunca deixar o handler de erro levantar outro erro
+
+    def _show_crash(self, detail: str) -> None:
+        try:
+            from .log_ui import show_crash_dialog
+
+            show_crash_dialog(self, detail)
+        except Exception:
+            log.exception("falha ao exibir o diálogo de crash")
+
     # -- atualização in-app (#19) ----------------------------------------------
 
     def _check_updates_boot(self) -> None:
@@ -825,16 +850,16 @@ class ScribaApp:
         self.root.after(100, self._drain_ui)
 
     def run(self) -> int:
-        # exceções não tratadas (em threads ou callbacks Tk) iam para o nada no
-        # modo sem console — agora ficam registradas no log
-        sys.excepthook = lambda *exc: log.error("exceção não tratada", exc_info=exc)
-        threading.excepthook = lambda args: log.error(
-            "exceção na thread %s", args.thread.name if args.thread else "?",
-            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+        # exceções não tratadas (em threads ou callbacks Tk) iam para o nada no modo
+        # sem console — agora ficam no log E abrem um diálogo amigável (#22)
+        sys.excepthook = lambda *exc: self._on_unhandled(exc, "geral")
+        threading.excepthook = lambda args: self._on_unhandled(
+            (args.exc_type, args.exc_value, args.exc_traceback),
+            f"thread {args.thread.name if args.thread else '?'}",
         )
         self.root = tk.Tk()
         self.root.withdraw()  # inicia só na bandeja; a janela abre pela bandeja/atalho
-        self.root.report_callback_exception = lambda *exc: log.error("exceção em callback Tk", exc_info=exc)
+        self.root.report_callback_exception = lambda *exc: self._on_unhandled(exc, "callback Tk")
 
         from .main_window import MainWindow
 

@@ -280,3 +280,97 @@ class LogWindow:
         self.win.lift()
         self.win.focus_force()
         enable_dark_titlebar(self.win)
+
+
+# -- diálogo de crash amigável (#22) -----------------------------------------
+# Em vez de morrer/sumir calado no modo sem console, os excepthooks (main.run)
+# chamam isto via app.ui() para mostrar o erro com caminho direto p/ log e .zip.
+_crash_open = False  # módulo-level: 1 diálogo por vez (não empilha numa rajada de erros)
+
+
+def show_crash_dialog(app, detail: str) -> None:
+    """Diálogo "encontrou um erro" com traceback copiável + 'Abrir log' / 'Exportar
+    diagnóstico'. Roda na thread do Tk (via app.ui). TODA a construção é protegida:
+    um erro aqui dentro não pode realimentar o excepthook e entrar em loop."""
+    global _crash_open
+    if _crash_open:
+        return  # já há um diálogo aberto — não empilha
+    root = getattr(app, "root", None)
+    if root is None:
+        return  # crash cedo demais (UI ainda não existe) — só ficou no log
+    try:
+        _crash_open = True
+        win = tk.Toplevel(root)
+        win.title("ScribaDev — erro inesperado")
+        win.configure(bg=_BG)
+        win.geometry("680x440")
+        win.minsize(480, 320)
+        try:
+            win.iconbitmap(str(util.ICON_ICO))
+        except Exception:
+            pass
+
+        def _close():
+            global _crash_open
+            _crash_open = False
+            try:
+                win.destroy()
+            except tk.TclError:
+                pass
+
+        win.protocol("WM_DELETE_WINDOW", _close)
+
+        head = tk.Frame(win, bg=_BG, padx=14, pady=10)
+        head.pack(fill="x")
+        tk.Label(head, text="O ScribaDev encontrou um erro inesperado", bg=_BG,
+                 fg=PALETTE["accent"], font=("Segoe UI", 13, "bold")).pack(anchor="w")
+        tk.Label(head, text="O app continua rodando. Se isso atrapalhou uma gravação, exporte o "
+                            "diagnóstico e me avise — o detalhe técnico está abaixo.", bg=_BG,
+                 fg=PALETTE["muted"], font=("Segoe UI", 9), wraplength=640,
+                 justify="left").pack(anchor="w", pady=(2, 0))
+
+        body = tk.Frame(win, bg=_BG, padx=14)
+        body.pack(fill="both", expand=True)
+        txt = tk.Text(body, bg="#15151c", fg=PALETTE["text"], font=("Consolas", 9), wrap="word",
+                      relief="flat", padx=8, pady=6, insertwidth=0)
+        txt.insert("1.0", detail)
+        txt.configure(state="disabled")  # read-only, mas ainda selecionável/copiável
+        txt.pack(fill="both", expand=True, pady=(4, 8))
+
+        def _copy():
+            try:
+                win.clipboard_clear()
+                win.clipboard_append(detail)
+            except tk.TclError:
+                pass
+
+        def _open_log():
+            try:
+                app.show_log()
+            except Exception:
+                log.exception("crash dialog: falha ao abrir o log")
+
+        def _export():
+            try:
+                rec = app.cfg.output.resolved_recordings_dir()
+            except Exception:
+                rec = None
+            try:
+                dest = diagnostics.export_zip(rec)
+                util.open_path(dest.parent)
+            except Exception:
+                log.exception("crash dialog: falha ao exportar diagnóstico")
+
+        bar = tk.Frame(win, bg=_BG, padx=14, pady=10)
+        bar.pack(fill="x")
+        ModernButton(bar, "Fechar", _close, width=90).pack(side="right")
+        ModernButton(bar, "Exportar diagnóstico", _export, kind="primary", width=180).pack(side="right", padx=(0, 8))
+        ModernButton(bar, "Abrir log", _open_log, width=100).pack(side="right", padx=(0, 8))
+        ModernButton(bar, "Copiar erro", _copy, width=110).pack(side="right", padx=(0, 8))
+
+        win.lift()
+        win.focus_force()
+        enable_dark_titlebar(win)
+    except Exception:
+        _crash_open = False
+        log.exception("falha ao montar o diálogo de crash")
