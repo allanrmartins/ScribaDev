@@ -1,3 +1,3 @@
 """ScribaDev — gravação e transcrição automática de reuniões do Microsoft Teams."""
 
-__version__ = "0.4.4"
+__version__ = "0.5.0"
