@@ -25,6 +25,7 @@ from .widgets import (
     make_entry,
     mask_date_br,
     mask_time_br,
+    remember_geometry,
 )
 
 log = logging.getLogger("scriba.log_ui")
@@ -37,6 +38,7 @@ class LogWindow:
     def __init__(self, root: tk.Tk, app) -> None:
         self.app = app
         self._entries: list = []
+        self._truncated = False
         self._hits: list = []
         self._hit_idx = -1
         self._level_idx = 0
@@ -46,7 +48,6 @@ class LogWindow:
         self.win.withdraw()
         self.win.title("ScribaDev — Log")
         self.win.configure(bg=_BG)
-        self.win.geometry("960x600")
         self.win.minsize(620, 360)
         try:
             self.win.iconbitmap(str(util.ICON_ICO))
@@ -131,12 +132,19 @@ class LogWindow:
         self.date_var.trace_add("write", lambda *a: self._debounced())
         self.time_var.trace_add("write", lambda *a: self._debounced())
 
+        # geometria: só DEPOIS da janela construída (ela já aplica salvo/default e passa
+        # a observar <Configure> para persistir em state.json)
+        remember_geometry(self.win, "log", default="960x600")
+
         self._reload()
         self.win.after(2000, self._tick)
 
     # ---- dados -----------------------------------------------------------
     def _reload(self) -> None:
         text = diagnostics.read_tail(diagnostics.LOG_FILE, _MAX_LINES)
+        # read_tail devolve no máx. _MAX_LINES linhas: bater o teto é o sinal (best-effort,
+        # sem 2ª leitura do arquivo) de que o log completo tem mais linhas que isso.
+        self._truncated = len(text.splitlines()) >= _MAX_LINES
         self._entries = diagnostics.parse_entries(text)
         self._render()
 
@@ -145,7 +153,10 @@ class LogWindow:
         date_br = self.date_var.get().strip()
         date_br = date_br if len(date_br) == 10 else ""
         time_from = self.time_var.get().strip()
-        time_from = time_from if len(time_from) == 5 else ""
+        # só aplica o filtro se for uma hora REAL (não só o formato HH:MM) — "25:99" tem o
+        # formato certo mas esvaziaria a lista calado; o campo já fica com a cor accent
+        # (mask_time_br), então aqui só evitamos aplicar o filtro inválido.
+        time_from = time_from if len(time_from) == 5 and util.time_hhmm_ok(time_from) else ""
         level_min = _LEVELS_CYCLE[self._level_idx][1]
         shown = diagnostics.filter_entries(self._entries, level_min, date_br, time_from)
 
@@ -169,7 +180,10 @@ class LogWindow:
         self.text.configure(state="disabled")
         if at_bottom:
             self.text.see("end")
-        self.status.set(f"{len(shown)} de {len(self._entries)} entradas · {n_err} erro(s) · {n_warn} aviso(s)")
+        msg = f"{len(shown)} de {len(self._entries)} entradas · {n_err} erro(s) · {n_warn} aviso(s)"
+        if self._truncated:
+            msg += f" · mostrando as últimas {_MAX_LINES} linhas — log completo em Abrir pasta"
+        self.status.set(msg)
         self._apply_search()
 
     def _debounced(self) -> None:
@@ -286,20 +300,32 @@ class LogWindow:
 # Em vez de morrer/sumir calado no modo sem console, os excepthooks (main.run)
 # chamam isto via app.ui() para mostrar o erro com caminho direto p/ log e .zip.
 _crash_open = False  # módulo-level: 1 diálogo por vez (não empilha numa rajada de erros)
+_crash_extra = 0  # nº de crashes extras chegados enquanto o diálogo já estava aberto
+_crash_extra_var: tk.StringVar | None = None  # label do diálogo aberto (p/ atualizar ao vivo)
 
 
 def show_crash_dialog(app, detail: str) -> None:
     """Diálogo "encontrou um erro" com traceback copiável + 'Abrir log' / 'Exportar
     diagnóstico'. Roda na thread do Tk (via app.ui). TODA a construção é protegida:
     um erro aqui dentro não pode realimentar o excepthook e entrar em loop."""
-    global _crash_open
+    global _crash_open, _crash_extra, _crash_extra_var
     if _crash_open:
-        return  # já há um diálogo aberto — não empilha
+        # já há um diálogo aberto: em vez de silenciar o 2º crash, contabiliza e
+        # atualiza o label ao vivo — o erro em si já foi pro log (main._on_unhandled).
+        _crash_extra += 1
+        if _crash_extra_var is not None:
+            try:
+                _crash_extra_var.set(f"+{_crash_extra} erro(s) adicional(is) enquanto este diálogo "
+                                      "estava aberto — veja o log para os detalhes.")
+            except tk.TclError:
+                pass
+        return
     root = getattr(app, "root", None)
     if root is None:
         return  # crash cedo demais (UI ainda não existe) — só ficou no log
     try:
         _crash_open = True
+        _crash_extra = 0
         win = tk.Toplevel(root)
         win.title("ScribaDev — erro inesperado")
         win.configure(bg=_BG)
@@ -311,8 +337,9 @@ def show_crash_dialog(app, detail: str) -> None:
             pass
 
         def _close():
-            global _crash_open
+            global _crash_open, _crash_extra_var
             _crash_open = False
+            _crash_extra_var = None
             try:
                 win.destroy()
             except tk.TclError:
@@ -328,6 +355,9 @@ def show_crash_dialog(app, detail: str) -> None:
                             "diagnóstico e me avise — o detalhe técnico está abaixo.", bg=_BG,
                  fg=PALETTE["muted"], font=("Segoe UI", 9), wraplength=640,
                  justify="left").pack(anchor="w", pady=(2, 0))
+        _crash_extra_var = tk.StringVar(value="")  # só ganha texto se chegar um 2º crash (ver acima)
+        tk.Label(head, textvariable=_crash_extra_var, bg=_BG, fg=PALETTE["warn"],
+                 font=("Segoe UI", 9, "bold"), wraplength=640, justify="left").pack(anchor="w", pady=(4, 0))
 
         body = tk.Frame(win, bg=_BG, padx=14)
         body.pack(fill="both", expand=True)
@@ -373,4 +403,5 @@ def show_crash_dialog(app, detail: str) -> None:
         enable_dark_titlebar(win)
     except Exception:
         _crash_open = False
+        _crash_extra_var = None
         log.exception("falha ao montar o diálogo de crash")

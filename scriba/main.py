@@ -449,24 +449,15 @@ class ScribaApp:
         threading.Thread(target=work, daemon=True, name="updapply").start()
 
     def relaunch(self) -> None:
-        """Reinicia o app: avisa o usuário, agenda um novo lançamento para DEPOIS que
-        este processo sair (libera o mutex de instância única) e FORÇA a saída se o
-        encerramento gracioso travar. Sem o 'forçar', um cleanup preso (tray/thread)
-        segura o mutex, a nova instância aborta no single-instance e o app 'não reinicia
-        sozinho'. Auto-restart do update (#19)."""
+        """Reinicia o app: agenda um novo lançamento para DEPOIS que este processo sair
+        (libera o mutex de instância única), avisa o usuário com UMA mensagem final
+        (sucesso ou falha — nunca as duas em cascata) e FORÇA a saída se o encerramento
+        gracioso travar. Sem o 'forçar', um cleanup preso (tray/thread) segura o mutex,
+        a nova instância aborta no single-instance e o app 'não reinicia sozinho'.
+        Auto-restart do update (#19)."""
         import subprocess
         from pathlib import Path
         from tkinter import messagebox
-
-        # aviso explícito: o usuário acabou de pedir a atualização e está na frente do app
-        try:
-            messagebox.showinfo(
-                "ScribaDev atualizado",
-                "A atualização foi aplicada com sucesso.\n\n"
-                "O ScribaDev será reiniciado agora para concluir.",
-            )
-        except Exception:
-            pass
 
         pyw = Path(sys.executable)
         if pyw.name.lower() == "python.exe":
@@ -479,16 +470,29 @@ class ScribaApp:
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
                 | getattr(subprocess, "DETACHED_PROCESS", 0),
             )
+            scheduled = True
         except Exception:
             log.exception("falha ao agendar o relançamento")
-            try:
+            scheduled = False
+
+        # UMA única mensagem com o resultado final — nunca uma 2ª em cascata.
+        try:
+            if scheduled:
+                messagebox.showinfo(
+                    "ScribaDev atualizado",
+                    "A atualização foi aplicada com sucesso.\n\n"
+                    "O app vai fechar e reabrir sozinho em alguns segundos.",
+                )
+            else:
                 messagebox.showwarning(
-                    "ScribaDev",
-                    "Não consegui reiniciar automaticamente.\n"
+                    "ScribaDev atualizado",
+                    "A atualização foi aplicada, mas não consegui reiniciar automaticamente.\n\n"
                     "Feche e abra o ScribaDev para usar a nova versão.",
                 )
-            except Exception:
-                pass
+        except Exception:
+            pass
+
+        if not scheduled:
             return
 
         # encerra gracioso e, se a saída travar, força em 3 s — libera o mutex para o
