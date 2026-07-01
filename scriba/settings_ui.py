@@ -23,6 +23,8 @@ from .widgets import (
     ScrollableFrame,
     Stepper,
     ToggleSwitch,
+    add_placeholder,
+    add_tooltip,
     enable_dark_titlebar,
     group_box,
     make_entry,
@@ -459,7 +461,7 @@ class SettingsWindow:
         min_row.pack(fill="x", pady=6)
         tk.Label(min_row, text="Duração mínima para virar nota", bg=_BG, fg=PALETTE["text"], font=FONT).pack(side="left")
         self.min_secs_var = tk.IntVar(value=30)
-        Stepper(min_row, self.min_secs_var, step=5, lo=0, hi=600).pack(side="right")
+        Stepper(min_row, self.min_secs_var, step=5, lo=0, hi=600, suffix=" s").pack(side="right")
         tk.Label(
             auto,
             text="Gravações automáticas mais curtas que isso são ignoradas (tela de pré-join, teste de microfone).\n"
@@ -530,7 +532,7 @@ class SettingsWindow:
         to_row.pack(fill="x", pady=(0, 2))
         tk.Label(to_row, text="Tempo até cair no automático", bg=_BG, fg=PALETTE["text"], font=FONT).pack(side="left")
         self.ask_timeout_var = tk.IntVar(value=90)
-        Stepper(to_row, self.ask_timeout_var, step=15, lo=0, hi=600).pack(side="right")
+        Stepper(to_row, self.ask_timeout_var, step=15, lo=0, hi=600, suffix=" s").pack(side="right")
         tk.Label(
             diar,
             text="Com a diarização ligada, ao encerrar a call abre uma janela perguntando quantas "
@@ -541,20 +543,20 @@ class SettingsWindow:
 
         mv_row = tk.Frame(diar, bg=_BG)
         mv_row.pack(fill="x", pady=(6, 0))
-        tk.Label(mv_row, text="Limitar vozes (0 = automático)", bg=_BG,
-                 fg=PALETTE["text"], font=FONT).pack(side="left")
+        _mv_label = tk.Label(mv_row, text="Limitar vozes (0 = automático)", bg=_BG,
+                             fg=PALETTE["text"], font=FONT)
+        _mv_label.pack(side="left")
+        add_tooltip(
+            _mv_label,
+            "Independe do popup acima: vale quando ele está desligado ou cai no automático. "
+            "Útil em reuniões recorrentes de tamanho conhecido (ex.: daily de 4).",
+        )
         self.max_speakers_var = tk.IntVar(value=0)
         Stepper(mv_row, self.max_speakers_var, step=1, lo=0, hi=12, suffix="").pack(side="right")
         tk.Label(mv_row, text="máx", bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8)).pack(side="right", padx=(8, 4))
         self.min_speakers_var = tk.IntVar(value=0)
         Stepper(mv_row, self.min_speakers_var, step=1, lo=0, hi=12, suffix="").pack(side="right")
         tk.Label(mv_row, text="mín", bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8)).pack(side="right", padx=(12, 4))
-        tk.Label(
-            diar,
-            text="Independe do popup acima: vale quando ele está desligado ou cai no automático. "
-                 "Útil em reuniões recorrentes de tamanho conhecido (ex.: daily de 4).",
-            bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), justify="left", wraplength=640,
-        ).pack(anchor="w", pady=(2, 0))
 
         vocab = self._group(tab, "Vocabulário / hotwords")
         tk.Label(
@@ -725,8 +727,10 @@ class SettingsWindow:
         wd.pack(fill="x", pady=6)
         tk.Label(wd, text="Processamento", bg=_BG, fg=PALETTE["text"], font=FONT).pack(side="left")
         self.whisper_device_var = tk.StringVar()
-        ttk.Combobox(wd, textvariable=self.whisper_device_var, values=list(_WHISPER_DEVICES),
-                     state="readonly", width=10, font=FONT).pack(side="right")
+        _device_combo = ttk.Combobox(wd, textvariable=self.whisper_device_var, values=list(_WHISPER_DEVICES),
+                                     state="readonly", width=10, font=FONT)
+        _device_combo.pack(side="right")
+        add_tooltip(_device_combo, "auto = GPU se houver, senão CPU · cuda = GPU (NVIDIA) · cpu = Processador (CPU)")
         wl = tk.Frame(self._stt_local_frame, bg=_BG)
         wl.pack(fill="x", pady=6)
         tk.Label(wl, text="Idioma", bg=_BG, fg=PALETTE["text"], font=FONT).pack(side="left")
@@ -750,10 +754,11 @@ class SettingsWindow:
                   lambda: __import__("webbrowser").open("https://console.groq.com/keys")).pack(side="left", padx=3)
         self.cloud_base_url_var = tk.StringVar()
         self._labeled_entry(self._stt_cloud_frame, "URL base", self.cloud_base_url_var,
-                            "Em branco = Groq (https://api.groq.com/openai/v1). Outro provedor: inclua /v1.")
+                            "Em branco = Groq (https://api.groq.com/openai/v1). Outro provedor: inclua /v1.",
+                            placeholder="https://api.groq.com/openai/v1")
         self.cloud_api_key_var = tk.StringVar()
         self._labeled_entry(self._stt_cloud_frame, "Chave de API (fica só neste computador)", self.cloud_api_key_var,
-                            "Sua chave (BYO), guardada em texto no config.toml local.", secret=True)
+                            "Sua própria chave, guardada em texto no config.toml local.", secret=True)
         self.cloud_model_var = tk.StringVar()
         self._labeled_entry(self._stt_cloud_frame, "Modelo", self.cloud_model_var,
                             "Ex.: whisper-large-v3-turbo · whisper-large-v3.")
@@ -894,12 +899,16 @@ class SettingsWindow:
         for name in _DETECTION_PRESETS:
             ModernButton(preset_row, name, lambda n=name: self._apply_detection_preset(n)).pack(side="left", padx=3)
 
-    def _labeled_entry(self, parent, label: str, var: tk.StringVar, hint: str, *, secret: bool = False) -> None:
+    def _labeled_entry(self, parent, label: str, var: tk.StringVar, hint: str, *,
+                       secret: bool = False, placeholder: str | None = None) -> None:
         tk.Label(parent, text=label, bg=_BG, fg=PALETTE["text"], font=FONT_BOLD).pack(anchor="w", pady=(6, 3))
         if secret:
             make_secret_entry(parent, var).pack(fill="x")
         else:
-            make_entry(parent, var).pack(fill="x", ipady=4)
+            entry = make_entry(parent, var)
+            entry.pack(fill="x", ipady=4)
+            if placeholder:
+                add_placeholder(entry, var, placeholder)
         tk.Label(parent, text=hint, bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8),
                  justify="left", wraplength=660).pack(anchor="w", pady=(2, 2))
 
@@ -942,7 +951,7 @@ class SettingsWindow:
         tk.Label(ret_row, text="Apagar gravações já transcritas após (dias)", bg=_BG,
                  fg=PALETTE["text"], font=FONT).pack(side="left")
         self.retention_var = tk.IntVar(value=30)
-        Stepper(ret_row, self.retention_var, step=5, lo=0, hi=3650, suffix="").pack(side="right")
+        Stepper(ret_row, self.retention_var, step=5, lo=0, hi=3650, suffix=" dias").pack(side="right")
         tk.Label(
             guardado,
             text="0 = nunca apagar. Remove a pasta da gravação (áudio + transcrição) em disco;\n"
@@ -1055,7 +1064,8 @@ class SettingsWindow:
         self.ollama_base_url_var = tk.StringVar()
         self.ollama_model_var = tk.StringVar()
         self._labeled_entry(self._ollama_frame, "URL do Ollama", self.ollama_base_url_var,
-                            "Em branco = http://localhost:11434 (Ollama na própria máquina).")
+                            "Em branco = http://localhost:11434 (Ollama na própria máquina).",
+                            placeholder="http://localhost:11434")
         self._labeled_entry(self._ollama_frame, "Modelo", self.ollama_model_var,
                             "Modelo já baixado (rode `ollama pull <modelo>`). Ex.: llama3.1, qwen2.5, gemma2.")
         self._conn_row(self._ollama_frame)
@@ -1080,7 +1090,7 @@ class SettingsWindow:
         self._labeled_entry(self._openai_frame, "URL base (inclua /v1)", self.openai_base_url_var,
                             "Ex.: https://api.openai.com/v1 · https://api.groq.com/openai/v1")
         self._labeled_entry(self._openai_frame, "Chave de API (fica só neste computador)", self.openai_api_key_var,
-                            "Sua própria chave (BYO), guardada em texto no config.toml local.", secret=True)
+                            "Sua própria chave, guardada em texto no config.toml local.", secret=True)
         self._labeled_entry(self._openai_frame, "Modelo", self.openai_model_var,
                             "ID do modelo no provedor. Ex.: gpt-4o-mini · llama-3.1-70b-versatile · qwen-2.5-72b.")
         self._conn_row(self._openai_frame)
@@ -1332,18 +1342,19 @@ class SettingsWindow:
         from . import autostart
 
         msg = "Salvo ✓"
-        warn = False
+        level = "ok"
         if self.autostart_var.get() != autostart.is_enabled():
             if autostart.set_autostart(self.autostart_var.get()) != 0:
                 msg = "Salvo, mas o autostart falhou — veja o log"
-                warn = True
+                level = "err"
                 self.autostart_var.set(autostart.is_enabled())
-        # aviso não-silencioso: apps E navegadores vazios deixam a detecção automática
-        # quase inerte (sobra só o fallback interno) — o usuário precisa saber
-        if not self.apps_var.get().strip() and not self.browsers_var.get().strip():
+        # aviso não-crítico: apps E navegadores vazios deixam a detecção automática
+        # quase inerte (sobra só o fallback interno) — o usuário precisa saber, mas
+        # isso não é um erro (cor warn, não accent)
+        if level == "ok" and not self.apps_var.get().strip() and not self.browsers_var.get().strip():
             msg = "Salvo — atenção: apps e navegadores vazios, detecção automática quase desligada"
-            warn = True
-        self._saved_label.configure(fg=PALETTE["accent"] if warn else PALETTE["ok"])
+            level = "warn"
+        self._saved_label.configure(fg={"err": PALETTE["accent"], "warn": PALETTE["warn"]}.get(level, PALETTE["ok"]))
         self.saved_var.set(msg)
         self.win.after(4000, lambda: self.saved_var.set(""))
 

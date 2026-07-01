@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import threading
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 from . import promptgen, util
 from .widgets import (
@@ -60,7 +60,12 @@ class WizardWindow:
             text="Descreva seu perfil e o ScribaDev escreve as instruções (prompt.md) que moldam o resumo "
                  "das suas reuniões — e o vocabulário que guia a transcrição. Você revisa antes de aplicar.",
             bg=_BG, fg=PALETTE["muted"], font=FONT, justify="left", wraplength=720,
-        ).pack(anchor="w", pady=(2, 10))
+        ).pack(anchor="w", pady=(2, 2))
+        tk.Label(
+            body,
+            text="Ao gerar com IA, os dados deste formulário são enviados ao provedor de IA configurado.",
+            bg=_BG, fg=PALETTE["warn"], font=("Segoe UI", 8), justify="left", wraplength=720,
+        ).pack(anchor="w", pady=(0, 8))
 
         form = tk.Frame(body, bg=_BG)
         form.pack(fill="x")
@@ -144,6 +149,19 @@ class WizardWindow:
         )
         return txt, link
 
+    def _set_buttons_busy(self, busy: bool) -> None:
+        """Feedback visual de "ocupado": os botões de ação já são no-op durante o
+        _busy (guard no início de cada handler), mas sem isso pareciam clicáveis.
+        Aqui a cor apaga (muted) e o cursor volta ao normal — não dá pra usar o
+        `state=disabled` nativo do Tk porque ModernButton é um Canvas desenhado."""
+        for btn in (self.ai_btn, self.tpl_btn, self.apply_btn):
+            try:
+                fill = PALETTE["muted"] if busy else btn._color("idle")
+                btn.itemconfigure(btn._rect, fill=fill)
+                btn.configure(cursor="arrow" if busy else "hand2")
+            except (tk.TclError, AttributeError):
+                pass
+
     # ----------------------------------------------------------- geração ----
 
     def _profile(self) -> promptgen.Profile:
@@ -190,10 +208,12 @@ class WizardWindow:
         self._busy = True
         self.ai_btn.set_text("Gerando…")
         self.status_var.set("Gerando com IA… isso leva por volta de um minuto.")
+        self._set_buttons_busy(True)
 
         def done(outcome) -> None:
             self._busy = False
             self.ai_btn.set_text("Gerar com IA (recomendado)")
+            self._set_buttons_busy(False)
             if outcome:
                 prompt, hotwords = outcome
                 self._show_result(prompt, hotwords, "gerado por IA e validado")
@@ -213,10 +233,12 @@ class WizardWindow:
         self._busy = True
         self.jargon_link.configure(text="Sugerindo…")
         self.status_var.set("Buscando o jargão típico do seu perfil…")
+        self._set_buttons_busy(True)
 
         def done(suggested) -> None:
             self._busy = False
             self.jargon_link.configure(text="Sugerir com IA")
+            self._set_buttons_busy(False)
             if not suggested:
                 self.status_var.set(
                     "Não consegui sugerir agora (claude indisponível). Digite alguns termos "
@@ -252,6 +274,14 @@ class WizardWindow:
         if not self._result:
             self.status_var.set("Gere uma prévia primeiro (IA ou modelo pronto).")
             return
+        profile = self._profile()
+        if not any((profile.role, profile.area, profile.stack, profile.jargon, profile.must_have)):
+            if not messagebox.askyesno(
+                "Aplicar perfil genérico?",
+                "Nenhum campo preenchido — aplicar o modelo genérico?",
+                parent=self.win,
+            ):
+                return
         prompt, hotwords = self._result
         context_note = promptgen.context_note_for(self._profile())
         backup = promptgen.apply_prompt(prompt, hotwords or None, context_note)
