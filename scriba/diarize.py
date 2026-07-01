@@ -244,15 +244,27 @@ def _unwrap_result(result):
     return result
 
 
+def _describe_result(result) -> str:
+    """Descrição curta do retorno do pipeline p/ o log de diagnóstico (#24): tipo, e p/
+    lista/tupla o tamanho + o tipo e atributos do 1º item — foi assim que se achou o
+    generator/lista do pyannote 4.0.5+ (o `dir()` de uma lista só mostra métodos, inútil)."""
+    kind = type(result).__name__
+    if isinstance(result, (list, tuple)):
+        out = f"tipo={kind} len={len(result)}"
+        if result:
+            it = result[0]
+            out += f" item0_tipo={type(it).__name__} item0_attrs={[a for a in dir(it) if not a.startswith('_')][:20]}"
+        return out
+    return f"tipo={kind} attrs={[a for a in dir(result) if not a.startswith('_')][:25]}"
+
+
 def _run_pipe(pipe, audio, kwargs) -> tuple[list[Turn], dict[str, list[float]]] | None:
     """Roda o pipeline num áudio (dict ou caminho) e devolve (turns, embeddings),
     ou None se não reconheceu o retorno."""
     result = _unwrap_result(pipe(audio, **kwargs))
     annotation = _extract_annotation(result)
     if annotation is None:
-        # diagnóstico p/ formatos futuros do pyannote: registra o que veio (#24)
-        log.warning("diarização: retorno do pyannote não reconhecido — tipo=%s, atributos=%s",
-                    type(result).__name__, [a for a in dir(result) if not a.startswith("_")][:25])
+        log.warning("diarização: retorno do pyannote não reconhecido — %s", _describe_result(result))
         return None
     turns = [
         (float(turn.start), float(turn.end), str(label))
