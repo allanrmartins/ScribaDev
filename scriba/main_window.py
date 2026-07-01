@@ -29,6 +29,7 @@ class MainWindow:
         self.app = app
         self.root = root
         self._titlebar_done = False
+        self._processing = False  # true entre clicar em "Parar" e o enfileiramento concluir
         root.title(f"ScribaDev v{__version__}")
         root.configure(bg=_BG)
         root.minsize(520, 560)
@@ -87,6 +88,9 @@ class MainWindow:
         LinkLabel(sect_head, "atualizar", self.refresh_status).pack(side="right")
         self.rows = tk.Frame(body, bg=_BG)
         self.rows.pack(fill="both", expand=True)
+        self._status_desc_labels: list[tk.Label] = []
+        self._status_wl: int | None = None
+        self.rows.bind("<Configure>", self._reflow_status)
 
         self._tick()
 
@@ -112,10 +116,38 @@ class MainWindow:
             pass
 
     def _toggle_record(self) -> None:
+        if self._processing:
+            return  # guard: já parando/enfileirando, ignora clique duplicado
         if self.app.is_recording():
-            threading.Thread(target=self.app.stop_recording, kwargs={"keep": True}, daemon=True).start()
+            self._processing = True
+            self.rec_btn.set_text("Processando…")
+            self._set_rec_btn_busy(True)
+            t = threading.Thread(target=self.app.stop_recording, kwargs={"keep": True}, daemon=True)
+            t.start()
+            self._await_processing(t)
         else:
             threading.Thread(target=self.app.start_recording, args=("manual",), daemon=True).start()
+
+    def _set_rec_btn_busy(self, busy: bool) -> None:
+        """Feedback visual de "ocupado" no botão de gravar (Canvas desenhado — sem
+        state=disabled nativo do Tk; mesmo padrão do wizard_ui._set_buttons_busy)."""
+        try:
+            fill = PALETTE["muted"] if busy else self.rec_btn._color("idle")
+            self.rec_btn.itemconfigure(self.rec_btn._rect, fill=fill)
+            self.rec_btn.configure(cursor="arrow" if busy else "hand2")
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _await_processing(self, t: threading.Thread) -> None:
+        """Mantém o botão em "Processando…" até a thread de stop_recording (que faz
+        o enfileiramento p/ transcrição+resumo) terminar; então libera o botão. Não
+        cobre o processamento em si (fila do worker, fora do alcance desta janela),
+        só o intervalo — hoje mudo — entre clicar em Parar e a call retornar."""
+        if t.is_alive():
+            self.root.after(150, lambda: self._await_processing(t))
+            return
+        self._processing = False
+        self._set_rec_btn_busy(False)
 
     # ---- aviso de nova versão (#19) ---------------------------------------------
 
@@ -163,21 +195,27 @@ class MainWindow:
             if recording:
                 self.call_state.set(f"Gravando ({app_name or 'manual'})")
                 self.call_timer.set(_fmt(self.app.recording_duration()))
-                self.rec_btn.set_text("■  Parar e processar")
+                self._set_rec_btn_idle("■  Parar e processar")
                 self._call_dot.itemconfigure(self._call_dot_item, fill=PALETTE["accent"])
             elif self.app.call_active:
                 self.call_state.set(f"Em call ({app_name or '?'}) — sem gravar")
                 self.call_timer.set(_fmt(self.app.call_duration()))
-                self.rec_btn.set_text("⏺  Gravar agora")
+                self._set_rec_btn_idle("⏺  Gravar agora")
                 self._call_dot.itemconfigure(self._call_dot_item, fill=PALETTE["warn"])
             else:
                 self.call_state.set("Nenhuma ligação em andamento")
                 self.call_timer.set("—")
-                self.rec_btn.set_text("⏺  Gravar agora")
+                self._set_rec_btn_idle("⏺  Gravar agora")
                 self._call_dot.itemconfigure(self._call_dot_item, fill=PALETTE["muted"])
         if visible and self.app.update_news and not self.update_bar.winfo_ismapped():
             self.show_update(self.app.update_news)
         self.root.after(1000, self._tick)
+
+    def _set_rec_btn_idle(self, text: str) -> None:
+        """Aplica o texto normal do botão de gravar — a menos que _processing esteja
+        ativo, caso em que "Processando…" (setado em _toggle_record) prevalece."""
+        if not self._processing:
+            self.rec_btn.set_text(text)
 
     # ---- status dos serviços ------------------------------------------------------
 
@@ -194,7 +232,7 @@ class MainWindow:
             for name, exists in app_key_status(patterns_from(cfg.detection)).items():
                 items.append(
                     ("ok" if exists else "warn", f"Detecção {name}",
-                     "ativa" if exists else "entre numa call dele uma vez")
+                     "ativa" if exists else f"Abra uma call no {name} uma vez p/ o Windows registrar o app")
                 )
         except Exception as e:
             items.append(("warn", "Detecção", str(e)))
@@ -218,7 +256,7 @@ class MainWindow:
                 items.append(
                     ("ok" if ready else "warn", "Detecção no navegador",
                      f"{svcs} — via {', '.join(ready)}"
-                     if ready else f"{svcs} — entre numa call no navegador uma vez")
+                     if ready else f"{svcs} — abra uma call no navegador uma vez p/ o Windows registrar")
                 )
         except Exception as e:
             items.append(("warn", "Detecção no navegador", str(e)))
@@ -274,7 +312,7 @@ class MainWindow:
                 else:
                     has_claude = util_mod.claude_command() is not None
                     items.append(("ok" if has_claude else "warn", "Resumo (Claude)",
-                                  s.model if has_claude else "claude CLI não encontrado"))
+                                  s.model if has_claude else "claude CLI não encontrado — instale-o e faça login (veja a aba Resumo)"))
             else:
                 items.append(("off", "Resumo", "desativado"))
         except Exception as e:
@@ -317,17 +355,39 @@ class MainWindow:
     def _render_status(self, items: list[tuple[str, str, str]]) -> None:
         for child in self.rows.winfo_children():
             child.destroy()
+        self._status_desc_labels = []
+        self._status_lead_w = 0  # largura real de dot+nome à esquerda (igual em toda linha: width=22 fixo)
         for level, name, detail in items:
             row = tk.Frame(self.rows, bg=_BG)
             row.pack(fill="x", pady=3)
             dot = tk.Canvas(row, width=10, height=10, bg=_BG, highlightthickness=0)
             dot.create_oval(1, 1, 9, 9, fill=_LEVEL_COLORS.get(level, PALETTE["muted"]), outline="")
             dot.pack(side="left", pady=2)
-            tk.Label(row, text=name, bg=_BG, fg=PALETTE["text"], font=FONT, width=22, anchor="w").pack(
-                side="left", padx=(8, 4)
-            )
-            tk.Label(row, text=detail, bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8),
-                     anchor="w", justify="left", wraplength=260).pack(side="left", fill="x")
+            name_lbl = tk.Label(row, text=name, bg=_BG, fg=PALETTE["text"], font=FONT, width=22, anchor="w")
+            name_lbl.pack(side="left", padx=(8, 4))
+            dl = tk.Label(row, text=detail, bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8),
+                          anchor="w", justify="left", wraplength=260)
+            dl.pack(side="left", fill="x")
+            self._status_desc_labels.append(dl)
+        if items:
+            self.rows.update_idletasks()
+            self._status_lead_w = dot.winfo_reqwidth() + name_lbl.winfo_reqwidth() + 12  # +padx(8,4)
+        self._status_wl = None  # força o _reflow_status a reaplicar após recriar as rows
+        self._reflow_status()
+
+    def _reflow_status(self, event=None) -> None:
+        """Ajusta o wrap dos detalhes de serviço à largura real disponível na linha
+        (dot+nome à esquerda descontados) — mesmo padrão do painel Presentes em
+        notes_ui._reflow_presentes, adaptado p/ estas linhas terem widgets antes."""
+        if not self._status_desc_labels:
+            return
+        w = event.width if event is not None else self.rows.winfo_width()
+        wl = max(200, w - self._status_lead_w - 16)
+        if wl == self._status_wl:
+            return
+        self._status_wl = wl
+        for lbl in self._status_desc_labels:
+            lbl.configure(wraplength=wl)
 
     # ---- público -------------------------------------------------------------------
 
