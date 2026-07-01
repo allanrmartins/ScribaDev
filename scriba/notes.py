@@ -257,40 +257,148 @@ def split_header(text: str) -> tuple[str, str | None, str | None]:
 _SUMMARY_S_PER_AUDIO_MIN = 20
 _SUMMARY_TIMEOUT_CEILING = 3600  # 1 h — folga grande mesmo p/ uma call de 4 h
 
+# Map-reduce do resumo para transcrições longas (#22): acima de _SINGLE_SHOT_CHARS a transcrição
+# é FATIADA e resumida em X requisições (map), depois consolidada (reduce) — para NUNCA deixar de
+# LER uma parte por estouro de contexto. Abaixo do teto, 1 chamada só (reuniões normais não mudam).
+# Valores em CARACTERES (proxy de tokens, ~3,5-4 chars/token; folga grande sob o contexto real).
+_SINGLE_SHOT_CHARS = 150_000   # ~43k tokens: 1 chamada; comportamento atual preservado
+_MAP_CHUNK_CHARS = 60_000      # cada parte do map (~17k tokens): boa qualidade + margem
+_REDUCE_INPUT_CHARS = 150_000  # notas combinadas acima disso → condensa mais um nível (raro)
+
+# System prompt do MAP: extrai notas FIÉIS de UM trecho (as partes são unidas no reduce). Sem
+# formatar como resumo final e sem inventar — o reduce depois aplica o prompt estruturado
+# (SYSTEM_PROMPT + prompt.md) sobre a UNIÃO das notas, que cobrem a reunião inteira.
+_MAP_SYSTEM = (
+    "Você está processando UM TRECHO de uma reunião longa (SAP/ABAP, pt-BR) cujas partes serão "
+    "unidas depois. Extraia com FIDELIDADE, sem inventar e sem omitir nada relevante, tudo que "
+    "possa importar para o resumo final: decisões, tarefas/ações e responsáveis, temas e pontos "
+    "discutidos, regras de negócio, números, prazos, valores, nomes próprios e de objetos, e quem "
+    "falou. Preserve os carimbos [HH:MM:SS] dos pontos importantes. NÃO produza o resumo final nem "
+    "formate em seções — produza notas densas, fiéis e completas DESTE trecho, em português."
+)
+
+
+def _summary_call(body: str, meeting: str, timeout: int, folder: Path, *, notes_mode: bool = False) -> str | None:
+    """Chamada de resumo estruturado (single-shot OU reduce final): aplica TITLE_INSTRUCTION +
+    prompt.md sobre `body`. `notes_mode=False` → `body` é a transcrição crua; `True` → são as
+    notas das partes (map-reduce), rotuladas como cobrindo a reunião inteira.
+
+    cwd=folder mantém o claude fora de qualquer projeto (sem CLAUDE.md alheio no contexto);
+    hidden_window=False de propósito — roda no worker (console já oculto) e forçar
+    CREATE_NO_WINDOW dispararia o bug do Windows Terminal (ver promptgen._call_claude)."""
+    from . import ai
+
+    payload = f"{TITLE_INSTRUCTION}{load_summary_prompt()}"
+    if meeting:
+        payload += f"\n\n=== NOME DA REUNIÃO (do título da janela; pista, pode estar incompleto) ===\n{meeting}"
+    if notes_mode:
+        payload += ("\n\n=== NOTAS DAS PARTES (extraídas da transcrição; cobrem a reunião INTEIRA, "
+                    "em ordem cronológica — trate como a transcrição) ===\n\n" + body)
+    else:
+        payload += f"\n\n=== TRANSCRIÇÃO ===\n\n{body}"
+    return ai.complete(SYSTEM_PROMPT, payload, timeout=timeout, cwd=folder, hidden_window=False)
+
+
+def _summarize_part(body: str, i: int, total: int, timeout: int, folder: Path) -> str | None:
+    """MAP: extrai notas fiéis de UM trecho. 1 retry p/ falha transitória — se ainda falhar,
+    devolve None (o chamador ABORTA o resumo; jamais dropa a parte em silêncio)."""
+    from . import ai
+
+    print(f"resumo: parte {i}/{total}…")
+    for _ in (1, 2):
+        out = ai.complete(_MAP_SYSTEM, f"TRECHO {i}/{total} (ordem cronológica):\n\n{body}",
+                          timeout=timeout, cwd=folder, hidden_window=False)
+        if out:
+            return out
+    return None
+
+
+def _map_reduce_notes(transcript_md: str, extract, *, map_chunk_chars: int = _MAP_CHUNK_CHARS,
+                      reduce_input_chars: int = _REDUCE_INPUT_CHARS) -> str | None:
+    """Map + condensação hierárquica. `extract(body, i, total) -> notas|None` resume um trecho.
+
+    Fatia a transcrição em partes que COBREM ela INTEIRA (sem lacuna — cada bloco vai para
+    exatamente uma parte), extrai notas de cada uma e, se as notas combinadas não couberem no
+    reduce final, condensa por grupos até caber. Devolve o TEXTO das notas combinadas, ou None se
+    QUALQUER extract falhar (nunca produz notas que perderam um trecho). Puro/testável (sem IA/IO).
+    """
+    from .transcript_search import chunk_transcript
+
+    parts = chunk_transcript(transcript_md, max_chars=map_chunk_chars)
+    notes: list[str] = []
+    for i, ch in enumerate(parts, 1):
+        n = extract(ch, i, len(parts))
+        if n is None:
+            return None
+        notes.append(n)
+    # condensa em níveis enquanto as notas não couberem no reduce (raro: reuniões enormes)
+    while len("\n\n".join(notes)) > reduce_input_chars and len(notes) > 1:
+        groups: list[list[str]] = []
+        cur: list[str] = []
+        size = 0
+        for p in notes:
+            if cur and size + len(p) > map_chunk_chars:
+                groups.append(cur)
+                cur, size = [], 0
+            cur.append(p)
+            size += len(p)
+        if cur:
+            groups.append(cur)
+        if len(groups) >= len(notes):
+            break  # não deu p/ reduzir (notas já grandes) — reduce final tenta com o que há
+        condensed: list[str] = []
+        for i, g in enumerate(groups, 1):
+            c = extract("\n\n".join(g), i, len(groups))
+            if c is None:
+                return None
+            condensed.append(c)
+        notes = condensed
+    return "\n\n".join(notes)
+
 
 def generate_summary(transcript_md: str, folder: Path) -> tuple[str | None, str | None, str | None]:
     """Gera o resumo estruturado da transcrição via o provider de IA configurado.
 
-    Retorna (resumo, título, cliente) — None em cada campo se a IA estiver
-    desligada ou falhar. O provider (claude CLI / Ollama / OpenAI-compatível) é
-    escolhido em [summary].provider; ver scriba/ai.py.
+    Transcrição curta (≤ _SINGLE_SHOT_CHARS): 1 chamada, como sempre. Transcrição longa:
+    map-reduce — fatia em X partes, resume cada uma (map) e consolida (reduce), para NUNCA deixar
+    de LER uma parte por estouro de contexto. Se alguma parte falhar mesmo após retry, ABORTA
+    (retorna None) em vez de produzir um resumo que silenciosamente perdeu conteúdo — a transcrição
+    segue salva e o resumo pode ser re-rodado (`scriba summarize`).
+
+    Retorna (resumo, título, cliente) — None em cada campo se a IA estiver desligada ou falhar. O
+    provider (claude CLI / Ollama / OpenAI-compatível) é escolhido em [summary].provider (ver ai.py).
     """
     cfg = load().summary
     if not cfg.enabled:
         return None, None, None
-    from . import ai
 
-    # Instruções + transcrição vão juntas no payload (stdin no claude CLI; mensagem
-    # 'user' nos providers HTTP). cwd=folder mantém o claude fora de qualquer projeto
-    # (sem CLAUDE.md alheio no contexto); hidden_window=False de propósito — isto roda
-    # no worker (console já oculto) e forçar CREATE_NO_WINDOW dispararia o bug do
-    # Windows Terminal (ver o caminho da bandeja em promptgen._call_claude).
     try:
         meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
     except Exception:
         meta = {}
     meeting = (meta.get("meeting_title") or "").strip()
 
-    payload = f"{TITLE_INSTRUCTION}{load_summary_prompt()}"
-    if meeting:
-        payload += f"\n\n=== NOME DA REUNIÃO (do título da janela; pista, pode estar incompleto) ===\n{meeting}"
-    payload += f"\n\n=== TRANSCRIÇÃO ===\n\n{transcript_md}"
-
-    # piso = config; escala pela duração do áudio; teto p/ não pendurar o worker
+    # piso = config; escala pela duração do áudio; teto p/ não pendurar o worker. No map-reduce
+    # vale POR chamada (cada parte é menor que a call inteira, então há folga de sobra).
     audio_min = float(meta.get("duration_seconds") or 0) / 60
     timeout = min(_SUMMARY_TIMEOUT_CEILING, max(int(cfg.timeout_seconds), int(audio_min * _SUMMARY_S_PER_AUDIO_MIN)))
 
-    out = ai.complete(SYSTEM_PROMPT, payload, timeout=timeout, cwd=folder, hidden_window=False)
+    if len(transcript_md) <= _SINGLE_SHOT_CHARS:
+        out = _summary_call(transcript_md, meeting, timeout, folder)
+    else:
+        n_parts = len(transcript_md) // _MAP_CHUNK_CHARS + 1
+        print(f"resumo: transcrição longa ({len(transcript_md)} chars) — map-reduce em ~{n_parts} "
+              "partes p/ não perder nada")
+        combined = _map_reduce_notes(
+            transcript_md,
+            lambda body, i, total: _summarize_part(body, i, total, timeout, folder),
+        )
+        if combined is None:
+            print("resumo: uma parte falhou — abortado (transcrição preservada; rode "
+                  "'scriba summarize' de novo)")
+            return None, None, None
+        out = _summary_call(combined, meeting, timeout, folder, notes_mode=True)
+
     if not out:
         return None, None, None
     return split_header(out)
