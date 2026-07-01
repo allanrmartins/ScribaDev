@@ -23,6 +23,9 @@ from .widgets import (
     LinkLabel,
     ModernButton,
     add_placeholder,
+    add_tooltip,
+    flash_button,
+    remember_geometry,
     app_icon,
     enable_dark_titlebar,
     make_entry,
@@ -129,6 +132,7 @@ class NotesWindow:
         self.notes_tree.column("#0", width=320)
         self.notes_tree.pack(fill="y", expand=True, pady=(6, 6))
         self.notes_tree.bind("<<TreeviewSelect>>", lambda e: self._show_selected_note())
+        add_tooltip(self.notes_tree, "Dica: Ctrl ou Shift + clique seleciona várias notas (excluir em lote)")
         actions = tk.Frame(left, bg=_BG)
         actions.pack(fill="x")
         LinkLabel(actions, "Atualizar", self._refresh_notes_list).pack(side="left")
@@ -149,7 +153,8 @@ class NotesWindow:
         tk.Label(title_row, text="Cliente:", bg=_BG, fg=PALETTE["muted"], font=FONT).pack(side="left", padx=(10, 4))
         self.note_client_var = tk.StringVar()
         make_entry(title_row, self.note_client_var, width=14).pack(side="left", ipady=4)
-        ModernButton(title_row, "Salvar", self._save_note_header).pack(side="right", padx=(8, 0))
+        self._save_hdr_btn = ModernButton(title_row, "Salvar", self._save_note_header)
+        self._save_hdr_btn.pack(side="right", padx=(8, 0))
 
         # cópias independentes: contexto da atividade (sem transcrição) e transcrição;
         # cada tabela da nota tem seu próprio "⧉ copiar (Excel)" ao lado dela
@@ -365,6 +370,7 @@ class NotesWindow:
         px, py = self.win.winfo_rootx(), self.win.winfo_rooty()
         pw, ph = self.win.winfo_width(), self.win.winfo_height()
         win.geometry(f"{w}x{h}+{px + max(0, (pw - w) // 2)}+{py + max(0, (ph - h) // 4)}")
+        remember_geometry(win, "action_items")  # lembra tamanho/posição (1ª vez: centralizada)
         win.deiconify()
         enable_dark_titlebar(win)
         win.lift()
@@ -391,8 +397,17 @@ class NotesWindow:
                  font=font, justify="left", anchor="w", wraplength=620).pack(side="left", fill="x", expand=True)
 
     def _reveal_note(self, note_path: Path) -> None:
-        """Seleciona/exibe a nota deste path na árvore (abre o dia, rola até ela).
-        No-op se a nota não está na lista atual (ex.: filtro/busca ativo)."""
+        """Seleciona/exibe a nota na árvore (abre o dia, rola até ela). Se ela estiver FORA do
+        filtro/busca atual, LIMPA os filtros e tenta de novo — antes era um no-op silencioso."""
+        if self._select_in_tree(note_path):
+            return
+        for v in (self.search_var, self.filter_participant_var, self.filter_client_var,
+                  self.filter_since_var, self.filter_until_var):
+            v.set("")
+        self._refresh_notes_list()
+        self._select_in_tree(note_path)
+
+    def _select_in_tree(self, note_path: Path) -> bool:
         for item, (p, _t, _s) in list(self._note_items.items()):
             if p == note_path:
                 parent = self.notes_tree.parent(item)
@@ -402,7 +417,8 @@ class NotesWindow:
                 self.notes_tree.see(item)
                 self.win.lift()
                 self.win.focus_force()
-                return
+                return True
+        return False
 
     def _note_info(self, path: Path) -> tuple[datetime, int | None, str | None]:
         """(data/hora, duração, título) da nota: frontmatter > nome do arquivo > mtime."""
@@ -914,6 +930,7 @@ class NotesWindow:
             util.rename_recording_folder(rec_folder, new_title)  # pasta acompanha o título
         self._showing_note = False  # força re-render com o novo cabeçalho
         self._refresh_notes_list()
+        flash_button(self._save_hdr_btn, "✓ Salvo", "Salvar")  # feedback (antes salvava calado)
 
     # -- rotulagem de vozes (#1) -----------------------------------------------
 
