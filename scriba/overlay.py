@@ -147,6 +147,14 @@ class RecordingPill:
         self.discard_btn = c.create_text(
             _W - 28, _H // 2, text="×", fill=_MUTED, font=("Segoe UI", 15, "bold"), tags=("btn", "discard")
         )
+        # hitboxes invisíveis (cor do corpo) atrás de ■ e × — o glifo de ~15px é difícil de acertar
+        # no trackpad; o retângulo maior recebe o clique e o texto fica por cima (tag_lower).
+        self.stop_hit = c.create_rectangle(_W - 74, _H // 2 - 11, _W - 50, _H // 2 + 11,
+                                           fill=_BG, outline="", tags=("btn", "stop"))
+        self.discard_hit = c.create_rectangle(_W - 40, _H // 2 - 11, _W - 16, _H // 2 + 11,
+                                              fill=_BG, outline="", tags=("btn", "discard"))
+        c.tag_lower(self.stop_hit, self.stop_btn)
+        c.tag_lower(self.discard_hit, self.discard_btn)
 
         # nº de participantes (#13): stepper "− N +" (modo gravação). Define o
         # num_speakers ao vivo; ao encerrar, se confirmado, dispensa a janela do fim.
@@ -186,6 +194,8 @@ class RecordingPill:
         c.bind("<Button-1>", self._drag_start)
         c.bind("<B1-Motion>", self._drag_move)
         c.bind("<ButtonRelease-1>", self._drag_end)
+        c.bind("<Motion>", self._update_cursor, add="+")  # descobribilidade: fleur no corpo, hand2 nos botões
+        c.configure(cursor="fleur")
         self._drag_offset = None
 
         # hint "invisível no compartilhamento" ao passar o mouse pela pílula (#23)
@@ -213,6 +223,13 @@ class RecordingPill:
     def _on_button(self) -> bool:
         return any("btn" in self.canvas.gettags(i) for i in self.canvas.find_withtag("current"))
 
+    def _update_cursor(self, _e=None) -> None:
+        """Cursor de mãozinha sobre os botões, fleur (mover) no resto — sinaliza que arrasta."""
+        try:
+            self.canvas.configure(cursor="hand2" if self._on_button() else "fleur")
+        except tk.TclError:
+            pass
+
     def _drag_start(self, e):
         if self._on_button():
             self._drag_offset = None
@@ -233,7 +250,8 @@ class RecordingPill:
 
     # -- hint "invisível no compartilhamento" (#23) --------------------------
 
-    _TIP_TEXT = "Esta janela não aparece para quem assiste ao seu compartilhamento de tela"
+    _TIP_TEXT = ("Esta janela não aparece para quem assiste ao seu compartilhamento de tela"
+                 "  ·  arraste para mover")
 
     def _tip_schedule(self, _e=None):
         """Agenda o tooltip após uma pausa do mouse (evita piscar em passagens rápidas)."""

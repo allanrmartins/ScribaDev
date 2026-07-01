@@ -88,7 +88,25 @@ class Tray:
         self._bg(self.app.stop_recording, False, True)  # keep=True: intenção explícita
 
     def _discard_recording(self, icon, item):
-        self._bg(self.app.stop_recording, True)  # discard=True
+        # DESTRUTIVO: confirma na thread do Tk (a bandeja roda noutra thread) antes de perder o áudio.
+        self.app.ui(self._confirm_discard)
+
+    def _confirm_discard(self):
+        from tkinter import messagebox
+
+        kw = {"icon": "warning", "default": "no"}
+        if getattr(self.app, "root", None) is not None:
+            kw["parent"] = self.app.root
+        try:
+            ok = messagebox.askyesno(
+                "Descartar gravação?",
+                "A gravação em andamento será descartada e o áudio, perdido.\n\nDescartar mesmo assim?",
+                **kw,
+            )
+        except Exception:
+            ok = True  # sem UI disponível: não trava o descarte (comportamento antigo)
+        if ok:
+            self._bg(self.app.stop_recording, True)  # discard=True
 
     def _speakers_menu(self) -> "pystray.Menu":
         """Submenu 'Participantes' (1–8): define o nº na gravação ativa (#13/#14).
