@@ -33,7 +33,7 @@ def ask_num_speakers(
     """
     win = tk.Toplevel(root)
     win.withdraw()  # posiciona ANTES de exibir (evita nascer fora e "pular")
-    win.title("ScribaDev — Participantes")
+    win.title("ScribaDev — Quantas vozes?")
     win.configure(bg=_BG, padx=22, pady=18)
     win.resizable(False, False)
     win.attributes("-topmost", True)
@@ -81,16 +81,29 @@ def ask_num_speakers(
 
     def confirm() -> None:
         s = var.get().strip()
+        if s == "0":
+            hint_var.set("0 não vale — use \"Não sei / automático\".")
+            return
         finish(int(s) if s.isdigit() and int(s) >= 1 else None)
 
     btns = tk.Frame(win, bg=_BG)
     btns.pack(pady=(10, 4))
-    ModernButton(btns, "Confirmar", confirm, kind="primary", width=120).pack(side="left", padx=(0, 8))
+    confirm_btn = ModernButton(btns, "Confirmar", confirm, kind="primary", width=120)
+    confirm_btn.pack(side="left", padx=(0, 8))
     ModernButton(btns, "Não sei / automático", lambda: finish(None), width=170).pack(side="left")
 
     hint_var = tk.StringVar(value="")
     tk.Label(win, textvariable=hint_var, bg=_BG, fg=PALETTE["muted"],
              font=("Segoe UI", 8)).pack(anchor="w", pady=(8, 0))
+
+    # -- botão reflete o valor digitado ("Confirmar" / "Confirmar N") -------
+    def _sync_confirm_btn(*_a) -> None:
+        s = var.get().strip()
+        confirm_btn.set_text(f"Confirmar {s}" if s.isdigit() and int(s) >= 1 else "Confirmar")
+        if s != "0":
+            hint_var.set("")  # digitar de novo limpa o aviso do "0"
+    _sync_confirm_btn()
+    var.trace_add("write", _sync_confirm_btn)
 
     # -- atalhos: Enter confirma, Esc/fechar = automático -------------------
     win.bind("<Return>", lambda e: confirm())
@@ -111,6 +124,20 @@ def ask_num_speakers(
 
     if timeout_seconds and int(timeout_seconds) > 0:
         tick()
+
+    # -- re-afirma -topmost periodicamente -----------------------------------
+    # se o usuário clica noutro app a janela pode ficar atrás; como o timeout
+    # continua contando "por trás", reforça o topmost (mesma ideia da pílula).
+    def _keep_on_top() -> None:
+        if done["called"]:
+            return
+        try:
+            win.attributes("-topmost", True)
+        except tk.TclError:
+            return
+        win.after(2000, _keep_on_top)
+
+    win.after(2000, _keep_on_top)
 
     # -- centraliza (sobre o app se visível; senão na tela) + foco no topo --
     # mesma técnica do pop-up de excluir nota: oculta → posiciona → deiconify.
@@ -165,7 +192,7 @@ def label_speakers_dialog(parent: tk.Misc, folder, on_saved: Callable[[], None] 
         voices = {}
 
     win = tk.Toplevel(parent)
-    win.title("ScribaDev — Rotular participantes")
+    win.title("ScribaDev — Quem é cada voz?")
     win.configure(bg=_BG, padx=20, pady=16)
     win.resizable(False, False)
     win.transient(parent if isinstance(parent, (tk.Tk, tk.Toplevel)) else None)
@@ -209,15 +236,16 @@ def label_speakers_dialog(parent: tk.Misc, folder, on_saved: Callable[[], None] 
         # check por voz: já reconhecida/rotulada nasce MARCADA; palpite e vazio
         # nascem DESMARCADOS — no Salvar só vale o que você marcou.
         confirmed = tk.BooleanVar(value=bool(auto or labeled))
-        # legenda DESMARCADO = o motivo do palpite; MARCADO = "Confirmado" (verde)
+        # legenda DESMARCADO = o motivo do palpite (com prefixo/cor por estado);
+        # MARCADO = "Confirmado" (verde), igual para todos.
         if auto:
-            base = "reconhecido"
+            base, base_color = "✓ reconhecido", PALETTE["ok"]
         elif labeled:
-            base = "você rotulou"
+            base, base_color = "✎ você rotulou", PALETTE["text"]
         elif anon and guess:
-            base = "palpite"
+            base, base_color = "★ palpite", PALETTE["warn"]
         else:
-            base = "confirmar"
+            base, base_color = "○ confirmar", PALETTE["muted"]
         tk.Label(row, text=slabel, bg=_BG, fg=PALETTE["text"], font=FONT_BOLD,
                  width=16, anchor="w").pack(side="left")
         chk = tk.Checkbutton(
@@ -227,20 +255,44 @@ def label_speakers_dialog(parent: tk.Misc, folder, on_saved: Callable[[], None] 
         )
         chk.pack(side="right", padx=(6, 0))
 
-        # texto + cor seguem o check: marcado → "Confirmado" verde; senão, motivo cinza.
-        # default-args fixam o trio desta linha (evita o late-binding do loop).
-        def _sync_chk(*_a, _chk=chk, _base=base, _var=confirmed):
+        # texto + cor seguem o check: marcado → "✓ Confirmado" verde; senão, motivo
+        # com prefixo/cor próprios (default-args fixam o trio, evita late-binding do loop).
+        def _sync_chk(*_a, _chk=chk, _base=base, _base_color=base_color, _var=confirmed):
             on = _var.get()
-            color = PALETTE["ok"] if on else PALETTE["muted"]
-            _chk.config(text=("Confirmado" if on else _base), fg=color, activeforeground=color)
+            text = "✓ Confirmado" if on else _base
+            color = PALETTE["ok"] if on else _base_color
+            _chk.config(text=text, fg=color, activeforeground=color)
         _sync_chk()
         confirmed.trace_add("write", _sync_chk)
 
         var = tk.StringVar(value=prefill)
-        make_entry(row, var, width=20).pack(side="left", fill="x", expand=True, ipady=3)
+        make_entry(row, var, width=28).pack(side="left", fill="x", expand=True, ipady=3)
         rows.append((slabel, var, confirmed))
 
+    status_var = tk.StringVar(value="")
+    status_lbl = tk.Label(win, textvariable=status_var, bg=_BG, fg=PALETTE["warn"],
+                          font=("Segoe UI", 8), wraplength=380, justify="left")
+    status_lbl.pack(anchor="w", pady=(8, 0))
+
+    closed = {"done": False}
+
+    def _close() -> None:
+        if closed["done"]:
+            return
+        closed["done"] = True
+        if on_saved is not None:
+            on_saved()
+        win.destroy()
+
     def save() -> None:
+        if closed["done"]:  # evita duplo-save durante o delay do feedback de sucesso
+            return
+        # nome vazio numa voz MARCADA é engano do usuário (marcou p/ confirmar mas
+        # apagou o nome) — avisa em vez de ignorar essa voz em silêncio.
+        if any(confirmed.get() and not var.get().strip() for _label, var, confirmed in rows):
+            status_lbl.config(fg=PALETTE["warn"])
+            status_var.set("Dê um nome às vozes marcadas antes de salvar (ou desmarque-as).")
+            return
         # só vozes MARCADAS com nome != label entram; desmarcado nunca é salvo,
         # mesmo com palpite preenchido (você não confirmou).
         renames = {label: var.get().strip() for label, var, confirmed in rows
@@ -254,14 +306,23 @@ def label_speakers_dialog(parent: tk.Misc, folder, on_saved: Callable[[], None] 
                 import logging
 
                 logging.getLogger("scriba.speakers_ui").exception("falha ao rotular vozes")
+        if not renames:
+            _close()
+            return
+        # feedback de sucesso: mostra antes de fechar (dá tempo de o usuário ler).
+        n = len(renames)
+        status_lbl.config(fg=PALETTE["ok"])
+        status_var.set(f"✓ Aprendi {n} voz{'es' if n != 1 else ''} para as próximas reuniões.")
+        win.after(1400, _close)
+
+    def cancel() -> None:
+        closed["done"] = True  # trava um _close() do "Salvar" ainda pendente (win.after)
         win.destroy()
-        if on_saved is not None:
-            on_saved()
 
     btns = tk.Frame(win, bg=_BG)
     btns.pack(fill="x", pady=(14, 0))
     ModernButton(btns, "Salvar", save, kind="primary", width=110).pack(side="right")
-    ModernButton(btns, "Cancelar", win.destroy, width=100).pack(side="right", padx=(0, 8))
+    ModernButton(btns, "Cancelar", cancel, width=100).pack(side="right", padx=(0, 8))
 
     win.update_idletasks()
     enable_dark_titlebar(win)
