@@ -112,7 +112,7 @@ class LogWindow:
         # ---- área do log --------------------------------------------------
         frame = tk.Frame(self.win, bg=_BG, padx=12, pady=8)
         frame.pack(fill="both", expand=True)
-        self.text = tk.Text(frame, bg="#1b1b21", fg=PALETTE["text"], insertbackground=PALETTE["text"],
+        self.text = tk.Text(frame, bg=PALETTE["log_bg"], fg=PALETTE["text"], insertbackground=PALETTE["text"],
                             font=("Consolas", 9), wrap="none", bd=0, highlightthickness=0, state="disabled")
         sb = tk.Scrollbar(frame, orient="vertical", command=self.text.yview)
         sbx = tk.Scrollbar(frame, orient="horizontal", command=self.text.xview)
@@ -120,11 +120,11 @@ class LogWindow:
         sb.pack(side="right", fill="y")
         sbx.pack(side="bottom", fill="x")
         self.text.pack(side="left", fill="both", expand=True)
-        self.text.tag_configure("err", foreground="#ff6b6b")       # ERROR/CRITICAL
-        self.text.tag_configure("warn", foreground="#e0b341")      # WARNING
+        self.text.tag_configure("err", foreground=PALETTE["log_err"])   # ERROR/CRITICAL
+        self.text.tag_configure("warn", foreground=PALETTE["warn"])     # WARNING
         self.text.tag_configure("debug", foreground=PALETTE["muted"])
-        self.text.tag_configure("hit", background="#ffe14d", foreground="#1b1b21")
-        self.text.tag_configure("hit_current", background="#ff8c1a", foreground="#1b1b21")
+        self.text.tag_configure("hit", background=PALETTE["highlight"], foreground=PALETTE["log_bg"])
+        self.text.tag_configure("hit_current", background=PALETTE["highlight_current"], foreground=PALETTE["log_bg"])
 
         # filtros disparam re-render (debounce nos campos de texto)
         self.find_var.trace_add("write", lambda *a: self._debounced())

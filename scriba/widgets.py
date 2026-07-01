@@ -25,6 +25,11 @@ PALETTE = {
     "btn_hover": "#474753",
     "btn_press": "#2f2f38",
     "ok": "#6cc873",
+    "warn": "#e0b341",              # âmbar: "em call", avisos não-críticos, warn do log
+    "highlight": "#ffe14d",         # fundo de hit de busca (não atual)
+    "highlight_current": "#ff8c1a",  # fundo do hit atual da busca
+    "log_bg": "#1b1b21",            # fundo do visualizador de log (mais escuro)
+    "log_err": "#ff6b6b",          # linha de erro no log
 }
 
 FONT = ("Segoe UI", 9)
@@ -533,3 +538,121 @@ def app_icon(size: int = 18):
         return base.subsample(factor, factor) if factor > 1 else base
     except Exception:
         return None
+
+
+# == fundação de UI (#26): feedback, tooltip e memória de geometria ============
+
+
+def flash_button(btn, text: str, revert_to: str, *, ms: int = 1500) -> None:
+    """Feedback efêmero num ModernButton: troca o texto por `text` e volta a `revert_to` após
+    `ms`. Regra do app: nenhuma ação do usuário termina sem resposta visível."""
+    try:
+        btn.set_text(text)
+        btn.after(ms, lambda: btn.set_text(revert_to))
+    except (tk.TclError, AttributeError):
+        pass
+
+
+def add_tooltip(widget, text: str, *, delay: int = 600, wraplength: int = 260) -> None:
+    """Tooltip escuro no hover (some no leave/click). Para explicações secundárias — evita
+    encher a tela de hint-labels permanentes. `add='+'` preserva os binds do widget."""
+    st = {"job": None, "tip": None}
+
+    def _cancel():
+        if st["job"] is not None:
+            try:
+                widget.after_cancel(st["job"])
+            except tk.TclError:
+                pass
+            st["job"] = None
+
+    def _hide(_e=None):
+        _cancel()
+        if st["tip"] is not None:
+            try:
+                st["tip"].destroy()
+            except tk.TclError:
+                pass
+            st["tip"] = None
+
+    def _show():
+        st["job"] = None
+        if st["tip"] is not None or not text:
+            return
+        try:
+            tip = tk.Toplevel(widget)
+            tip.withdraw()
+            tip.overrideredirect(True)
+            tip.attributes("-topmost", True)
+            tk.Label(tip, text=text, bg=PALETTE["btn"], fg=PALETTE["text"], font=("Segoe UI", 9),
+                     padx=8, pady=5, wraplength=wraplength, justify="left",
+                     highlightthickness=1, highlightbackground=PALETTE["border"]).pack()
+            tip.update_idletasks()
+            x = widget.winfo_rootx() + 10
+            y = widget.winfo_rooty() + widget.winfo_height() + 6
+            tw = tip.winfo_reqwidth()
+            sw = widget.winfo_screenwidth()
+            if x + tw > sw - 8:
+                x = max(8, sw - tw - 8)
+            tip.geometry(f"+{x}+{y}")
+            tip.deiconify()
+            st["tip"] = tip
+        except tk.TclError:
+            st["tip"] = None
+
+    def _enter(_e=None):
+        _cancel()
+        try:
+            st["job"] = widget.after(delay, _show)
+        except tk.TclError:
+            pass
+
+    widget.bind("<Enter>", _enter, add="+")
+    widget.bind("<Leave>", _hide, add="+")
+    widget.bind("<Button-1>", _hide, add="+")
+    widget.bind("<Destroy>", _hide, add="+")
+
+
+def remember_geometry(win, key: str, *, default: str | None = None) -> None:
+    """Restaura a geometria salva desta janela (state.json, por `key`) ao abrir e a salva
+    (debounce) quando o usuário move/redimensiona. Preserva tamanho/posição entre sessões.
+    Silencioso em erro; nunca impede o minsize."""
+    geoms = util.read_state().get("_geom") or {}
+    saved = geoms.get(key)
+    try:
+        if isinstance(saved, str) and "x" in saved and "+" in saved:
+            win.geometry(saved)
+        elif default:
+            win.geometry(default)
+    except tk.TclError:
+        pass
+
+    job = {"id": None}
+
+    def _save():
+        job["id"] = None
+        try:
+            g = win.geometry()
+            if not win.winfo_viewable():
+                return
+        except tk.TclError:
+            return
+        if "x" in g and "+" in g and not g.startswith(("1x1", "0x0")):
+            cur = util.read_state().get("_geom")
+            cur = cur if isinstance(cur, dict) else {}
+            if cur.get(key) != g:
+                cur[key] = g
+                util.update_state(_geom=cur)
+
+    def _on_config(_e=None):
+        if job["id"] is not None:
+            try:
+                win.after_cancel(job["id"])
+            except tk.TclError:
+                pass
+        try:
+            job["id"] = win.after(600, _save)
+        except tk.TclError:
+            pass
+
+    win.bind("<Configure>", _on_config, add="+")

@@ -248,7 +248,7 @@ class SettingsWindow:
         separator(tab).pack(fill="x", pady=(8, 4))
         tk.Label(tab, text="Componentes e versões", bg=_BG, fg=PALETTE["text"],
                  font=FONT_BOLD).pack(anchor="w", pady=(2, 4))
-        _LVL = {"ok": PALETTE["muted"], "warn": "#e0b341", "err": PALETTE["accent"]}
+        _LVL = {"ok": PALETTE["muted"], "warn": PALETTE["warn"], "err": PALETTE["accent"]}
         comps = self._about_components()
         for label, value, level in comps:
             row = tk.Frame(tab, bg=_BG)

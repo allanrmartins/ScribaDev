@@ -1180,8 +1180,8 @@ class NotesWindow:
         query = self.find_var.get().strip()
         t = self.note_view
         # destaque forte: todas em amarelo; a atual em laranja com borda
-        t.tag_configure("hit", background="#ffe14d", foreground="#161616")
-        t.tag_configure("hit_current", background="#ff8c1a", foreground="#000000",
+        t.tag_configure("hit", background=PALETTE["highlight"], foreground="#161616")
+        t.tag_configure("hit_current", background=PALETTE["highlight_current"], foreground="#000000",
                         borderwidth=1, relief="solid")
         t.tag_raise("hit_current")  # a atual vence onde as duas tags se sobrepõem
         t.tag_remove("hit", "1.0", "end")

@@ -15,7 +15,7 @@ from .widgets import FONT, FONT_BOLD, PALETTE, LinkLabel, ModernButton, enable_d
 
 _BG = PALETTE["bg"]
 _CARD = "#2d2d37"
-_LEVEL_COLORS = {"ok": PALETTE["ok"], "warn": "#e0b341", "off": PALETTE["muted"]}
+_LEVEL_COLORS = {"ok": PALETTE["ok"], "warn": PALETTE["warn"], "off": PALETTE["muted"]}
 log = logging.getLogger("scriba.main_window")
 
 
@@ -169,7 +169,7 @@ class MainWindow:
                 self.call_state.set(f"Em call ({app_name or '?'}) — sem gravar")
                 self.call_timer.set(_fmt(self.app.call_duration()))
                 self.rec_btn.set_text("⏺  Gravar agora")
-                self._call_dot.itemconfigure(self._call_dot_item, fill="#e0b341")
+                self._call_dot.itemconfigure(self._call_dot_item, fill=PALETTE["warn"])
             else:
                 self.call_state.set("Nenhuma ligação em andamento")
                 self.call_timer.set("—")
