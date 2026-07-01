@@ -16,7 +16,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 
-from . import ai, chat_rag
+from . import ai, chat_rag, mdview
 from .widgets import PALETTE, ModernButton, ToggleSwitch, enable_dark_titlebar, make_entry, make_text
 
 _BG = PALETTE["bg"]
@@ -44,9 +44,9 @@ _THINK_INTERVAL = 380      # ms entre os quadros da animação dos pontos
 
 # Papéis das mensagens (estilo Claude Code): minha mensagem num bloco destacado à direita, a
 # resposta do ScribaDev como texto limpo à esquerda, avisos do Sistema centralizados e discretos.
-_ROLE_USER = "role_user"
-_ROLE_ASSIST = "role_assist"
-_ROLE_SYS = "role_sys"
+_ROLE_USER = "role_user"   # minha mensagem — bloco à direita
+_ROLE_SYS = "role_sys"     # avisos do sistema — centralizado
+# (a resposta do assistente NÃO tem tag de papel: é renderizada como markdown via mdview)
 _SYSTEM = (
     "Você responde perguntas sobre uma reunião cujo material (resumo e, se incluída, a "
     "transcrição) é dado a seguir. Responda em português, de forma direta e fiel ao "
@@ -80,18 +80,19 @@ class ChatWindow:
 
         conv_frame = tk.Frame(body, bg=_BG)
         conv_frame.pack(fill="both", expand=True)
-        self.conv = make_text(conv_frame, height=15)
+        self.conv = make_text(conv_frame, height=15, font=("Segoe UI", 10))  # proporcional p/ prosa
         sb = ttk.Scrollbar(conv_frame, orient="vertical", command=self.conv.yview)
-        self.conv.configure(yscrollcommand=sb.set, state="disabled")
-        # estilos por papel (bem distintos, à la Claude Code) — sem rótulos "Você:/ScribaDev:"
+        self.conv.configure(yscrollcommand=sb.set, state="disabled", spacing1=2, spacing3=4)
+        mdview.ensure_chat_tags(self.conv)  # bold/headers/listas/code p/ renderizar as respostas
+        # papéis (à la Claude Code, sem rótulos): minha msg = bloco à direita; sistema = centralizado.
+        # A resposta do assistente NÃO usa tag de papel — é renderizada como markdown (append_markdown).
         self.conv.tag_configure(_ROLE_USER, background="#45454f", foreground=PALETTE["text"],
                                 lmargin1=56, lmargin2=56, rmargin=8, spacing1=6, spacing2=2, spacing3=8)
-        self.conv.tag_configure(_ROLE_ASSIST, foreground=PALETTE["text"],
-                                lmargin1=8, lmargin2=8, rmargin=52, spacing1=4, spacing2=2, spacing3=10)
-        self.conv.tag_configure(_ROLE_SYS, foreground=PALETTE["muted"], font=("Segoe UI", 8, "italic"),
+        self.conv.tag_configure(_ROLE_SYS, foreground=PALETTE["muted"], font=("Segoe UI", 9, "italic"),
                                 justify="center", lmargin1=24, lmargin2=24, rmargin=24, spacing1=8, spacing3=8)
-        self.conv.tag_configure(_THINK_TAG, foreground=PALETTE["accent"], font=("Consolas", 9, "italic"),
-                                lmargin1=8, lmargin2=8, spacing1=4, spacing3=10)
+        self.conv.tag_configure(_THINK_TAG, foreground=PALETTE["accent"], font=("Segoe UI", 10, "italic"),
+                                lmargin1=8, lmargin2=8, spacing1=4, spacing3=6)
+        self._install_copy_menu()
         sb.pack(side="right", fill="y")
         self.conv.pack(side="left", fill="both", expand=True)
 
@@ -104,7 +105,7 @@ class ChatWindow:
             opt = tk.Frame(body, bg=_BG)
             opt.pack(fill="x", pady=(6, 0))
             ToggleSwitch(opt, self._include_transcript).pack(side="left")
-            tk.Label(opt, text="buscar na transcrição (vasculha a fala inteira e usa só os trechos relevantes; +1 chamada)",
+            tk.Label(opt, text="buscar na transcrição (mais preciso; +1 chamada)",
                      bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8)).pack(side="left", padx=6)
 
         self.status_var = tk.StringVar(value="")
@@ -127,7 +128,7 @@ class ChatWindow:
         else:
             intro = "Pergunte sobre esta reunião (esta nota não tem transcrição salva; uso o resumo)."
         self.win.protocol("WM_DELETE_WINDOW", self._on_close)
-        self._append(intro, _ROLE_ASSIST)
+        self._append_md(intro)
 
     def _on_close(self) -> None:
         self._stop_thinking()
@@ -202,11 +203,11 @@ class ChatWindow:
         self._stop_thinking()   # remove o indicador antes de escrever a resposta
         self._set_busy(False)
         if not out:
-            self._append("(não consegui responder — confira o provedor de IA na aba "
-                         "Resumo das Configurações)", _ROLE_ASSIST)
+            self._append_md("(não consegui responder — confira o provedor de IA na aba "
+                            "Resumo das Configurações)")
             return
         self._history.append((q, out))
-        self._append(out, _ROLE_ASSIST)
+        self._append_md(out)
         if len(self._history) >= _WARN_AFTER_TURNS and not self._warned:
             self._warned = True   # avisa 1x ao cruzar o limite (re-armado no /clear)
             self._append(_WARN_MSG.format(n=len(self._history)), _ROLE_SYS)
@@ -226,8 +227,9 @@ class ChatWindow:
         self._append(_CLEAR_MSG, _ROLE_SYS)
 
     def _append(self, text: str, role: str) -> None:
-        """Escreve uma mensagem no fluxo, estilizada pelo papel (_ROLE_USER/_ASSIST/_SYS).
-        A tag do papel dá cor/margem/alinhamento — quem é quem se lê pelo estilo, sem rótulo."""
+        """Mensagem de texto simples estilizada pelo papel (_ROLE_USER/_ROLE_SYS). A tag do papel
+        dá cor/margem/alinhamento — quem é quem se lê pelo estilo, sem rótulo. (A resposta do
+        assistente NÃO passa por aqui: vai por _append_md, que renderiza markdown.)"""
         try:
             self.conv.configure(state="normal")
             self.conv.insert("end", (text or "").strip() + "\n", (role,))
@@ -235,6 +237,37 @@ class ChatWindow:
             self.conv.see("end")
         except tk.TclError:
             pass
+
+    def _append_md(self, md: str) -> None:
+        """Resposta do assistente: renderiza markdown (headers, negrito, listas, tabelas de
+        verdade via mdview) em vez de texto cru. Sem tag de papel — fica à esquerda, largura cheia."""
+        try:
+            mdview.append_markdown(self.conv, md)
+        except tk.TclError:
+            pass
+
+    def _install_copy_menu(self) -> None:
+        """Botão direito + Ctrl+C copiam a seleção (o Text é read-only; tabelas têm copiar próprio)."""
+        self._menu = tk.Menu(self.conv, tearoff=0)
+        self._menu.add_command(label="Copiar", command=self._copy_selection)
+
+        def _popup(e):
+            try:
+                self._menu.tk_popup(e.x_root, e.y_root)
+            finally:
+                self._menu.grab_release()
+
+        self.conv.bind("<Button-3>", _popup)
+        self.conv.bind("<Control-c>", lambda e: self._copy_selection())
+
+    def _copy_selection(self) -> None:
+        try:
+            sel = self.conv.get("sel.first", "sel.last")
+        except tk.TclError:
+            return  # nada selecionado
+        if sel:
+            self.conv.clipboard_clear()
+            self.conv.clipboard_append(sel)
 
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy

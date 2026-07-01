@@ -232,6 +232,84 @@ def _inline(t: tk.Text, text: str, base: tuple[str, ...] | str | None = None) ->
             t.insert("end", part, base_tags)
 
 
+def ensure_chat_tags(t: tk.Text) -> None:
+    """Configura as tags de markdown num tk.Text que NÃO é o leitor de notas (ex.: o chat),
+    sem mexer na fonte/cor base do widget — só o necessário p/ `append_markdown`."""
+    t.tag_configure("bold", font=("Segoe UI", 10, "bold"))
+    t.tag_configure("code", font=("Consolas", 9), background=PALETTE["field"])
+    t.tag_configure("h1", font=("Segoe UI", 14, "bold"), spacing1=8, spacing3=5)
+    t.tag_configure("h2", font=("Segoe UI", 12, "bold"), foreground=PALETTE["accent_hover"], spacing1=9, spacing3=4)
+    t.tag_configure("h3", font=("Segoe UI", 11, "bold"), spacing1=6, spacing3=3)
+    t.tag_configure("bullet", lmargin1=16, lmargin2=30)
+    t.tag_configure("quote", foreground=PALETTE["muted"], font=("Segoe UI", 10, "italic"), lmargin1=14, lmargin2=14)
+    t.tag_configure("hr", foreground=PALETTE["border"])
+
+
+def append_markdown(t: tk.Text, md: str) -> None:
+    """Renderiza `md` APPENDANDO no fim do Text (não limpa) — para o chat. Reusa `_inline`,
+    `parse_table_rows` e `_embed_table`. Sem seções colapsáveis nem frontmatter (respostas de
+    chat são curtas). Requer `ensure_chat_tags(t)` uma vez. Gerencia o state do widget."""
+    prev = t.cget("state")
+    t.configure(state="normal")
+    lines = md.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        s = line.strip()
+        # bloco de tabela markdown -> tabela de verdade (grid com copiar), como nas notas
+        if s.startswith("|") and s.endswith("|") and len(s) > 2:
+            j = i
+            tbl: list[str] = []
+            while j < len(lines):
+                sj = lines[j].strip()
+                if sj.startswith("|") and sj.endswith("|") and len(sj) > 2:
+                    tbl.append(sj)
+                    j += 1
+                else:
+                    break
+            rows = parse_table_rows(tbl)
+            if rows:
+                _embed_table(t, rows)
+                i = j
+                continue
+        i += 1
+        if not s:
+            t.insert("end", "\n")
+        elif s.startswith("### "):
+            _inline(t, s[4:], "h3")
+            t.insert("end", "\n")
+        elif s.startswith("## "):
+            _inline(t, s[3:], "h2")  # no chat, H2 é só um cabeçalho (sem colapsar)
+            t.insert("end", "\n")
+        elif s.startswith("# "):
+            _inline(t, s[2:], "h1")
+            t.insert("end", "\n")
+        elif s in ("---", "***", "___"):
+            t.insert("end", "─" * 48 + "\n", "hr")
+        elif s[:5].lower() in ("- [ ]", "- [x]"):
+            t.insert("end", ("☑  " if s[3].lower() == "x" else "☐  "), ("bullet",))
+            _inline(t, s[5:].lstrip(), "bullet")
+            t.insert("end", "\n")
+        elif s.startswith(("- ", "* ")):
+            t.insert("end", "•  ", ("bullet",))
+            _inline(t, s[2:], "bullet")
+            t.insert("end", "\n")
+        elif re.match(r"^\d+\.\s", s):
+            num, rest = s.split(" ", 1)
+            t.insert("end", f"{num}  ", ("bullet",))
+            _inline(t, rest, "bullet")
+            t.insert("end", "\n")
+        elif s.startswith("> "):
+            _inline(t, s[2:], "quote")
+            t.insert("end", "\n")
+        else:
+            _inline(t, line)
+            t.insert("end", "\n")
+    t.insert("end", "\n")  # respiro entre mensagens
+    t.configure(state=prev)
+    t.see("end")
+
+
 def render(t: tk.Text, md: str, collapsed: set[str] | None = None) -> None:
     """Substitui o conteúdo pela nota renderizada.
 

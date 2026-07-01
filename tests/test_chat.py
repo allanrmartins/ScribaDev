@@ -130,6 +130,7 @@ class WarnAndClearTests(unittest.TestCase):
         cw._think_after = None
         cw._appended = []
         cw._append = lambda text, role: cw._appended.append((text, role))
+        cw._append_md = lambda md: cw._appended.append((md, "assist"))  # resposta renderizada
         cw._set_busy = lambda b: None
         cw.conv = _FakeConv()   # _clear_context limpa o widget
         return cw
