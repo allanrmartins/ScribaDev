@@ -260,8 +260,14 @@ def _describe_result(result) -> str:
 
 def _run_pipe(pipe, audio, kwargs) -> tuple[list[Turn], dict[str, list[float]]] | None:
     """Roda o pipeline num áudio (dict ou caminho) e devolve (turns, embeddings),
-    ou None se não reconheceu o retorno."""
-    result = _unwrap_result(pipe(audio, **kwargs))
+    ou None se não reconheceu o retorno.
+
+    Usa `pipe.apply(file)` (single) em vez de `pipe(file)`: em pyannote 4.0.5+ o `__call__`
+    ganhou processamento em lote e passou a devolver um GERADOR/iterator mesmo p/ um arquivo
+    só — o parser via "0 voz(es)" (#24). `apply()` vai direto ao DiarizeOutput/Annotation e
+    tem a mesma assinatura no 4.0.4/4.0.6. Fallback p/ `pipe()` em versões sem `apply`."""
+    run = getattr(pipe, "apply", pipe)
+    result = _unwrap_result(run(audio, **kwargs))
     annotation = _extract_annotation(result)
     if annotation is None:
         log.warning("diarização: retorno do pyannote não reconhecido — %s", _describe_result(result))

@@ -132,6 +132,25 @@ class ExtractAnnotationTests(unittest.TestCase):
         self.assertIs(diarize._unwrap_result(ann), ann)            # não-lista: passa direto
         self.assertEqual(diarize._unwrap_result([1, 2]), [1, 2])   # >1 item: não desembrulha
 
+    def test_run_pipe_usa_apply_nao_call(self):
+        # cerne do fix: pyannote 4.0.5+ faz pipe() (via __call__) devolver um GERADOR de lote;
+        # pipe.apply() vai direto ao DiarizeOutput. _run_pipe deve preferir apply.
+        ann = self._Ann()
+        out = self._DiarizeOutput(ann)
+        calls = []
+
+        class FakePipe:
+            def apply(self, audio, **kw):
+                calls.append("apply")
+                return out
+            def __call__(self, audio, **kw):
+                calls.append("call")
+                return (x for x in (out,))  # o __call__ com lote devolveria um gerador
+
+        res = diarize._run_pipe(FakePipe(), {"waveform": None, "sample_rate": 16000}, {})
+        self.assertEqual(calls, ["apply"])   # foi pelo apply, não pelo __call__
+        self.assertIsNotNone(res)            # e reconheceu o retorno (não caiu em "0 vozes")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
