@@ -32,6 +32,12 @@ cuda = [
     "nvidia-cublas-cu12~=12.9",
     "nvidia-cudnn-cu12~=9.23",
 ]
+# UI Qt (épico #44): migração tkinter -> PySide6. Extra durante a migração para não
+# forçar ~100 MB em toda instalação enquanto o app ainda roda tkinter; no corte (#53)
+# vira dependência principal. 6.7 = piso com High-DPI por padrão + QSS estável.
+qt = [
+    "PySide6>=6.7",
+]
 # diarização: instale o torch antes (com CUDA, use o índice do PyTorch):
 #   pip install torch --index-url https://download.pytorch.org/whl/cu128
 diarization = [

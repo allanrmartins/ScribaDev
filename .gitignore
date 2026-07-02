@@ -15,3 +15,6 @@ meetings/
 # Claude Code
 .claude/settings.local.json
 .claude/worktrees/
+
+# Lavish - artefatos de review visual (HTML efemero, nao e fonte)
+.lavish/

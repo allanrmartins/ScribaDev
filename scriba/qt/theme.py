@@ -1,0 +1,364 @@
+"""Sistema de temas do ScribaDev em Qt: tokens (cor, fonte, métrica) + QSS + troca a quente.
+
+Cada tema é um conjunto FECHADO de tokens (um `Theme`); o QSS do app inteiro é
+GERADO a partir do tema ativo, e os widgets pintados à mão (ToggleSwitch, a pílula)
+leem `theme.active()` no paintEvent — trocar de tema reestiliza tudo, inclusive
+fonte e fundo.
+
+Decisões (épico #44, 2026-07-02):
+- A paleta Qt NÃO espelha a do tkinter (redesenho com vibe de editor; contraste
+  validado por teste em test_qt_theme). Encerra a invariante antiga "PALETTE ==".
+- Fontes modernas: Inter (UI) + Cascadia Code (mono), com fallback gracioso.
+- Fundo com leve gradiente (bg2 -> bg), não cor chapada; translucidez fica a cargo
+  do backdrop nativo (widgets.enable_mica) nas janelas de verdade.
+- Padrão = tema do Windows: escuro do sistema -> "vscode", claro -> "light". A
+  escolha explícita do usuário (state.json `ui_theme`) sempre vence.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, fields
+
+from .. import util
+
+
+@dataclass(frozen=True)
+class Theme:
+    """Conjunto fechado de tokens de um tema. Todo campo é obrigatório (sem default):
+    um tema incompleto é erro, não um buraco silencioso preenchido por acaso."""
+
+    name: str    # slug estável (persistido no state.json)
+    label: str   # nome exibido na UI
+    dark: bool    # é um tema escuro? (barra de título nativa + escolha por SO)
+
+    # superfícies (do fundo da janela ao mais "elevado")
+    bg: str          # fundo da janela (stop final do gradiente)
+    bg2: str         # 2º stop do gradiente do fundo (leve variação de bg)
+    surface: str     # painéis, cards, cabeçalhos
+    field: str       # campos de entrada, code/log inset
+    overlay: str     # tooltips, menus, popovers
+
+    # bordas
+    border: str
+    border_strong: str
+
+    # texto
+    text: str        # primário
+    muted: str       # secundário
+    faint: str       # terciário / desabilitado
+
+    # acento interativo/marca (botão primário, foco, links)
+    accent: str
+    accent_hover: str
+    accent_press: str
+    on_accent: str   # texto sobre o acento
+
+    # semântica
+    ok: str          # sucesso / verde
+    warn: str        # âmbar: "em call", avisos não-críticos
+    rec: str         # vermelho: gravando / perigo (identidade do app)
+    rec_dim: str     # vermelho apagado (frame "off" do pulso)
+    info: str
+
+    # destaques de busca (fundo do hit + texto legível sobre ele)
+    highlight: str
+    highlight_current: str
+    on_highlight: str
+
+    # visualizador de log/código
+    code_bg: str
+    code_err: str
+
+    # seleção de texto
+    selection_bg: str
+    selection_fg: str
+
+    # tipografia
+    font_family: str   # UI
+    font_mono: str     # código / log
+    font_size: int
+
+    # métricas
+    radius: int      # raio de canto de botões/containers
+    radius_sm: int   # raio menor (campos, chips)
+
+
+# Fallbacks de fonte: se a preferida não estiver instalada, o Qt desce a lista.
+# Inter + Cascadia Code cobrem o Windows 11 do Allan; o resto garante o mínimo.
+_UI_FALLBACK = ["Segoe UI Variable", "Segoe UI", "sans-serif"]
+_MONO_FALLBACK = ["Cascadia Mono", "Consolas", "monospace"]
+_UI = "Inter"
+_MONO = "Cascadia Code"
+
+
+# ---------------------------------------------------------------- temas -------
+# Cores desenhadas para contraste (o teste WCAG trava regressão). O vermelho fica
+# reservado p/ gravação/perigo em TODOS os temas; o "accent" é a cor interativa e
+# muda de tema pra tema. bg2 é uma variação sutil de bg (o gradiente do fundo).
+
+_VSCODE = Theme(
+    name="vscode", label="Escuro (VS Code)", dark=True,
+    bg="#1f1f1f", bg2="#26262b", surface="#252526", field="#2d2d2d", overlay="#2b2b2b",
+    border="#333333", border_strong="#454545",
+    text="#d4d4d4", muted="#9d9d9d", faint="#6e6e6e",
+    accent="#0e639c", accent_hover="#1177bb", accent_press="#0d5289", on_accent="#ffffff",
+    ok="#4ec9b0", warn="#d7ba7d", rec="#f14c4c", rec_dim="#7a2626", info="#3794ff",
+    highlight="#ffe14d", highlight_current="#ff8c1a", on_highlight="#1f1f1f",
+    code_bg="#181818", code_err="#f14c4c",
+    selection_bg="#264f78", selection_fg="#ffffff",
+    font_family=_UI, font_mono=_MONO, font_size=9,
+    radius=6, radius_sm=4,
+)
+
+_SUBLIME = Theme(
+    name="sublime", label="Escuro (Sublime/Mariana)", dark=True,
+    bg="#2d3540", bg2="#333e4c", surface="#343d46", field="#3b4553", overlay="#343d46",
+    border="#3f4954", border_strong="#556071",
+    text="#d8dee9", muted="#a6accd", faint="#7a8aa0",
+    accent="#6699cc", accent_hover="#7aa8d6", accent_press="#5589bd", on_accent="#10151b",
+    ok="#99c794", warn="#fac761", rec="#ec5f67", rec_dim="#7a3236", info="#5fb3b3",
+    highlight="#fac761", highlight_current="#f9ae58", on_highlight="#2d3540",
+    code_bg="#232a33", code_err="#ec5f67",
+    selection_bg="#4e5a65", selection_fg="#ffffff",
+    font_family=_UI, font_mono=_MONO, font_size=9,
+    radius=6, radius_sm=4,
+)
+
+_CLAUDE = Theme(
+    name="claude", label="Escuro (Claude)", dark=True,
+    bg="#262624", bg2="#2d2a26", surface="#2f2e2b", field="#35342f", overlay="#2f2e2b",
+    border="#3d3a33", border_strong="#514c40",
+    text="#ece9e3", muted="#a39d91", faint="#736e62",
+    accent="#b85c3c", accent_hover="#c96442", accent_press="#a04f33", on_accent="#ffffff",
+    ok="#87a96b", warn="#d9a441", rec="#e5484d", rec_dim="#7a2f2c", info="#6a9ec9",
+    highlight="#f2c94c", highlight_current="#f2994a", on_highlight="#262624",
+    code_bg="#1f1e1c", code_err="#e5484d",
+    selection_bg="#4a3b2f", selection_fg="#ffffff",
+    font_family=_UI, font_mono=_MONO, font_size=9,
+    radius=8, radius_sm=5,
+)
+
+_LIGHT = Theme(
+    name="light", label="Claro", dark=False,
+    bg="#ffffff", bg2="#eef1f6", surface="#f3f3f3", field="#ffffff", overlay="#ffffff",
+    border="#d4d4d4", border_strong="#b0b0b0",
+    text="#1f1f1f", muted="#616161", faint="#8c8c8c",
+    accent="#0067c0", accent_hover="#0078d4", accent_press="#005ba1", on_accent="#ffffff",
+    ok="#1a7f37", warn="#9a6700", rec="#d13438", rec_dim="#f1a0a2", info="#0067c0",
+    highlight="#ffd23f", highlight_current="#ff8c1a", on_highlight="#1f1f1f",
+    code_bg="#f3f3f3", code_err="#d13438",
+    selection_bg="#cce4f7", selection_fg="#1f1f1f",
+    font_family=_UI, font_mono=_MONO, font_size=9,
+    radius=6, radius_sm=4,
+)
+
+_THEMES: dict[str, Theme] = {t.name: t for t in (_VSCODE, _SUBLIME, _CLAUDE, _LIGHT)}
+DEFAULT_DARK = "vscode"   # tema quando o Windows está no modo escuro
+DEFAULT_LIGHT = "light"   # tema quando o Windows está no modo claro
+
+_STATE_KEY = "ui_theme"
+_active: Theme | None = None  # cache do tema vigente (evita reler o state a cada paint)
+
+
+# --------------------------------------------------------- padrão por SO ------
+
+def _os_prefers_dark() -> bool:
+    """O Windows está no modo escuro para apps? (registro AppsUseLightTheme: 0=escuro,
+    1=claro). Padrão escuro se indisponível (não-Windows / falha)."""
+    try:
+        import winreg
+
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+        )
+        try:
+            value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+        finally:
+            winreg.CloseKey(key)
+        return value == 0
+    except Exception:
+        return True
+
+
+def os_default_theme() -> str:
+    """Slug do tema que casa com o tema atual do Windows (escuro->vscode, claro->light)."""
+    return DEFAULT_DARK if _os_prefers_dark() else DEFAULT_LIGHT
+
+
+# --------------------------------------------------------------- acesso -------
+
+def themes() -> list[Theme]:
+    """Todos os temas registrados, na ordem de exibição."""
+    return list(_THEMES.values())
+
+
+def active() -> Theme:
+    """Tema vigente. A escolha explícita do usuário (state.json) vence; na ausência
+    dela, segue o tema do Windows. Lê o state na 1ª vez e cacheia."""
+    global _active
+    if _active is None:
+        name = util.read_state().get(_STATE_KEY)
+        if name is None:
+            name = os_default_theme()
+        _active = _THEMES.get(name, _THEMES[os_default_theme()])
+    return _active
+
+
+def set_active(name: str, *, app=None) -> Theme:
+    """Troca o tema vigente, persiste (escolha explícita) e reestiliza a quente se
+    houver QApplication. Widgets pintados pegam o novo tema no próximo update()."""
+    global _active
+    _active = _THEMES.get(name, _THEMES[os_default_theme()])
+    util.update_state(**{_STATE_KEY: _active.name})
+    if app is None:
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+    if app is not None:
+        apply(app, _active)
+    return _active
+
+
+def clear_choice() -> None:
+    """Volta ao padrão automático (segue o Windows): esquece a escolha explícita."""
+    global _active
+    _active = None
+    st = util.read_state()
+    if _STATE_KEY in st:
+        st.pop(_STATE_KEY)
+        util.atomic_write_text(util.STATE_PATH, __import__("json").dumps(st))
+
+
+# ----------------------------------------------------------- tipografia -------
+
+def qfont(theme: Theme | None = None, size: int | None = None, *, bold: bool = False,
+          mono: bool = False):
+    """QFont do tema com a cadeia de fallback certa (UI = Inter…, mono = Cascadia…)."""
+    from PySide6.QtGui import QFont
+
+    t = theme or active()
+    f = QFont()
+    f.setFamilies([t.font_mono, *_MONO_FALLBACK] if mono else [t.font_family, *_UI_FALLBACK])
+    f.setPointSize(size or t.font_size)
+    f.setBold(bold)
+    return f
+
+
+def _ui_stack(t: Theme) -> str:
+    """Cadeia de fontes UI como string CSS (para o QSS)."""
+    return ", ".join(f'"{fam}"' for fam in [t.font_family, *_UI_FALLBACK])
+
+
+def _rgba(hex_color: str, alpha: float) -> str:
+    r, g, b = (int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
+    return f"rgba({r}, {g}, {b}, {alpha})"
+
+
+def window_gradient(theme: Theme | None = None, *, alpha: float = 1.0) -> str:
+    """Valor QSS de fundo com gradiente sutil (bg2 -> bg) para a raiz das janelas.
+    `alpha` < 1 deixa o fundo translúcido (para o backdrop acrílico aparecer atrás;
+    ver widgets.enable_mica). Uso: `root.setStyleSheet(f'#root {{ background: {g} }}')`."""
+    t = theme or active()
+    return (f"qlineargradient(x1:0, y1:0, x2:0.4, y2:1, "
+            f"stop:0 {_rgba(t.bg2, alpha)}, stop:1 {_rgba(t.bg, alpha)})")
+
+
+# --------------------------------------------------------------- QSS -----------
+
+def qss(theme: Theme | None = None) -> str:
+    """Folha de estilo global gerada a partir do tema. Cobre os controles-base;
+    widgets pintados (ToggleSwitch, pílula) leem os tokens direto no paintEvent."""
+    t = theme or active()
+    ui = _ui_stack(t)
+    field_radius = t.radius + 3  # campos mais macios/arredondados (não "terminal")
+    return f"""
+    QWidget {{
+        background-color: {t.bg};
+        color: {t.text};
+        font-family: {ui};
+        font-size: {t.font_size}pt;
+    }}
+
+    QPushButton {{
+        background-color: {t.surface};
+        color: {t.text};
+        border: 1px solid {t.border};
+        border-radius: {t.radius}px;
+        padding: 6px 16px;
+        min-height: 18px;
+    }}
+    QPushButton:hover {{ background-color: {t.border}; }}
+    QPushButton:pressed {{ background-color: {t.field}; }}
+    QPushButton:disabled {{ color: {t.faint}; border-color: {t.field}; }}
+
+    QPushButton[kind="primary"] {{
+        background-color: {t.accent};
+        color: {t.on_accent};
+        border: none;
+        font-weight: bold;
+    }}
+    QPushButton[kind="primary"]:hover {{ background-color: {t.accent_hover}; }}
+    QPushButton[kind="primary"]:pressed {{ background-color: {t.accent_press}; }}
+
+    QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox {{
+        background-color: {t.field};
+        color: {t.text};
+        border: 1px solid {t.border};
+        border-radius: {field_radius}px;
+        padding: 7px 11px;
+        selection-background-color: {t.selection_bg};
+        selection-color: {t.selection_fg};
+    }}
+    QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QSpinBox:focus {{
+        border: 1px solid {t.accent};
+    }}
+
+    QLabel {{ background: transparent; }}
+    QLabel[role="muted"] {{ color: {t.muted}; }}
+    QLabel[role="ok"]     {{ color: {t.ok}; }}
+    QLabel[role="warn"]   {{ color: {t.warn}; }}
+
+    QToolTip {{
+        background-color: {t.overlay};
+        color: {t.text};
+        border: 1px solid {t.border_strong};
+        padding: 5px 8px;
+    }}
+
+    QScrollBar:vertical {{ background: transparent; width: 12px; margin: 0; }}
+    QScrollBar::handle:vertical {{
+        background: {t.border}; border-radius: 6px; min-height: 24px;
+    }}
+    QScrollBar::handle:vertical:hover {{ background: {t.border_strong}; }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+    QScrollBar:horizontal {{ background: transparent; height: 12px; margin: 0; }}
+    QScrollBar::handle:horizontal {{
+        background: {t.border}; border-radius: 6px; min-width: 24px;
+    }}
+    QScrollBar::handle:horizontal:hover {{ background: {t.border_strong}; }}
+    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
+
+    QMenu {{
+        background-color: {t.overlay};
+        color: {t.text};
+        border: 1px solid {t.border_strong};
+        padding: 4px;
+    }}
+    QMenu::item {{ padding: 5px 24px 5px 12px; border-radius: {t.radius_sm}px; }}
+    QMenu::item:selected {{ background-color: {t.accent}; color: {t.on_accent}; }}
+    QMenu::separator {{ height: 1px; background: {t.border}; margin: 4px 8px; }}
+    """
+
+
+def apply(app, theme: Theme | None = None) -> None:
+    """Aplica fonte-base (Inter…) + QSS do tema ao QApplication. Idempotente."""
+    t = theme or active()
+    app.setFont(qfont(t))
+    app.setStyleSheet(qss(t))
+
+
+def token_names() -> list[str]:
+    """Nomes dos tokens de cor (str '#rrggbb') — usado pelo teste de contraste/completude."""
+    return [f.name for f in fields(Theme)
+            if f.type == "str" and f.name not in ("name", "label", "font_family", "font_mono")]
