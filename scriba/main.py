@@ -169,11 +169,11 @@ class ScribaApp:
 
     # --------------------------------------------------------------- call --
 
-    def _on_call_started(self) -> None:
+    def _on_call_started(self, probe: bool = True) -> None:
         self.call_active = True
         self.call_started_at = time.monotonic()
         if self.cfg.detection.auto_record:
-            self.start_recording("auto")
+            self.start_recording("auto", probe=probe)
         else:
             self.ui(self._show_pill_idle)
 
@@ -194,10 +194,13 @@ class ScribaApp:
 
     # ----------------------------------------------------------- gravação --
 
-    def start_recording(self, source: str = "auto") -> None:
+    def start_recording(self, source: str = "auto", probe: bool = True) -> None:
         # pré-checagem em subprocesso: se o PortAudio estiver num estado que
-        # aborta (assert de troca de dispositivo), morre a sonda — não o app
-        if util.run_audio_probe() is None:
+        # aborta (assert de troca de dispositivo), morre a sonda — não o app.
+        # probe=False no split de calls consecutivas (#34): os dispositivos
+        # funcionavam há < poll_seconds e a sonda pode custar segundos que viram
+        # buraco no início da call 2. Se Recording() falhar, o try/except cobre.
+        if probe and util.run_audio_probe() is None:
             log.error("dispositivos de áudio indisponíveis — gravação não iniciada (%s)", source)
             self._toast("ScribaDev: áudio indisponível", "Não consegui acessar microfone/loopback agora.")
             return
