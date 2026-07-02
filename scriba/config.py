@@ -33,6 +33,11 @@ browsers = "chrome, msedge, firefox, brave, opera, vivaldi"
 browser_titles = "Meet, Microsoft Teams, Zoom, Webex"
 poll_seconds = 2
 grace_seconds = 8        # mic liberado por até X s ainda conta como a mesma call
+# Sair de uma call e entrar em outra em seguida: se o mic REABRE após um gap de pelo
+# menos split_gap_seconds, o ScribaDev encerra a gravação e começa outra (duas notas).
+# 0 = nunca dividir sozinho (comportamento antigo). Só vale para gaps entre ~poll_seconds
+# e grace_seconds; acima de grace_seconds a call já divide pelo timeout do GRACE.
+split_gap_seconds = 3
 min_call_seconds = 30    # gravações mais curtas são descartadas (pré-join, teste de mic)
 max_call_hours = 4       # parada de segurança
 auto_record = true       # gravar sozinho ao detectar a call; desligado, a pílula espera o ⏺
@@ -123,6 +128,9 @@ class Detection:
     browser_titles: str = "Meet, Microsoft Teams, Zoom, Webex"
     poll_seconds: float = 2.0
     grace_seconds: float = 8.0
+    # Gap mínimo (mic reabrindo) para dividir duas calls consecutivas; 0 = nunca.
+    # Só age entre ~poll_seconds e grace_seconds (ver DEFAULT_CONFIG e #34).
+    split_gap_seconds: float = 3.0
     min_call_seconds: float = 30.0
     max_call_hours: float = 4.0
     auto_record: bool = True
@@ -297,6 +305,7 @@ browsers = {_s(d.browsers)}
 browser_titles = {_s(d.browser_titles)}
 poll_seconds = {_n(d.poll_seconds)}
 grace_seconds = {_n(d.grace_seconds)}        # mic liberado por até X s ainda conta como a mesma call
+split_gap_seconds = {_n(d.split_gap_seconds)}    # gap p/ dividir calls consecutivas (0 = nunca); ver #34
 min_call_seconds = {_n(d.min_call_seconds)}    # gravações mais curtas são descartadas (pré-join, teste de mic)
 max_call_hours = {_n(d.max_call_hours)}       # parada de segurança
 auto_record = {_b(d.auto_record)}       # gravar sozinho ao detectar a call; desligado, a pílula espera o ⏺

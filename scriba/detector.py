@@ -65,7 +65,12 @@ def friendly_name(pattern_or_key: str) -> str:
 
 
 def _iter_mic_keys():
-    """(nome_da_subchave, LastUsedTimeStop) para cada app rastreado pelo Windows."""
+    """(subchave, LastUsedTimeStart, LastUsedTimeStop) para cada app rastreado.
+
+    Os dois tempos são FILETIME (100 ns desde 1601). LastUsedTimeStop == 0 enquanto
+    o app está com o mic aberto. LastUsedTimeStart é reescrito toda vez que o app
+    REABRE o mic — é o sinal de fronteira entre duas calls consecutivas (#34).
+    """
     for base in (_BASE, _BASE + r"\NonPackaged"):
         try:
             root = winreg.OpenKey(winreg.HKEY_CURRENT_USER, base)
@@ -84,14 +89,30 @@ def _iter_mic_keys():
                 try:
                     with winreg.OpenKey(root, sub) as k:
                         stop, _ = winreg.QueryValueEx(k, "LastUsedTimeStop")
+                        try:
+                            start, _ = winreg.QueryValueEx(k, "LastUsedTimeStart")
+                        except OSError:
+                            start = 0  # chave sem o valor (raro): trata como desconhecido
                 except OSError:
                     continue
-                yield sub, stop
+                yield sub, start, stop
+
+
+def active_sessions(patterns: list[str]) -> dict[str, tuple[int, int]]:
+    """{subchave: (LastUsedTimeStart, LastUsedTimeStop)} das subchaves que casam
+    algum pattern (substring, como active_app). É a base para o detector rastrear
+    a sessão de mic que sustenta a call e medir o gap por FILETIME (#34)."""
+    out: dict[str, tuple[int, int]] = {}
+    for sub, start, stop in _iter_mic_keys():
+        low = sub.lower()
+        if any(p in low for p in patterns):
+            out[sub] = (start, stop)
+    return out
 
 
 def active_app(patterns: list[str]) -> str | None:
     """Nome amigável do app monitorado que está com o mic aberto agora, ou None."""
-    for sub, stop in _iter_mic_keys():
+    for sub, _start, stop in _iter_mic_keys():
         if stop != 0:
             continue
         low = sub.lower()
@@ -104,7 +125,7 @@ def active_app(patterns: list[str]) -> str | None:
 def app_key_status(patterns: list[str]) -> dict[str, bool]:
     """{nome amigável: já existe chave no registro?} — para o doctor."""
     found = {friendly_name(p): False for p in patterns}
-    for sub, _stop in _iter_mic_keys():
+    for sub, _start, _stop in _iter_mic_keys():
         low = sub.lower()
         for p in patterns:
             if p in low:
@@ -123,7 +144,7 @@ def active_browser(browser_pats: list[str]) -> str | None:
     Match exato do executável: "msedge" não pode casar o msedgewebview2.exe
     que apps desktop (Teams, Outlook) embutem.
     """
-    for sub, stop in _iter_mic_keys():
+    for sub, _start, stop in _iter_mic_keys():
         if stop != 0:
             continue
         base = _key_basename(sub)
@@ -136,7 +157,7 @@ def active_browser(browser_pats: list[str]) -> str | None:
 def browser_key_status(browser_pats: list[str]) -> dict[str, bool]:
     """{navegador: já existe chave de mic no registro?} — para o doctor."""
     found = {p: False for p in browser_pats}
-    for sub, _stop in _iter_mic_keys():
+    for sub, _start, _stop in _iter_mic_keys():
         base = _key_basename(sub)
         for p in browser_pats:
             if base == p + ".exe":
@@ -259,7 +280,7 @@ class Detector:
     def __init__(
         self,
         cfg: Detection,
-        on_call_started: Callable[[], None],
+        on_call_started: Callable[..., None],  # aceita probe=bool (split pula a sonda)
         on_call_ended: Callable[[], None],
         on_grace: Callable[[], None] | None = None,
         on_grace_cancel: Callable[[], None] | None = None,
@@ -281,43 +302,74 @@ class Detector:
         self._grace_since = 0.0  # entrada no GRACE (para medir o gap do resume)
         self._recording_since = 0.0
         self._last_exc_log = 0.0  # rate-limit do log de exceções do loop
+        # sessão de mic que sustenta a call rastreada (para dividir calls seguidas, #34)
+        self._session_sub: str | None = None   # subchave do registro
+        self._session_start = 0                 # LastUsedTimeStart (FILETIME) no início
+        self._session_stop = 0                  # LastUsedTimeStop guardado ao entrar no GRACE
 
-    def _sense_call(self) -> str | None:
-        """Quem está em call agora: app desktop, ou navegador com call confirmada."""
-        app = active_app(self.patterns)
-        if app:
-            return app
+    def _mic_sessions(self) -> dict[str, tuple[int, int]]:
+        """{subchave: (start, stop)} das sessões de mic de apps e navegadores
+        monitorados — a matéria-prima para detectar a call e rastrear sua sessão."""
+        sessions = active_sessions(self.patterns)  # apps desktop (substring)
+        if self.browser_pats:  # navegadores: match exato do exe (não pega webview embutido)
+            for sub, start, stop in _iter_mic_keys():
+                base = _key_basename(sub)
+                if any(base == p + ".exe" for p in self.browser_pats):
+                    sessions[sub] = (start, stop)
+        return sessions
+
+    def _sense(self, sessions: dict[str, tuple[int, int]]) -> tuple[str, str, int] | None:
+        """(nome amigável, subchave, LastUsedTimeStart) da call ativa agora, ou None.
+
+        App desktop tem prioridade; senão, navegador com reunião confirmada por
+        título (uma vez confirmada, o mic aberto basta — trocar de aba não derruba).
+        """
+        for sub, (start, stop) in sessions.items():
+            if stop != 0:
+                continue
+            low = sub.lower()
+            for p in self.patterns:
+                if p in low:
+                    return friendly_name(sub if len(p) < 6 else p), sub, start
         if not self.browser_pats:
             return None
-        browser = active_browser(self.browser_pats)
-        if browser is None:
-            return None
-        if self._web_call:
-            return self.current_app or browser.capitalize()
-        svc = browser_call_service(browser, self.title_pats)
-        if svc:
-            self._web_call = True
-            return svc
-        return None  # mic aberto no navegador, mas nenhum título de reunião (ainda)
+        for sub, (start, stop) in sessions.items():
+            if stop != 0:
+                continue
+            base = _key_basename(sub)
+            for p in self.browser_pats:
+                if base != p + ".exe":
+                    continue
+                if self._web_call:
+                    return (self.current_app or p.capitalize()), sub, start
+                svc = browser_call_service(p, self.title_pats)
+                if svc:
+                    self._web_call = True
+                    return svc, sub, start
+                return None  # mic no navegador, mas nenhum título de reunião ainda
+        return None
 
     def poll_once(self) -> None:
         now = time.monotonic()
-        prev_app = self.current_app
-        app = self._sense_call()
-        in_use = app is not None
-        if app:
-            self.current_app = app
+        sessions = self._mic_sessions()
+        sense = self._sense(sessions)
+        in_use = sense is not None
+        prev_app = self.current_app  # antes da atualização, para os logs de troca
+        if sense:
+            self.current_app = sense[0]
 
         if self.state is CallState.IDLE:
             if in_use:
-                self.state = CallState.RECORDING
-                self._recording_since = now
-                self.on_call_started()
+                self._begin(now, sense)
+
         elif self.state is CallState.RECORDING:
             if not in_use:
+                # mic liberado -> GRACE. Guarda o LastUsedTimeStop EXATO da subchave
+                # rastreada: o instante em que o app fechou o mic, sem depender do poll.
                 self.state = CallState.GRACE
                 self._grace_since = now
                 self._grace_deadline = now + self.cfg.grace_seconds
+                self._session_stop = sessions.get(self._session_sub or "", (0, 0))[1]
                 log.info(
                     "mic liberado (%s) - tolerância de %.0fs",
                     self.current_app, self.cfg.grace_seconds,
@@ -325,40 +377,124 @@ class Detector:
                 if self.on_grace:
                     self.on_grace()
             else:
-                # mic ainda em uso: vigiar troca de app monitorado (Teams -> Zoom).
-                # Em #34 isso vira SPLIT; aqui é só o WARN que antecipa o caso.
-                if prev_app and app != prev_app:
-                    log.warning(
-                        "troca de app monitorado durante a call: %s -> %s", prev_app, app
-                    )
-                if now - self._recording_since > self.cfg.max_call_hours * 3600:
-                    # parada de segurança: encerra; se o mic seguir em uso, um novo
-                    # segmento começa no próximo poll
-                    log.info(
-                        "call encerrada (limite de segurança de %gh)", self.cfg.max_call_hours
-                    )
-                    self.state = CallState.IDLE
-                    self.on_call_ended()
+                self._watch_recording(now, sense, sessions, prev_app)
+
         elif self.state is CallState.GRACE:
             if in_use:
-                gap = now - self._grace_since
-                if prev_app and app != prev_app:
-                    # mic voltou em OUTRO app monitorado (Teams -> Zoom): hoje
-                    # emenda na mesma gravação (a fusão do incidente); #34 fará o split
-                    log.warning(
-                        "mic voltou em app diferente após %.1fs: %s -> %s", gap, prev_app, app
-                    )
-                else:
-                    log.info("mic voltou após %.1fs - mesma call", gap)
-                self.state = CallState.RECORDING
-                if self.on_grace_cancel:
-                    self.on_grace_cancel()
+                self._resume_or_split(now, sense, sessions, prev_app)
             elif now >= self._grace_deadline:
                 log.info("call encerrada (mic livre > %.0fs)", self.cfg.grace_seconds)
-                self.state = CallState.IDLE
-                self.on_call_ended()
-                self.current_app = None
-                self._web_call = False
+                self._end_call()
+
+    def _watch_recording(
+        self, now: float, sense: tuple[str, str, int],
+        sessions: dict[str, tuple[int, int]], prev_app: str | None,
+    ) -> None:
+        """RECORDING com o mic ainda em uso: detecta nova call sem passar pelo GRACE
+        (Teams->Zoom sem gap) e o ciclo de sessão invisível (mic reabriu < poll)."""
+        _name, sub, start = sense
+        tracked = sessions.get(self._session_sub or "")
+        if self._session_sub and sub != self._session_sub:
+            # a call agora é sustentada por OUTRA subchave monitorada
+            if tracked is not None and tracked[1] != 0 and self.cfg.split_gap_seconds > 0:
+                # a rastreada fechou o mic e outra assumiu -> Teams->Zoom sem gap
+                log.info(
+                    "app trocou (%s livre, %s em uso) - dividindo a gravação",
+                    prev_app, sense[0],
+                )
+                self._split(now, sessions)
+                return
+            log.warning("troca de app monitorado durante a call: %s -> %s", prev_app, sense[0])
+            self._session_sub, self._session_start = sub, start
+        elif tracked is not None and tracked[1] == 0 and start != self._session_start:
+            # MESMA subchave, mas o start foi reescrito: o mic reabriu entre dois
+            # polls (gap < poll). Indistinguível de troca de device -> v1 NÃO divide;
+            # o sinal de título (#35) desempata. Loga e atualiza o rastreamento.
+            log.warning(
+                "ciclo de sessão invisível em %s (start mudou) - nao divido na v1",
+                self.current_app,
+            )
+            self._session_start = start
+        elif now - self._recording_since > self.cfg.max_call_hours * 3600:
+            log.info("call encerrada (limite de segurança de %gh)", self.cfg.max_call_hours)
+            self._end_call()
+
+    def _resume_or_split(
+        self, now: float, sense: tuple[str, str, int],
+        sessions: dict[str, tuple[int, int]], prev_app: str | None,
+    ) -> None:
+        """GRACE + mic em uso de novo: emendar na mesma gravação (troca de fone) ou
+        dividir (call nova). A decisão usa a subchave e o gap por FILETIME (#34, item 4)."""
+        name, sub, start = sense
+        gap_wall = now - self._grace_since  # fallback: relógio de parede (o gap de #36)
+        split_on = self.cfg.split_gap_seconds > 0
+
+        if self._session_sub and sub != self._session_sub:
+            # mic voltou em OUTRA subchave monitorada -> nova call
+            if split_on:
+                log.info("mic voltou em app diferente (%s -> %s) - dividindo a gravação", prev_app, name)
+                self._split(now, sessions)
+                return
+            log.warning(
+                "mic voltou em app diferente após %.1fs: %s -> %s (split desligado)",
+                gap_wall, prev_app, name,
+            )
+        else:
+            # mesma subchave: gap por FILETIME (cai no relógio de parede se falhar a leitura)
+            gap = self._filetime_gap(start, self._session_stop)
+            gap = gap_wall if gap is None else gap
+            if split_on and gap >= self.cfg.split_gap_seconds:
+                log.info(
+                    "gap de %.1fs >= split_gap_seconds=%g - dividindo a gravação",
+                    gap, self.cfg.split_gap_seconds,
+                )
+                self._split(now, sessions)
+                return
+            log.info("mic voltou após %.1fs - mesma call", gap)
+
+        # emenda (resume): atualiza o rastreamento e volta a RECORDING
+        self.state = CallState.RECORDING
+        self._session_sub, self._session_start = sub, start
+        if self.on_grace_cancel:
+            self.on_grace_cancel()
+
+    def _begin(self, now: float, sense: tuple[str, str, int], probe: bool = True) -> None:
+        """IDLE -> RECORDING: começa a rastrear a sessão de mic que sustenta a call."""
+        name, sub, start = sense
+        self.current_app = name
+        self.state = CallState.RECORDING
+        self._recording_since = now
+        self._session_sub, self._session_start = sub, start
+        self.on_call_started(probe=probe)
+
+    def _end_call(self) -> None:
+        """Encerra a call e volta a IDLE (timeout do GRACE ou parada de segurança)."""
+        self.state = CallState.IDLE
+        self.on_call_ended()
+        self.current_app = None
+        self._web_call = False
+        self._session_sub = None
+
+    def _split(self, now: float, sessions: dict[str, tuple[int, int]]) -> None:
+        """Encerra a call atual e, se o mic segue em uso, começa OUTRA na MESMA
+        iteração — duas pastas, duas notas. A parte 1 segue o fluxo normal (fila)."""
+        self.on_call_ended()
+        self.state = CallState.IDLE
+        self.current_app = None
+        self._web_call = False       # call web nova reconfirma pelo título
+        self._session_sub = None
+        sense = self._sense(sessions)
+        if sense:
+            # sonda de áudio dispensada: os dispositivos funcionavam há < poll_seconds
+            self._begin(now, sense, probe=False)
+
+    @staticmethod
+    def _filetime_gap(start_new: int, stop_old: int) -> float | None:
+        """Gap em segundos entre o fim de uma sessão de mic e o início da próxima,
+        por FILETIME (100 ns desde 1601). None se algum dos tempos é desconhecido."""
+        if not start_new or not stop_old:
+            return None
+        return (start_new - stop_old) / 1e7
 
     def run(self, stop_event) -> None:
         """Loop de detecção (roda em thread própria)."""
@@ -376,6 +512,7 @@ class Detector:
         if self.state is not CallState.IDLE:
             self.state = CallState.IDLE
             self._web_call = False
+            self._session_sub = None
             self.on_call_ended()
 
 
@@ -413,7 +550,7 @@ def debug_loop() -> int:
 
     det = Detector(
         cfg,
-        on_call_started=lambda: stamp(">>> CALL INICIADA - a gravação começaria agora"),
+        on_call_started=lambda *a, **k: stamp(">>> CALL INICIADA - a gravação começaria agora"),
         on_call_ended=lambda: stamp("<<< CALL ENCERRADA - a transcrição começaria agora"),
     )
     pending: str | None = None  # navegador com mic aberto, call ainda não confirmada

@@ -899,6 +899,21 @@ class SettingsWindow:
         for name in _DETECTION_PRESETS:
             ModernButton(preset_row, name, lambda n=name: self._apply_detection_preset(n)).pack(side="left", padx=3)
 
+        consec = self._group(tab, "Calls consecutivas")
+        split_row = tk.Frame(consec, bg=_BG)
+        split_row.pack(fill="x", pady=6)
+        tk.Label(split_row, text="Dividir quando o mic reabre após (gap)", bg=_BG,
+                 fg=PALETTE["text"], font=FONT).pack(side="left")
+        self.split_gap_var = tk.IntVar(value=3)
+        Stepper(split_row, self.split_gap_var, step=1, lo=0, hi=30, suffix=" s").pack(side="right")
+        tk.Label(
+            consec,
+            text="Sair de uma call e entrar em outra em seguida vira duas notas, não uma.\n"
+            "0 = nunca dividir sozinho. Só vale para gaps entre ~2 s (poll) e a tolerância\n"
+            "(grace); acima disso a call já é dividida.",
+            bg=_BG, fg=PALETTE["muted"], font=("Segoe UI", 8), justify="left",
+        ).pack(anchor="w", pady=(2, 0))
+
     def _labeled_entry(self, parent, label: str, var: tk.StringVar, hint: str, *,
                        secret: bool = False, placeholder: str | None = None) -> None:
         tk.Label(parent, text=label, bg=_BG, fg=PALETTE["text"], font=FONT_BOLD).pack(anchor="w", pady=(6, 3))
@@ -1210,6 +1225,7 @@ class SettingsWindow:
         self.min_speakers_var.set(int(getattr(cfg.diarization, "min_speakers", 0)))
         self.hotkey_var.set(cfg.ui.hotkey)
         self.min_secs_var.set(int(cfg.detection.min_call_seconds))
+        self.split_gap_var.set(int(cfg.detection.split_gap_seconds))
         self.apps_var.set(cfg.detection.apps)
         self.browsers_var.set(cfg.detection.browsers)
         self.titles_var.set(cfg.detection.browser_titles)
@@ -1319,6 +1335,7 @@ class SettingsWindow:
                 browsers=self.browsers_var.get().strip(),
                 browser_titles=self.titles_var.get().strip(),
                 min_call_seconds=float(self.min_secs_var.get()),
+                split_gap_seconds=float(self.split_gap_var.get()),
                 auto_record=self.auto_record_var.get(),
             ),
             diarization=dataclasses.replace(
