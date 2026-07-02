@@ -14,6 +14,7 @@ mic estiver aberto: trocar de aba não a derruba.
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 import winreg
@@ -23,6 +24,8 @@ from typing import Callable
 from .config import Detection
 
 _BASE = r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone"
+
+log = logging.getLogger("scriba.detector")
 
 
 class CallState(Enum):
@@ -275,7 +278,9 @@ class Detector:
         self.on_grace_cancel = on_grace_cancel  # mic voltou: era troca de device
         self.state = CallState.IDLE
         self._grace_deadline = 0.0
+        self._grace_since = 0.0  # entrada no GRACE (para medir o gap do resume)
         self._recording_since = 0.0
+        self._last_exc_log = 0.0  # rate-limit do log de exceções do loop
 
     def _sense_call(self) -> str | None:
         """Quem está em call agora: app desktop, ou navegador com call confirmada."""
@@ -297,6 +302,7 @@ class Detector:
 
     def poll_once(self) -> None:
         now = time.monotonic()
+        prev_app = self.current_app
         app = self._sense_call()
         in_use = app is not None
         if app:
@@ -310,20 +316,45 @@ class Detector:
         elif self.state is CallState.RECORDING:
             if not in_use:
                 self.state = CallState.GRACE
+                self._grace_since = now
                 self._grace_deadline = now + self.cfg.grace_seconds
+                log.info(
+                    "mic liberado (%s) - tolerância de %.0fs",
+                    self.current_app, self.cfg.grace_seconds,
+                )
                 if self.on_grace:
                     self.on_grace()
-            elif now - self._recording_since > self.cfg.max_call_hours * 3600:
-                # parada de segurança: encerra; se o mic seguir em uso, um novo
-                # segmento começa no próximo poll
-                self.state = CallState.IDLE
-                self.on_call_ended()
+            else:
+                # mic ainda em uso: vigiar troca de app monitorado (Teams -> Zoom).
+                # Em #34 isso vira SPLIT; aqui é só o WARN que antecipa o caso.
+                if prev_app and app != prev_app:
+                    log.warning(
+                        "troca de app monitorado durante a call: %s -> %s", prev_app, app
+                    )
+                if now - self._recording_since > self.cfg.max_call_hours * 3600:
+                    # parada de segurança: encerra; se o mic seguir em uso, um novo
+                    # segmento começa no próximo poll
+                    log.info(
+                        "call encerrada (limite de segurança de %gh)", self.cfg.max_call_hours
+                    )
+                    self.state = CallState.IDLE
+                    self.on_call_ended()
         elif self.state is CallState.GRACE:
             if in_use:
+                gap = now - self._grace_since
+                if prev_app and app != prev_app:
+                    # mic voltou em OUTRO app monitorado (Teams -> Zoom): hoje
+                    # emenda na mesma gravação (a fusão do incidente); #34 fará o split
+                    log.warning(
+                        "mic voltou em app diferente após %.1fs: %s -> %s", gap, prev_app, app
+                    )
+                else:
+                    log.info("mic voltou após %.1fs - mesma call", gap)
                 self.state = CallState.RECORDING
                 if self.on_grace_cancel:
                     self.on_grace_cancel()
             elif now >= self._grace_deadline:
+                log.info("call encerrada (mic livre > %.0fs)", self.cfg.grace_seconds)
                 self.state = CallState.IDLE
                 self.on_call_ended()
                 self.current_app = None
@@ -335,7 +366,12 @@ class Detector:
             try:
                 self.poll_once()
             except Exception:
-                pass  # nunca derruba o loop; tenta de novo no próximo poll
+                # nunca derruba o loop; mas não engole mudo: loga no máximo 1x/min
+                # (se o registro do Windows falhar em loop, o log não inunda)
+                now = time.monotonic()
+                if now - self._last_exc_log >= 60:
+                    self._last_exc_log = now
+                    log.exception("falha no poll do detector")
             stop_event.wait(self.cfg.poll_seconds)
         if self.state is not CallState.IDLE:
             self.state = CallState.IDLE
@@ -346,6 +382,15 @@ class Detector:
 def debug_loop() -> int:
     """`scriba detect`: imprime as transições de estado para teste manual."""
     from .config import load
+
+    # espelha os logs INFO/WARN do detector (GRACE, resume com o gap medido,
+    # encerramento com o motivo, troca de app) no console
+    root = logging.getLogger()
+    if not root.handlers:
+        h = logging.StreamHandler()
+        h.setFormatter(logging.Formatter("[%(asctime)s] %(message)s", datefmt="%H:%M:%S"))
+        root.addHandler(h)
+        root.setLevel(logging.INFO)
 
     cfg = load().detection
     pats = patterns_from(cfg)
@@ -371,14 +416,10 @@ def debug_loop() -> int:
         on_call_started=lambda: stamp(">>> CALL INICIADA - a gravação começaria agora"),
         on_call_ended=lambda: stamp("<<< CALL ENCERRADA - a transcrição começaria agora"),
     )
-    last = det.state
     pending: str | None = None  # navegador com mic aberto, call ainda não confirmada
     try:
         while True:
             det.poll_once()
-            if det.state is not last:
-                stamp(f"estado: {last.value} -> {det.state.value} ({det.current_app or '-'})")
-                last = det.state
             if bpats and det.state is CallState.IDLE:
                 b = active_browser(bpats)
                 if b != pending:
