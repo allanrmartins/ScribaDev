@@ -27,6 +27,10 @@ _BASE = r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\Cons
 
 log = logging.getLogger("scriba.detector")
 
+# a cada quantos polls reamostrar o título da janela durante a gravação (#35).
+# 5 polls x poll_seconds(2s) ~= 10 s; EnumWindows é barato (a camada web já paga).
+_TITLE_SAMPLE_EVERY = 5
+
 
 class CallState(Enum):
     IDLE = "idle"
@@ -284,6 +288,7 @@ class Detector:
         on_call_ended: Callable[[], None],
         on_grace: Callable[[], None] | None = None,
         on_grace_cancel: Callable[[], None] | None = None,
+        on_title: Callable[[str], None] | None = None,
     ):
         self.cfg = cfg
         self.patterns = patterns_from(cfg)
@@ -297,6 +302,7 @@ class Detector:
         self.on_call_ended = on_call_ended
         self.on_grace = on_grace  # mic liberado: esperando a tolerância
         self.on_grace_cancel = on_grace_cancel  # mic voltou: era troca de device
+        self.on_title = on_title  # título estável capturado (bônus #35: meta tardio)
         self.state = CallState.IDLE
         self._grace_deadline = 0.0
         self._grace_since = 0.0  # entrada no GRACE (para medir o gap do resume)
@@ -306,6 +312,11 @@ class Detector:
         self._session_sub: str | None = None   # subchave do registro
         self._session_start = 0                 # LastUsedTimeStart (FILETIME) no início
         self._session_stop = 0                  # LastUsedTimeStop guardado ao entrar no GRACE
+        # sinal de título da reunião (#35): desempata splits ambíguos do #34
+        self._title_last = ""        # última amostra de título
+        self._title_stable = ""      # título estável (2 amostras iguais e não-vazias)
+        self._title_at_grace = ""    # título estável guardado ao entrar no GRACE (Uso A)
+        self._polls_since_title = 0  # contador para reamostrar a cada _TITLE_SAMPLE_EVERY
 
     def _mic_sessions(self) -> dict[str, tuple[int, int]]:
         """{subchave: (start, stop)} das sessões de mic de apps e navegadores
@@ -349,6 +360,23 @@ class Detector:
                 return None  # mic no navegador, mas nenhum título de reunião ainda
         return None
 
+    def _sample_title(self) -> None:
+        """Reamostra o título da janela a cada _TITLE_SAMPLE_EVERY polls e mantém o
+        'título estável' (2 amostras iguais e não-vazias). Uso C (#35): se o estável
+        muda sem nenhum evento de sessão de mic, só alerta - a v1 não divide por isso."""
+        self._polls_since_title += 1
+        if self._polls_since_title < _TITLE_SAMPLE_EVERY:
+            return
+        self._polls_since_title = 0
+        t = capture_meeting_title(self.cfg)
+        if t and t == self._title_last and t != self._title_stable:  # 2 amostras iguais
+            if self._title_stable:  # Uso C: estável mudou sem ciclo/gap de mic
+                log.warning("possível nova call sem ciclo de mic: %s -> %s", self._title_stable, t)
+            self._title_stable = t
+            if self.on_title:  # bônus: preenche o meeting_title tardio no meta
+                self.on_title(t)
+        self._title_last = t
+
     def poll_once(self) -> None:
         now = time.monotonic()
         sessions = self._mic_sessions()
@@ -363,6 +391,7 @@ class Detector:
                 self._begin(now, sense)
 
         elif self.state is CallState.RECORDING:
+            self._sample_title()  # #35: reamostra o título da janela ~a cada 10 s
             if not in_use:
                 # mic liberado -> GRACE. Guarda o LastUsedTimeStop EXATO da subchave
                 # rastreada: o instante em que o app fechou o mic, sem depender do poll.
@@ -370,6 +399,7 @@ class Detector:
                 self._grace_since = now
                 self._grace_deadline = now + self.cfg.grace_seconds
                 self._session_stop = sessions.get(self._session_sub or "", (0, 0))[1]
+                self._title_at_grace = self._title_stable  # título de antes do gap (Uso A)
                 log.info(
                     "mic liberado (%s) - tolerância de %.0fs",
                     self.current_app, self.cfg.grace_seconds,
@@ -407,9 +437,18 @@ class Detector:
             log.warning("troca de app monitorado durante a call: %s -> %s", prev_app, sense[0])
             self._session_sub, self._session_start = sub, start
         elif tracked is not None and tracked[1] == 0 and start != self._session_start:
-            # MESMA subchave, mas o start foi reescrito: o mic reabriu entre dois
-            # polls (gap < poll). Indistinguível de troca de device -> v1 NÃO divide;
-            # o sinal de título (#35) desempata. Loga e atualiza o rastreamento.
+            # MESMA subchave, mas o start foi reescrito: o mic reabriu entre dois polls
+            # (gap < poll). O registro não distingue de uma troca de device — #35 usa
+            # o título de desempate: mudou => call nova; igual/vazio => não divide.
+            now_title = capture_meeting_title(self.cfg)
+            if (self.cfg.split_gap_seconds > 0 and self._title_stable and now_title
+                    and now_title != self._title_stable):
+                log.info(
+                    "ciclo invisível + título mudou (%s -> %s) - dividindo a gravação",
+                    self._title_stable, now_title,
+                )
+                self._split(now, sessions)
+                return
             log.warning(
                 "ciclo de sessão invisível em %s (start mudou) - nao divido na v1",
                 self.current_app,
@@ -444,13 +483,23 @@ class Detector:
             gap = self._filetime_gap(start, self._session_stop)
             gap = gap_wall if gap is None else gap
             if split_on and gap >= self.cfg.split_gap_seconds:
-                log.info(
-                    "gap de %.1fs >= split_gap_seconds=%g - dividindo a gravação",
-                    gap, self.cfg.split_gap_seconds,
-                )
-                self._split(now, sessions)
-                return
-            log.info("mic voltou após %.1fs - mesma call", gap)
+                # #35: título igual ao de antes do gap => mesma reunião (troca de fone
+                # lenta) => suprime o split. Em dúvida NÃO divide (fusão é recuperável).
+                now_title = capture_meeting_title(self.cfg)
+                if self._title_at_grace and now_title and now_title == self._title_at_grace:
+                    log.info(
+                        "gap de %.1fs, mas título inalterado (%s) - NÃO divido (mesma reunião)",
+                        gap, now_title,
+                    )
+                else:
+                    log.info(
+                        "gap de %.1fs >= split_gap_seconds=%g - dividindo a gravação",
+                        gap, self.cfg.split_gap_seconds,
+                    )
+                    self._split(now, sessions)
+                    return
+            else:
+                log.info("mic voltou após %.1fs - mesma call", gap)
 
         # emenda (resume): atualiza o rastreamento e volta a RECORDING
         self.state = CallState.RECORDING
@@ -465,6 +514,9 @@ class Detector:
         self.state = CallState.RECORDING
         self._recording_since = now
         self._session_sub, self._session_start = sub, start
+        # nova call: zera o rastreamento de título (#35)
+        self._title_last = self._title_stable = self._title_at_grace = ""
+        self._polls_since_title = 0
         self.on_call_started(probe=probe)
 
     def _end_call(self) -> None:
