@@ -332,6 +332,27 @@ class ScribaApp:
         except Exception:
             log.exception("não consegui gravar num_speakers no meta de %s", getattr(folder, "name", folder))
 
+    def _on_title(self, title: str) -> None:
+        """Título estável capturado durante a gravação (#35): preenche meeting_title
+        no meta da gravação ATIVA se ele estava vazio — melhora a nota e o índice de
+        busca para calls que demoram a expor o título. Roda na thread do detector."""
+        import json
+
+        with self.rec_lock:
+            rec = self.rec
+        if rec is None:
+            return
+        meta_path = rec.folder / "meta.json"
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if meta.get("meeting_title"):
+                return  # já tem título de janela: não sobrescreve
+            meta["meeting_title"] = title
+            util.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
+            log.info("meeting_title capturado tardiamente: %s (%s)", title, rec.folder.name)
+        except Exception:
+            log.exception("não consegui gravar meeting_title tardio em %s", rec.folder.name)
+
     def _set_speakers_live(self, n: int) -> None:
         """Pílula definiu o nº de participantes durante a call (#13): grava no meta da
         gravação ATIVA. O fim da call lê isso e dispensa a janela de perguntar."""
@@ -891,6 +912,7 @@ class ScribaApp:
             # feedback imediato ao desligar a call: a pílula avisa que está na tolerância
             on_grace=lambda: self.ui(self._pill_finishing),
             on_grace_cancel=lambda: self.ui(self._pill_resume),
+            on_title=self._on_title,  # #35: preenche meeting_title tardio no meta
         )
         threading.Thread(target=self.detector.run, args=(self.stop_event,), daemon=True, name="detector").start()
         threading.Thread(target=self._worker, daemon=True, name="worker").start()

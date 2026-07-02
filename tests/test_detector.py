@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scriba import detector  # noqa: E402
 from scriba.config import Detection  # noqa: E402
-from scriba.detector import CallState, Detector, _clean_meeting_title  # noqa: E402
+from scriba.detector import CallState, Detector, _TITLE_SAMPLE_EVERY, _clean_meeting_title  # noqa: E402
 
 # FILETIME é contado em intervalos de 100 ns desde 1601.
 _FT = 10_000_000                     # 1 segundo
@@ -87,6 +87,11 @@ class DetectorStateMachineTests(unittest.TestCase):
         p = mock.patch.object(detector.time, "monotonic", self.clock.monotonic)
         p.start()
         self.addCleanup(p.stop)
+        # capture_meeting_title fake (#35): sem isto os testes leriam janelas reais
+        self.title = ""
+        pt = mock.patch.object(detector, "capture_meeting_title", lambda cfg: self.title)
+        pt.start()
+        self.addCleanup(pt.stop)
         self.events: list[tuple] = []
         self.sessions: dict[str, tuple[int, int]] = {}
 
@@ -99,6 +104,7 @@ class DetectorStateMachineTests(unittest.TestCase):
             on_call_ended=lambda: self.events.append(("ended",)),
             on_grace=lambda: self.events.append(("grace",)),
             on_grace_cancel=lambda: self.events.append(("resume",)),
+            on_title=lambda t: self.events.append(("title", t)),
         )
         det._mic_sessions = lambda: dict(self.sessions)  # registro controlado
         self.det = det
@@ -283,6 +289,81 @@ class DetectorStateMachineTests(unittest.TestCase):
         with self.assertLogs("scriba.detector", "ERROR") as cm:
             det.run(_StopAfter(1))  # já passou 1 min -> loga de novo
         self.assertEqual(len(cm.output), 1)
+
+    # -------- título como 2º sinal do split (#35) --------
+
+    def test_amostragem_estabiliza_titulo(self):
+        self._make()
+        self._poll({TEAMS: (_BASE, 0)})  # RECORDING
+        self.title = "Daily Coruripe"
+        for _ in range(2 * _TITLE_SAMPLE_EVERY + 1):  # 2 amostragens iguais
+            self._poll({TEAMS: (_BASE, 0)})
+        self.assertEqual(self.det._title_stable, "Daily Coruripe")
+        self.assertIn(("title", "Daily Coruripe"), self.events)  # bônus: on_title disparado
+
+    def test_uso_a_titulo_igual_suprime_split_por_gap(self):
+        # gap >= limiar, mas a reunião é a mesma (título inalterado) -> NÃO divide
+        self._make()
+        self._poll({TEAMS: (_BASE, 0)})
+        self.det._title_stable = "Daily Coruripe"       # título já estabilizado
+        self._poll({TEAMS: (_BASE, _BASE + 100 * _FT)})  # GRACE -> guarda o título
+        self.title = "Daily Coruripe"                    # no resume, título igual
+        with self.assertLogs("scriba.detector", "INFO") as cm:
+            self._poll({TEAMS: (_BASE + 105 * _FT, 0)}, advance=5.0)  # gap de 5 s (>= 3)
+        self.assertIs(self.det.state, CallState.RECORDING)
+        self.assertIn("título inalterado", "\n".join(cm.output))
+        self.assertEqual(len(self._starts()), 1)          # emendou: uma call só
+
+    def test_uso_a_titulo_diferente_permite_split_por_gap(self):
+        self._make()
+        self._poll({TEAMS: (_BASE, 0)})
+        self.det._title_stable = "Daily Coruripe"
+        self._poll({TEAMS: (_BASE, _BASE + 100 * _FT)})  # GRACE
+        self.title = "Alinhamento interno"               # título mudou -> call nova
+        with self.assertLogs("scriba.detector", "INFO") as cm:
+            self._poll({TEAMS: (_BASE + 105 * _FT, 0)}, advance=5.0)
+        self.assertIn("dividindo a gravação", "\n".join(cm.output))
+        self.assertIn(("started", False), self.events)
+
+    def test_uso_b_ciclo_invisivel_titulo_mudou_divide(self):
+        # o caso do incidente se o Teams reabriu o mic em < poll: sem gap medível,
+        # o título muda -> divide
+        self._make()
+        self._poll({TEAMS: (_BASE, 0)})                  # RECORDING, session_start = BASE
+        self.det._title_stable = "Daily Coruripe"
+        self.title = "Alinhamento interno"               # título novo
+        with self.assertLogs("scriba.detector", "INFO") as cm:
+            self._poll({TEAMS: (_BASE + 50 * _FT, 0)})   # ciclo invisível (start mudou)
+        out = "\n".join(cm.output)
+        self.assertIn("ciclo invisível + título mudou", out)
+        self.assertIn("dividindo a gravação", out)
+        self.assertIn(("started", False), self.events)
+
+    def test_uso_b_ciclo_invisivel_titulo_igual_nao_divide(self):
+        # troca de device (mesma reunião, mesmo título) -> só WARN, não divide
+        self._make()
+        self._poll({TEAMS: (_BASE, 0)})
+        self.det._title_stable = "Daily Coruripe"
+        self.title = "Daily Coruripe"
+        with self.assertLogs("scriba.detector", "WARNING") as cm:
+            self._poll({TEAMS: (_BASE + 50 * _FT, 0)})
+        self.assertIs(self.det.state, CallState.RECORDING)
+        self.assertIn("ciclo de sessão invisível", "\n".join(cm.output))
+        self.assertEqual(len(self._starts()), 1)
+
+    def test_uso_c_titulo_muda_sem_ciclo_so_avisa(self):
+        # título estável muda sem NENHUM evento de sessão de mic -> v1 só alerta
+        self._make()
+        self._poll({TEAMS: (_BASE, 0)})
+        self.det._title_stable = "Daily Coruripe"
+        self.title = "Alinhamento interno"
+        self.det._title_last = "Alinhamento interno"       # 1ª amostra já feita
+        self.det._polls_since_title = _TITLE_SAMPLE_EVERY - 1  # força amostrar agora
+        with self.assertLogs("scriba.detector", "WARNING") as cm:
+            self._poll({TEAMS: (_BASE, 0)})                # mesma sessão, sem ciclo
+        self.assertIs(self.det.state, CallState.RECORDING)  # não divide
+        self.assertIn("possível nova call sem ciclo", "\n".join(cm.output))
+        self.assertEqual(len(self._starts()), 1)
 
 
 if __name__ == "__main__":
