@@ -98,6 +98,14 @@ def main(argv: list[str] | None = None) -> int:
     p_proc.add_argument("--speakers", type=int, default=None, metavar="N",
                         help="nº de participantes remotos: trava a diarização em N vozes (persiste no meta)")
 
+    p_split = sub.add_parser(
+        "split", help="corta uma reunião já processada em duas no offset dado (#37)"
+    )
+    p_split.add_argument("folder", type=Path)
+    p_split.add_argument(
+        "offset", help="ponto do corte relativo ao início: HH:MM:SS, MM:SS ou SS"
+    )
+
     sub.add_parser("devices", help="lista dispositivos de áudio (microfone e loopback)")
     sub.add_parser("detect", help="modo debug: imprime as transições de estado da detecção")
     sub.add_parser("wizard", help="assistente de perfil: gera o prompt.md e as hotwords")
@@ -159,6 +167,8 @@ def main(argv: list[str] | None = None) -> int:
         from .pipeline import summarize_folder
 
         return summarize_folder(args.folder)
+    if args.cmd == "split":
+        return cmd_split(args)
     if args.cmd == "process":
         from .pipeline import process_folder, process_when_ready
 
@@ -213,6 +223,24 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_update(args)
     parser.error(f"comando desconhecido: {args.cmd}")
     return 2
+
+
+def cmd_split(args) -> int:
+    """`scribadev split <pasta> <offset>`: corte retroativo de uma reunião em duas (#37)."""
+    from .split import SplitError, parse_offset, split_recording
+
+    try:
+        offset = parse_offset(args.offset)
+    except ValueError as e:
+        print(f"erro: {e}")
+        return 2
+    try:
+        folder1, folder2 = split_recording(args.folder, offset)
+    except SplitError as e:
+        print(f"erro: {e}")
+        return 1
+    print(f"dividido em duas reuniões:\n  parte 1: {folder1}\n  parte 2: {folder2}")
+    return 0
 
 
 def cmd_search(args) -> int:
