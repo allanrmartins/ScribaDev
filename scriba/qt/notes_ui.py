@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QProgressBar,
+    QScrollArea,
     QSplitter,
     QTextBrowser,
     QTextEdit,
@@ -190,6 +191,7 @@ class NotesWindow(QWidget):
         actions = QHBoxLayout()
         actions.addWidget(widgets.ModernButton("Atualizar", self._refresh_list))
         actions.addWidget(widgets.ModernButton("Abrir pasta", self._open_notes_dir))
+        actions.addWidget(widgets.ModernButton("Pendências", self._open_action_items))
         actions.addStretch(1)
         lay.addLayout(actions)
         return left
@@ -214,8 +216,10 @@ class NotesWindow(QWidget):
         self._prompt_btn = widgets.ModernButton("Gerar Prompt de Contexto", self._copy_prompt, kind="primary")
         self._tr_btn = widgets.ModernButton("Copiar transcrição", self._copy_transcript)
         self._chat_btn = widgets.ModernButton("Perguntar à reunião", self._open_chat)
+        self._voice_btn = widgets.ModernButton("Rotular vozes…", self._open_speaker_labeler)
+        self._voice_btn.setVisible(False)   # só quando a gravação tem vozes (voices.json)
         self._delete_btn = widgets.ModernButton("Excluir nota…", self._ask_delete)
-        for b in (self._prompt_btn, self._tr_btn, self._chat_btn):
+        for b in (self._prompt_btn, self._tr_btn, self._chat_btn, self._voice_btn):
             acts.addWidget(b)
         acts.addStretch(1)
         acts.addWidget(self._delete_btn)
@@ -379,6 +383,7 @@ class NotesWindow(QWidget):
                    else "Nenhuma nota ainda — elas aparecem aqui depois da primeira reunião.")
             self._show_note_pane()
             self._delete_btn.setVisible(False)
+            self._voice_btn.setVisible(False)
             self._find_bar.setVisible(False)
             self._presentes.setVisible(False)
             self._view.setMarkdown(msg)
@@ -441,6 +446,7 @@ class NotesWindow(QWidget):
     def _render_progress(self, folder: Path, status: str) -> None:
         self._show_progress_pane()
         self._delete_btn.setVisible(False)
+        self._voice_btn.setVisible(False)
         self._title.setText("")
         self._client.setText("")
         self._current_key = folder
@@ -497,6 +503,7 @@ class NotesWindow(QWidget):
         self._title.setText(title or "")
         self._client.setText(_client_of(path))
         self._delete_btn.setVisible(True)
+        self._update_voice_button(path)
         self._find_bar.setVisible(True)
         try:
             md = path.read_text(encoding="utf-8")
@@ -728,6 +735,87 @@ class NotesWindow(QWidget):
         self._clear_hits()
         self._find_count.setText("")
 
+    # -- rotular vozes (#1; diálogo do #51) ----------------------------------
+
+    def _update_voice_button(self, note_path: Path) -> None:
+        from .speakers_ui import has_labelable_voices
+
+        try:
+            has = has_labelable_voices(self._recording_folder_for(note_path))
+        except Exception:
+            has = False
+        self._voice_btn.setVisible(has)
+
+    def _open_speaker_labeler(self) -> None:
+        sel = self._selected()
+        if not sel or sel[2] is not None:
+            return
+        from .speakers_ui import label_speakers_dialog
+
+        folder = self._recording_folder_for(sel[0])
+        self._voice_dlg = label_speakers_dialog(   # ref evita GC
+            folder, on_saved=self._after_relabel, guesses=self._voice_guesses(sel[0], folder))
+
+    def _voice_guesses(self, note_path: Path, folder: Path) -> dict[str, str]:
+        import json
+
+        from .. import notes
+
+        try:
+            presentes, _ = notes.parse_participants(note_path.read_text(encoding="utf-8"))
+            voices = json.loads((folder / "voices.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return {str(v): notes.guess_voice_name(str(v), presentes.get(str(v), "")) for v in voices}
+
+    def _after_relabel(self) -> None:
+        self._current_key = None   # força re-render (agora com os nomes)
+        self._refresh_list()
+
+    # -- "Minhas pendências" (#22) -------------------------------------------
+
+    def _collect_action_groups(self) -> list:
+        from .. import notes
+
+        groups = []
+        try:
+            files = list(self._notes_dir().glob("*.md"))
+        except OSError:
+            files = []
+        for f in files:
+            try:
+                md = f.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            items = notes.parse_action_items(md)
+            if not items:
+                continue
+            dt, _dur, title = _note_info(f)
+            groups.append((dt, title or f.stem, f, self._recording_folder_for(f), items))
+        groups.sort(key=lambda g: g[0], reverse=True)
+        return groups
+
+    def _open_action_items(self) -> None:
+        self._actions_win = _ActionItemsWindow(self._collect_action_groups(), self._reveal_note)
+        self._actions_win.show()
+
+    def _reveal_note(self, note_path: Path) -> None:
+        if self._select_in_tree(note_path):
+            return
+        for f in (self._search, self._f_participant, self._f_client, self._f_since, self._f_until):
+            f.clear()
+        self._refresh_list()
+        self._select_in_tree(note_path)
+
+    def _select_in_tree(self, note_path: Path) -> bool:
+        for item, (p, _t, _s) in self._items.items():
+            if p == note_path:
+                self._tree.setCurrentItem(item)
+                self._tree.scrollToItem(item)
+                self.raise_()
+                return True
+        return False
+
     # -- janela --------------------------------------------------------------
 
     def show(self) -> None:  # noqa: A003
@@ -758,6 +846,83 @@ class NotesWindow(QWidget):
     def closeEvent(self, event) -> None:
         event.ignore()
         self.hide()
+
+
+class _ActionItemsWindow(QWidget):
+    """"Minhas pendências": agrega a seção 'Pendências e Ações' de TODAS as reuniões,
+    com checkbox por item (estado em .actions.json por pasta) e clique no título → nota."""
+
+    def __init__(self, groups: list, on_reveal):
+        super().__init__()
+        self._groups = groups
+        self._on_reveal = on_reveal
+        self.setWindowTitle("ScribaDev — Minhas pendências")
+        self.setMinimumSize(560, 400)
+        root = QVBoxLayout(self)
+        head = QHBoxLayout()
+        title = QLabel("Minhas pendências"); title.setStyleSheet("font-size:15pt; font-weight:bold;")
+        head.addWidget(title)
+        self._count = QLabel(""); self._count.setProperty("role", "muted")
+        head.addWidget(self._count); head.addStretch(1)
+        self._show_done = QCheckBox("mostrar resolvidas")
+        self._show_done.toggled.connect(self._render)
+        head.addWidget(self._show_done)
+        root.addLayout(head)
+        self._scroll = QScrollArea(); self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QScrollArea.NoFrame)
+        root.addWidget(self._scroll, 1)
+        self._render()
+
+    def _render(self) -> None:
+        from .. import notes
+
+        body = QWidget()
+        lay = QVBoxLayout(body)
+        open_n = done_n = 0
+        any_visible = False
+        for dt, title, md_path, folder, items in self._groups:
+            state = notes.load_action_state(folder)
+            shown = [it for it in items if self._show_done.isChecked() or not state.get(it["key"])]
+            done_n += sum(1 for it in items if state.get(it["key"]))
+            open_n += sum(1 for it in items if not state.get(it["key"]))
+            if not shown:
+                continue
+            any_visible = True
+            hdr = QLabel(f"{title}  ·  {dt:%d/%m %H:%M}")
+            hdr.setStyleSheet(f"color:{theme.active().accent_hover}; font-weight:bold; font-size:11pt;")
+            hdr.setCursor(Qt.PointingHandCursor)
+            hdr.mousePressEvent = lambda _e, p=md_path: self._on_reveal(p)
+            lay.addWidget(hdr)
+            for it in shown:
+                self._add_item(lay, folder, it, bool(state.get(it["key"])))
+        if not any_visible:
+            lay.addWidget(QLabel("Nenhuma reunião tem pendências." if not self._groups
+                                 else 'Tudo resolvido! Marque "mostrar resolvidas" para revê-las.'))
+        lay.addStretch(1)
+        self._count.setText(f"{open_n} aberta(s) · {done_n} resolvida(s)")
+        self._scroll.setWidget(body)
+
+    def _add_item(self, lay, folder, item, done) -> None:
+        from .. import notes
+
+        text = (f"[{item['label']}] " if item.get("label") else "") + (item.get("text") or item.get("raw") or "")
+        cb = QCheckBox(text)
+        cb.setChecked(done)
+        if done:
+            cb.setStyleSheet(f"color:{theme.active().muted}; text-decoration:line-through;")
+
+        def toggle(on, f=folder, k=item["key"]) -> None:
+            notes.set_action_done(f, k, on)
+            self._render()
+
+        cb.toggled.connect(toggle)
+        lay.addWidget(cb)
+
+    def show(self) -> None:  # noqa: A003
+        super().show()
+        self.raise_()
+        self.activateWindow()
+        widgets.enable_dark_titlebar(self)
 
 
 class _Collapsible(QWidget):

@@ -131,5 +131,47 @@ class NotesWindowSmokeTests(unittest.TestCase):
         self.assertIn("Nenhuma nota", win._view.toPlainText())
 
 
+@unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")
+class NotesSlice2Tests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_botao_rotular_vozes_aparece_com_voices(self):
+        from scriba.qt.notes_ui import NotesWindow
+
+        base = Path(tempfile.mkdtemp(prefix="scriba_qt_rv_"))
+        (base / "2026-07-02_15-30_Boleto.md").write_text(_NOTE_MD, encoding="utf-8")
+        rec = base / "_rec" / "2026-07-02_15-30_Boleto"      # pasta legada = rec_dir/stem
+        rec.mkdir(parents=True)
+        (rec / "voices.json").write_text('{"Ana": {}, "Participante 2": {}}', encoding="utf-8")
+
+        class _Out:
+            def resolved_export_dir(_s): return base
+            def resolved_recordings_dir(_s): return base / "_rec"
+
+        class _App:
+            cfg = type("C", (), {"output": _Out()})()
+            def ui(_s, fn): fn()
+
+        win = NotesWindow(_App())
+        win._refresh_list()
+        win._tree.setCurrentItem(next(iter(win._items)))
+        win._show_selected()
+        self.assertTrue(win._voice_btn.isVisibleTo(win))     # a gravação tem voices.json
+
+    def test_janela_pendencias_renderiza(self):
+        from scriba.qt.notes_ui import _ActionItemsWindow
+
+        folder = Path(tempfile.mkdtemp(prefix="scriba_qt_pend_"))
+        group = (datetime(2026, 7, 2, 15, 30), "Boleto", folder / "n.md", folder,
+                 [{"key": "k1", "label": "", "text": "corrigir CNPJ", "raw": "corrigir CNPJ"}])
+        revealed = []
+        w = _ActionItemsWindow([group], revealed.append)
+        self.assertIn("aberta", w._count.text())             # 1 item aberto
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
