@@ -94,6 +94,7 @@ class DetectorStateMachineTests(unittest.TestCase):
         self.addCleanup(pt.stop)
         self.events: list[tuple] = []
         self.sessions: dict[str, tuple[int, int]] = {}
+        self.recording = True  # is_recording fake (#38); True = não rearma
 
     def _make(self, **over) -> Detector:
         params = dict(grace_seconds=8.0, poll_seconds=2.0, max_call_hours=4.0, split_gap_seconds=3.0)
@@ -105,6 +106,7 @@ class DetectorStateMachineTests(unittest.TestCase):
             on_grace=lambda: self.events.append(("grace",)),
             on_grace_cancel=lambda: self.events.append(("resume",)),
             on_title=lambda t: self.events.append(("title", t)),
+            is_recording=lambda: self.recording,
         )
         det._mic_sessions = lambda: dict(self.sessions)  # registro controlado
         self.det = det
@@ -364,6 +366,35 @@ class DetectorStateMachineTests(unittest.TestCase):
         self.assertIs(self.det.state, CallState.RECORDING)  # não divide
         self.assertIn("possível nova call sem ciclo", "\n".join(cm.output))
         self.assertEqual(len(self._starts()), 1)
+
+    # -------- rearme do auto-record após ■ (#38, item 5) --------
+
+    def test_rearme_no_ciclo_invisivel_sem_gravacao(self):
+        # usuário deu ■ (call segue, sem gravar); um ciclo novo de mic re-arma
+        self._make()
+        self._poll({TEAMS: (_BASE, 0)})       # RECORDING
+        self.recording = False                # ■: para de gravar, call ativa
+        with self.assertLogs("scriba.detector", "INFO") as cm:
+            self._poll({TEAMS: (_BASE + 50 * _FT, 0)})  # ciclo invisível, título vazio
+        self.assertIn("auto-record re-armado", "\n".join(cm.output))
+        self.assertIn(("started", False), self.events)   # rearmou a call nova
+
+    def test_rearme_na_troca_de_app_sem_gravacao(self):
+        self._make(split_gap_seconds=0.0)     # split off: troca de app não divide
+        self._poll({TEAMS: (_BASE, 0)})
+        self.recording = False
+        with self.assertLogs("scriba.detector", "INFO") as cm:
+            self._poll({TEAMS: (_BASE, _BASE + 100 * _FT), ZOOM: (_BASE + 102 * _FT, 0)})
+        self.assertIn("auto-record re-armado", "\n".join(cm.output))
+        self.assertIn(("started", False), self.events)
+
+    def test_nao_rearma_quando_gravando(self):
+        # gravando normalmente: um ciclo invisível não re-dispara gravação
+        self._make()
+        self._poll({TEAMS: (_BASE, 0)})
+        self.recording = True
+        self._poll({TEAMS: (_BASE + 50 * _FT, 0)})  # ciclo invisível
+        self.assertEqual(len(self._starts()), 1)     # sem rearme: só o start inicial
 
 
 if __name__ == "__main__":

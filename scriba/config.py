@@ -108,6 +108,7 @@ timeout_seconds = 600
 [ui]
 overlay = true           # pílula flutuante durante a gravação
 hotkey = ""              # atalho global gravar/parar (ex.: "ctrl+alt+r"); vazio desativa
+hotkey_split = ""        # atalho global "nova call" (divide a gravação, #38); vazio desativa
 
 [output]
 # Pasta para onde o notas.md final é copiado. Vazio = Documentos\\ScribaDev
@@ -207,6 +208,7 @@ class Summary:
 class Ui:
     overlay: bool = True
     hotkey: str = ""
+    hotkey_split: str = ""  # atalho global "nova call" / dividir a gravação (#38)
 
 
 @dataclass(frozen=True)
@@ -364,6 +366,7 @@ timeout_seconds = {_n(s.timeout_seconds)}
 [ui]
 overlay = {_b(u.overlay)}           # pílula flutuante durante a gravação
 hotkey = {_s(u.hotkey)}              # atalho global gravar/parar (ex.: "ctrl+alt+r"); vazio desativa
+hotkey_split = {_s(u.hotkey_split)}        # atalho global "nova call" (divide a gravação, #38); vazio desativa
 
 [output]
 # Pasta para onde o notas.md final é copiado. Vazio = Documentos\\ScribaDev

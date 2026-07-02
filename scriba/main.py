@@ -98,6 +98,7 @@ class ScribaApp:
         self.main_win = None
         self.update_news = None  # versão nova detectada (#19); a capa exibe o aviso
         self.hotkey = None
+        self.hotkey_split = None  # #38: atalho "nova call" (dividir a gravação)
         self.detector: Detector | None = None
         self.call_started_at: float | None = None
         try:
@@ -557,17 +558,24 @@ class ScribaApp:
     # -------------------------------------------------------------- hotkey --
 
     def _setup_hotkey(self) -> None:
+        # (re)registra os atalhos globais: gravar/parar e "nova call" (#38)
+        for attr in ("hotkey", "hotkey_split"):
+            hk = getattr(self, attr)
+            if hk is not None:
+                hk.stop()
+                setattr(self, attr, None)
+        self._register_hotkey("hotkey", self.cfg.ui.hotkey, self._hotkey_toggle)
+        self._register_hotkey("hotkey_split", getattr(self.cfg.ui, "hotkey_split", ""), self._split_now)
+
+    def _register_hotkey(self, attr: str, spec: str, handler) -> None:
         from .hotkey import GlobalHotkey
 
-        if self.hotkey is not None:
-            self.hotkey.stop()
-            self.hotkey = None
-        spec = (self.cfg.ui.hotkey or "").strip()
+        spec = (spec or "").strip()
         if not spec:
             return
-        hk = GlobalHotkey(spec, self._hotkey_toggle)
+        hk = GlobalHotkey(spec, handler)
         if hk.start():
-            self.hotkey = hk
+            setattr(self, attr, hk)
         else:
             log.warning("hotkey '%s' não pôde ser registrada", spec)
             self._toast("Atalho indisponível", f"Não consegui registrar '{spec}' (em uso por outro app?)")
@@ -577,6 +585,17 @@ class ScribaApp:
             self.stop_recording(keep=True)  # intenção explícita: guarda mesmo curta
         else:
             self.start_recording("manual")
+
+    def _split_now(self) -> None:
+        """✂ nova call (#38): encerra a gravação atual (guardando) e começa outra na
+        hora, num clique. Fecha a fronteira de call que o usuário SABE onde é. Pula a
+        sonda de áudio (probe=False): os dispositivos estão funcionando agora."""
+        if not self.is_recording():
+            self.start_recording("manual")  # nada gravando ainda: só começa
+            return
+        self.stop_recording(keep=True)                # parte 1 -> fila (intenção explícita)
+        self.start_recording("manual", probe=False)   # parte 2 já em andamento
+        self._toast("Gravação dividida", "Nova gravação em andamento.")
 
     # ---------------------------------------------------------------- pill --
 
@@ -597,6 +616,9 @@ class ScribaApp:
                     target=self.start_recording, args=("manual",), daemon=True
                 ).start(),
                 on_speakers=self._set_speakers_live,  # #13: nº de participantes ao vivo
+                on_split=lambda: threading.Thread(  # #38: ✂ fecha esta call e começa outra
+                    target=self._split_now, daemon=True
+                ).start(),
             )
         return self.pill
 
@@ -913,6 +935,7 @@ class ScribaApp:
             on_grace=lambda: self.ui(self._pill_finishing),
             on_grace_cancel=lambda: self.ui(self._pill_resume),
             on_title=self._on_title,  # #35: preenche meeting_title tardio no meta
+            is_recording=self.is_recording,  # #38: rearma o auto-record após ■
         )
         threading.Thread(target=self.detector.run, args=(self.stop_event,), daemon=True, name="detector").start()
         threading.Thread(target=self._worker, daemon=True, name="worker").start()
