@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import threading
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -29,12 +30,15 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
+    QProgressBar,
     QScrollArea,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
+from PySide6.QtCore import QTimer, Signal
 
 from .. import config as config_mod
 from .. import util
@@ -56,11 +60,14 @@ _CHAT_MODELS = {"Mesmo do resumo": "", "Haiku 4.5": "claude-haiku-4-5",
 
 
 class SettingsWindow(QWidget):
+    _about_ready = Signal(object)   # marshaling da checagem de update (thread -> UI)
+
     def __init__(self, app):
         super().__init__()
         self.app = app
         self._titlebar_done = False
         self._loaded = False
+        self._level_probe = None
         # registro: (widget, seção, atributo, kind, choices|None)
         self._fields: list[tuple] = []
 
@@ -78,6 +85,8 @@ class SettingsWindow(QWidget):
         self._build_ia_tab()
         self._build_detection_tab()
         self._build_dirs_tab()
+        self._build_about_tab()
+        self._about_ready.connect(self._show_about_update)
 
         foot = QHBoxLayout()
         self._saved = QLabel(""); self._saved.setProperty("role", "ok")
@@ -175,6 +184,17 @@ class SettingsWindow(QWidget):
         self._choice(au, "Formato do áudio", "audio", "archive_format", _ARCHIVE)
         self._int(au, "Apagar gravação após (dias)", "audio", "retention_days", 0, 3650,
                   hint="0 = nunca; só a pasta da gravação, a nota .md não é tocada")
+        mic = QWidget(); mr = QHBoxLayout(mic); mr.setContentsMargins(0, 0, 0, 0)
+        self._mic_btn = widgets.ModernButton("Testar microfone", self._toggle_mic_test)
+        mr.addWidget(self._mic_btn)
+        self._mic_status = QLabel(""); self._mic_status.setProperty("role", "muted")
+        self._mic_status.setStyleSheet("font-size:8pt;")
+        mr.addWidget(self._mic_status); mr.addStretch(1)
+        au.addRow(mic)
+        self._mic_bar = QProgressBar(); self._mic_bar.setRange(0, 100); self._mic_bar.setTextVisible(False)
+        self._lb_bar = QProgressBar(); self._lb_bar.setRange(0, 100); self._lb_bar.setTextVisible(False)
+        au.addRow("Eu (microfone)", self._mic_bar)
+        au.addRow("Participantes (saída)", self._lb_bar)
 
         dz = self._group(f, "Diarização (separar vozes)")
         self._check(dz, "Ativar diarização", "diarization", "enabled")
@@ -227,6 +247,39 @@ class SettingsWindow(QWidget):
         self._text(op, "Endpoint", "summary", "openai_base_url", hint="inclua /v1")
         self._text(op, "Chave da API", "summary", "openai_api_key", secret=True)
 
+        pr = self._group(f, "Prompt do resumo (prompt.md)")
+        actions = QWidget(); ar = QHBoxLayout(actions); ar.setContentsMargins(0, 0, 0, 0)
+        note = QLabel("Instruções que moldam o resumo das suas reuniões.")
+        note.setProperty("role", "muted"); note.setStyleSheet("font-size:8pt;")
+        ar.addWidget(note); ar.addStretch(1)
+        ar.addWidget(widgets.ModernButton("Assistente de perfil…", self._open_wizard))
+        ar.addWidget(widgets.ModernButton("Restaurar padrão", self._restore_prompt))
+        pr.addRow(actions)
+        self._prompt_editor = QPlainTextEdit()
+        self._prompt_editor.setMinimumHeight(180)
+        self._prompt_editor.setStyleSheet(
+            f"font-family:'{theme.active().font_mono}','Consolas',monospace; font-size:9pt;")
+        pr.addRow(self._prompt_editor)
+
+    def _open_wizard(self) -> None:
+        from .wizard_ui import WizardWindow
+
+        self._wizard = WizardWindow(app=self.app, on_applied=self._after_wizard)  # ref evita GC
+        self._wizard.show()
+
+    def _after_wizard(self) -> None:
+        if self.app is not None:
+            try:
+                self.app.reload_config()
+            except Exception:
+                pass
+        self._load()   # recarrega campos + prompt (o wizard reescreveu ambos)
+
+    def _restore_prompt(self) -> None:
+        from .. import notes
+
+        self._prompt_editor.setPlainText(notes.DEFAULT_SUMMARY_PROMPT)
+
     def _build_detection_tab(self) -> None:
         f = self._tab("Detecção")
         self._check(f, "Gravar sozinho ao detectar a call", "detection", "auto_record")
@@ -257,6 +310,207 @@ class SettingsWindow(QWidget):
         d = QFileDialog.getExistingDirectory(self, "Escolher pasta", entry.text() or "")
         if d:
             entry.setText(d)
+
+    # -- aba Sobre -----------------------------------------------------------
+
+    def _build_about_tab(self) -> None:
+        from .. import updates
+
+        page = QWidget()
+        outer = QVBoxLayout(page); outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QScrollArea.NoFrame)
+        inner = QWidget(); lay = QVBoxLayout(inner); lay.setContentsMargins(14, 14, 14, 14)
+        title = QLabel("ScribaDev"); title.setStyleSheet("font-size:18pt; font-weight:bold;")
+        lay.addWidget(title)
+        ver = QLabel(updates.build_string()); ver.setProperty("role", "muted"); lay.addWidget(ver)
+        desc = QLabel("Gravação e transcrição automática de reuniões (Teams, Zoom, Meet) — 100% local e privado.")
+        desc.setProperty("role", "muted"); desc.setWordWrap(True); lay.addWidget(desc)
+        link = QLabel('Repositório: <a href="https://github.com/allanrmartins/ScribaDev">'
+                      'github.com/allanrmartins/ScribaDev</a>')
+        link.setOpenExternalLinks(True); lay.addWidget(link)
+        lic = QLabel("Licença: Elastic License 2.0 © Allan Martins")
+        lic.setProperty("role", "muted"); lay.addWidget(lic)
+
+        upd = QHBoxLayout()
+        upd.addWidget(widgets.ModernButton("Verificar atualizações", self._check_updates_about))
+        self._about_update_btn = widgets.ModernButton("Atualizar agora", self._do_update_about, kind="primary")
+        self._about_update_btn.setVisible(False)
+        upd.addWidget(self._about_update_btn); upd.addStretch(1)
+        lay.addLayout(upd)
+        self._about_status = QLabel(""); self._about_status.setWordWrap(True); self._about_status.setProperty("role", "muted")
+        lay.addWidget(self._about_status)
+
+        head = QLabel("Componentes e versões"); head.setStyleSheet("font-weight:bold; margin-top:8px;")
+        lay.addWidget(head)
+        t = theme.active()
+        for label, value, level in self._about_components():
+            color = {"ok": t.muted, "warn": t.warn, "err": t.accent}.get(level, t.muted)
+            row = QLabel(f"<b>{label}:</b> {value}")
+            row.setWordWrap(True); row.setStyleSheet(f"color:{color}; font-size:9pt;")
+            lay.addWidget(row)
+        lay.addStretch(1)
+        scroll.setWidget(inner); outer.addWidget(scroll)
+        self._tabs.addTab(page, "Sobre")
+
+    def _about_components(self) -> list:
+        import sys
+
+        def ver(pkg):
+            try:
+                from importlib.metadata import version
+
+                return version(pkg)
+            except Exception:
+                return None
+
+        def core(label, text, present):
+            return (label, text if present else text + " — AUSENTE (reinstale o app)", "ok" if present else "err")
+
+        fw, ct, pa = ver("faster-whisper"), ver("ctranslate2"), ver("pyaudiowpatch")
+        torch_v = ver("torch")
+        return [
+            ("Python", sys.version.split()[0], "ok"),
+            core("Transcrição", f"faster-whisper {fw or '?'} · ctranslate2 {ct or '?'}", bool(fw and ct)),
+            ("Diarização", *self._diar_health(ver)),
+            ("PyTorch", torch_v or "não instalado (opcional — só p/ a diarização)", "ok" if torch_v else "warn"),
+            ("GPU", self._gpu_str(), "ok"),
+            core("Áudio (WASAPI)", f"pyaudiowpatch {pa or '?'}", bool(pa)),
+            ("Compressão de áudio", *self._ffmpeg_health()),
+            ("Bandeja / imagens", f"pystray {ver('pystray') or '—'} · Pillow {ver('Pillow') or '—'}", "ok"),
+        ]
+
+    def _diar_health(self, ver) -> tuple:
+        import importlib.util as ilu
+
+        try:
+            present = ilu.find_spec("pyannote.audio") is not None
+        except Exception as e:
+            return (f"erro ao checar — {e}", "err")
+        if not present:
+            return ("não instalada — falta o extra [diarization] (pyannote + torch)", "err")
+        pa = ver("pyannote.audio") or "?"
+        dz = self.app.cfg.diarization
+        if not getattr(dz, "hf_token", ""):
+            return (f"pyannote.audio {pa} — falta o token Hugging Face (aba Gravação)", "warn")
+        if not getattr(dz, "enabled", False):
+            return (f"pyannote.audio {pa} — desligada na aba Gravação", "warn")
+        return (f"pyannote.audio {pa} · modelo: {getattr(dz, 'model', '?')}", "ok")
+
+    def _ffmpeg_health(self) -> tuple:
+        a = self.app.cfg.audio
+        fmt = (getattr(a, "archive_format", "opus") or "wav").strip().lower()
+        lvl = util.ffmpeg_status(getattr(a, "keep_audio", False), fmt)
+        if lvl == "ok":
+            return ("ffmpeg no PATH — áudio guardado é compactado", "ok")
+        if lvl == "err":
+            return ("ffmpeg AUSENTE — o áudio fica em WAV cru. Instale com 'winget install ffmpeg'", "err")
+        return ("ffmpeg ausente no PATH (necessário p/ compactar o áudio guardado)", "warn")
+
+    @staticmethod
+    def _gpu_str() -> str:
+        try:
+            import ctypes
+
+            ctypes.WinDLL("nvcuda.dll")
+            return "NVIDIA (CUDA disponível)"
+        except Exception:
+            return "sem GPU CUDA — usa CPU"
+
+    def _check_updates_about(self) -> None:
+        self._about_update_btn.setVisible(False)
+        self._about_status.setText("Verificando…")
+        threading.Thread(target=self._about_update_worker, daemon=True).start()
+
+    def _about_update_worker(self) -> None:
+        from .. import updates
+
+        try:
+            latest = updates.latest_version()
+        except Exception:
+            latest = None
+        self._about_ready.emit(latest)
+
+    def _show_about_update(self, latest) -> None:
+        from .. import __version__, updates
+
+        self._about_update_btn.setVisible(False)
+        if latest is None:
+            self._about_status.setText("Não consegui verificar — sem internet ou serviço indisponível.")
+        elif updates._is_newer(__version__, latest):
+            self._about_status.setText(f"Nova versão v{latest} disponível — recomendado atualizar.")
+            self._about_update_btn.setText("Atualizar agora" if updates.is_git_install() else "Baixar")
+            self._about_update_btn.setVisible(True)
+        else:
+            self._about_status.setText(f"✓ Você está na versão mais recente (v{__version__}).")
+
+    def _do_update_about(self) -> None:
+        from .. import updates
+
+        if getattr(self.app, "is_recording", lambda: False)():
+            self._about_status.setText("Pare a gravação antes de atualizar.")
+            return
+        if updates.is_git_install():
+            self._about_status.setText("Atualizando… (git pull)")
+            self.app.apply_update(self._about_update_done)
+        else:
+            import webbrowser
+
+            webbrowser.open(updates.download_url())
+
+    def _about_update_done(self, ok: bool, msg: str) -> None:
+        if ok:
+            self._about_status.setText("✓ Atualizado — reiniciando o ScribaDev…")
+            QTimer.singleShot(1500, self.app.relaunch)
+        else:
+            self._about_status.setText("✗ " + msg)
+
+    # -- teste de microfone (medidor de nível) -------------------------------
+
+    def _toggle_mic_test(self) -> None:
+        if self._level_probe is not None:
+            self._stop_mic_test()
+            return
+        if getattr(self.app, "is_recording", lambda: False)():
+            self._mic_status.setText("Pare a gravação para testar.")
+            return
+        self._mic_status.setText("abrindo…")
+        try:
+            from ..recorder import LevelProbe
+
+            self._level_probe = LevelProbe(config_mod.load().audio)
+        except Exception as e:
+            self._mic_status.setText("falhou: " + (str(e).splitlines() or [""])[0][:50])
+            self._level_probe = None
+            return
+        self._mic_btn.setText("Parar teste")
+        self._mic_status.setText("fale algo — as barras devem mexer")
+        self._level_timer = QTimer(self)
+        self._level_timer.timeout.connect(self._poll_levels)
+        self._level_timer.start(80)
+
+    def _poll_levels(self) -> None:
+        if self._level_probe is None:
+            return
+        try:
+            self._mic_bar.setValue(int(min(100.0, self._level_probe.level("mic") * 100)))
+            self._lb_bar.setValue(int(min(100.0, self._level_probe.level("loopback") * 100)))
+        except Exception:
+            self._stop_mic_test()
+
+    def _stop_mic_test(self) -> None:
+        if getattr(self, "_level_timer", None) is not None:
+            self._level_timer.stop()
+            self._level_timer = None
+        if self._level_probe is not None:
+            try:
+                self._level_probe.stop()
+            except Exception:
+                pass
+            self._level_probe = None
+        self._mic_bar.setValue(0)
+        self._lb_bar.setValue(0)
+        self._mic_btn.setText("Testar microfone")
+        self._mic_status.setText("")
 
     # -- load / save ---------------------------------------------------------
 
@@ -301,6 +555,13 @@ class SettingsWindow(QWidget):
             self._loaded = False
             return
         self._loaded = True
+        if hasattr(self, "_prompt_editor"):   # prompt.md (não-crítico p/ o guard)
+            try:
+                from .. import notes
+
+                self._prompt_editor.setPlainText(notes.ensure_prompt_file().read_text(encoding="utf-8"))
+            except Exception:
+                log.exception("settings: falha ao carregar o prompt.md")
 
     def _save(self) -> None:
         if not self._loaded:
@@ -314,6 +575,11 @@ class SettingsWindow(QWidget):
         for section, values in by_section.items():
             new = dataclasses.replace(new, **{section: dataclasses.replace(getattr(new, section), **values)})
         config_mod.save(new)
+        if hasattr(self, "_prompt_editor"):
+            try:
+                util.atomic_write_text(util.PROMPT_PATH, self._prompt_editor.toPlainText().strip() + "\n")
+            except Exception:
+                log.exception("settings: falha ao salvar o prompt.md")
         if self.app is not None:
             try:
                 self.app.reload_config()
@@ -333,6 +599,7 @@ class SettingsWindow(QWidget):
         self._load()   # relê (o config pode ter mudado)
 
     def hide(self) -> None:  # noqa: A003
+        self._stop_mic_test()
         super().hide()
 
     def closeEvent(self, event) -> None:

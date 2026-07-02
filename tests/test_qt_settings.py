@@ -25,14 +25,18 @@ class SettingsTests(unittest.TestCase):
     def setUp(self):
         from scriba import config as config_mod, util
 
+        d = Path(tempfile.mkdtemp(prefix="scriba_cfg_"))
         self._orig = util.CONFIG_PATH
-        util.CONFIG_PATH = Path(tempfile.mkdtemp(prefix="scriba_cfg_")) / "config.toml"
+        self._orig_prompt = util.PROMPT_PATH
+        util.CONFIG_PATH = d / "config.toml"
         util.CONFIG_PATH.write_text(config_mod.DEFAULT_CONFIG, encoding="utf-8")
+        util.PROMPT_PATH = d / "prompt.md"   # não tocar o prompt.md real
 
     def tearDown(self):
         from scriba import util
 
         util.CONFIG_PATH = self._orig
+        util.PROMPT_PATH = self._orig_prompt
 
     def _app(self):
         from scriba import config as config_mod
@@ -106,6 +110,44 @@ class SettingsTests(unittest.TestCase):
         win._loaded = False           # simula load incompleto
         win._save()
         self.assertNotEqual(config_mod.load().whisper.model, "tiny")  # config boa preservada
+
+
+    def test_prompt_editor_carrega_e_salva(self):
+        from scriba import util
+        from scriba.qt.settings_ui import SettingsWindow
+
+        win = SettingsWindow(self._app())
+        self.assertTrue(win._prompt_editor.toPlainText().strip())   # carregou o prompt.md
+        win._prompt_editor.setPlainText("Resuma em bullets curtos.")
+        win._save()
+        self.assertIn("bullets curtos", util.PROMPT_PATH.read_text(encoding="utf-8"))
+
+    def test_restaurar_padrao(self):
+        from scriba import notes
+        from scriba.qt.settings_ui import SettingsWindow
+
+        win = SettingsWindow(self._app())
+        win._prompt_editor.setPlainText("qualquer coisa")
+        win._restore_prompt()
+        self.assertEqual(win._prompt_editor.toPlainText(), notes.DEFAULT_SUMMARY_PROMPT)
+
+    def test_aba_sobre_e_componentes(self):
+        from scriba.qt.settings_ui import SettingsWindow
+
+        win = SettingsWindow(self._app())
+        titles = [win._tabs.tabText(i) for i in range(win._tabs.count())]
+        self.assertIn("Sobre", titles)
+        comps = win._about_components()
+        self.assertTrue(any(label == "Python" for label, _v, _l in comps))
+
+    def test_show_about_update(self):
+        from scriba.qt.settings_ui import SettingsWindow
+
+        win = SettingsWindow(self._app())
+        win._show_about_update(None)
+        self.assertIn("Não consegui", win._about_status.text())
+        win._show_about_update("99.9.9")                        # versão futura -> há update
+        self.assertFalse(win._about_update_btn.isHidden())      # botão marcado visível
 
 
 if __name__ == "__main__":
