@@ -15,7 +15,7 @@ _MUTED = "#9a9aa8"
 _RED = "#e54545"
 _RED_DIM = "#7a2626"
 _KEY = "#000001"  # cor-chave que vira transparente (cantos arredondados)
-_W, _H, _R = 264, 44, 21  # largura abriga o stepper de nº de participantes (#13)
+_W, _H, _R = 304, 44, 21  # largura abriga o stepper de participantes (#13) e o ✂ (#38)
 
 
 def _load_pos() -> list[int] | None:
@@ -109,11 +109,13 @@ class RecordingPill:
         on_discard: Callable[[], None],
         on_record: Callable[[], None] | None = None,
         on_speakers: Callable[[int], None] | None = None,
+        on_split: Callable[[], None] | None = None,
     ):
         self.on_stop = on_stop
         self.on_discard = on_discard
         self.on_record = on_record
         self.on_speakers = on_speakers
+        self.on_split = on_split  # ✂ nova call (#38): fecha esta e começa outra
         self.mode = "recording"
         self._destroyed = False
         self._pulse_on = True
@@ -156,6 +158,15 @@ class RecordingPill:
         c.tag_lower(self.stop_hit, self.stop_btn)
         c.tag_lower(self.discard_hit, self.discard_btn)
 
+        # ✂ nova call (#38): à esquerda do ■, mesmo padrão (glifo + hitbox maior).
+        # Encerra a gravação atual (guardando) e começa outra num clique.
+        self.split_btn = c.create_text(
+            _W - 96, _H // 2, text="✂", fill=_MUTED, font=("Segoe UI", 12), tags=("btn", "split")
+        )
+        self.split_hit = c.create_rectangle(_W - 108, _H // 2 - 11, _W - 84, _H // 2 + 11,
+                                            fill=_BG, outline="", tags=("btn", "split"))
+        c.tag_lower(self.split_hit, self.split_btn)
+
         # nº de participantes (#13): stepper "− N +" (modo gravação). Define o
         # num_speakers ao vivo; ao encerrar, se confirmado, dispensa a janela do fim.
         _cy = _H // 2
@@ -178,9 +189,12 @@ class RecordingPill:
         c.tag_bind("stop", "<Button-1>", lambda e: self._click(self.on_stop))
         c.tag_bind("discard", "<Button-1>", lambda e: self._click(self.on_discard))
         c.tag_bind("rec", "<Button-1>", lambda e: self._click(self._record))
+        c.tag_bind("split", "<Button-1>", lambda e: self._click(self._split))
         for tag, item in (("stop", self.stop_btn), ("discard", self.discard_btn)):
             c.tag_bind(tag, "<Enter>", lambda e, i=item: c.itemconfigure(i, fill=_RED))
             c.tag_bind(tag, "<Leave>", lambda e, i=item, f=(_FG if tag == "stop" else _MUTED): c.itemconfigure(i, fill=f))
+        c.tag_bind("split", "<Enter>", lambda e: c.itemconfigure(self.split_btn, fill=_FG))
+        c.tag_bind("split", "<Leave>", lambda e: c.itemconfigure(self.split_btn, fill=_MUTED))
         c.tag_bind("rec", "<Enter>", lambda e: c.itemconfigure(self.idle_label, fill=_RED))
         c.tag_bind("rec", "<Leave>", lambda e: c.itemconfigure(self.idle_label, fill=_FG))
         c.tag_bind("spk_dec", "<Button-1>", lambda e: self._spk_adjust(-1))
@@ -219,6 +233,10 @@ class RecordingPill:
     def _record(self) -> None:
         if self.on_record is not None:
             self.on_record()
+
+    def _split(self) -> None:
+        if self.on_split is not None:
+            self.on_split()
 
     def _on_button(self) -> bool:
         return any("btn" in self.canvas.gettags(i) for i in self.canvas.find_withtag("current"))
@@ -326,6 +344,7 @@ class RecordingPill:
         self.mode = mode
         self._status_mode = False
         rec_items = (self.dot, self.time_text, self.stop_btn, self.discard_btn,
+                     self.split_btn, self.split_hit, self.stop_hit, self.discard_hit,
                      self.spk_minus, self.spk_count, self.spk_plus)
         idle_items = (self.idle_ring, self.idle_dot, self.idle_label)
         show, hide = (rec_items, idle_items) if mode == "recording" else (idle_items, rec_items)

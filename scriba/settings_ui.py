@@ -444,18 +444,13 @@ class SettingsWindow:
         self.autostart_var = tk.BooleanVar()
         self._toggle_row(auto, "Iniciar com o Windows", self.autostart_var)
 
-        hk_row = tk.Frame(auto, bg=_BG)
-        hk_row.pack(fill="x", pady=6)
-        tk.Label(hk_row, text="Atalho global gravar/parar", bg=_BG, fg=PALETTE["text"], font=FONT).pack(side="left")
         self.hotkey_var = tk.StringVar(value="")
-        LinkLabel(hk_row, "limpar", lambda: self.hotkey_var.set("")).pack(side="right", padx=(8, 0))
-        ModernButton(hk_row, "Gravar atalho", self._capture_hotkey).pack(side="right", padx=(8, 0))
         self.hotkey_label_var = tk.StringVar(value="desativado")
-        tk.Label(hk_row, textvariable=self.hotkey_label_var, bg=PALETTE["field"], fg=PALETTE["text"],
-                 font=("Consolas", 9), padx=10, pady=4).pack(side="right")
-        self.hotkey_var.trace_add(
-            "write", lambda *a: self.hotkey_label_var.set(self.hotkey_var.get() or "desativado")
-        )
+        self._hotkey_row(auto, "Atalho global gravar/parar", self.hotkey_var, self.hotkey_label_var)
+        self.hotkey_split_var = tk.StringVar(value="")
+        self.hotkey_split_label_var = tk.StringVar(value="desativado")
+        self._hotkey_row(auto, "Atalho nova call (dividir gravação)",
+                         self.hotkey_split_var, self.hotkey_split_label_var)
 
         min_row = tk.Frame(auto, bg=_BG)
         min_row.pack(fill="x", pady=6)
@@ -824,7 +819,18 @@ class SettingsWindow:
         self.diar_test_status_var.set(text)
         self._diar_test_lbl.configure(fg=color)
 
-    def _capture_hotkey(self) -> None:
+    def _hotkey_row(self, parent, label: str, var: tk.StringVar, label_var: tk.StringVar) -> None:
+        """Linha de atalho global: rótulo + valor + 'Gravar atalho' + 'limpar' (#38)."""
+        row = tk.Frame(parent, bg=_BG)
+        row.pack(fill="x", pady=6)
+        tk.Label(row, text=label, bg=_BG, fg=PALETTE["text"], font=FONT).pack(side="left")
+        LinkLabel(row, "limpar", lambda: var.set("")).pack(side="right", padx=(8, 0))
+        ModernButton(row, "Gravar atalho", lambda: self._capture_hotkey(var)).pack(side="right", padx=(8, 0))
+        tk.Label(row, textvariable=label_var, bg=PALETTE["field"], fg=PALETTE["text"],
+                 font=("Consolas", 9), padx=10, pady=4).pack(side="right")
+        var.trace_add("write", lambda *a: label_var.set(var.get() or "desativado"))
+
+    def _capture_hotkey(self, var: tk.StringVar) -> None:
         """Janelinha que captura a próxima combinação de teclas (Esc cancela)."""
         cap = tk.Toplevel(self.win)
         cap.title("Gravar atalho")
@@ -857,7 +863,7 @@ class SettingsWindow:
             if parse(spec) is None:
                 info.set(f"'{spec}' não é suportado.\nUse Ctrl/Alt/Shift + letra, número ou F1–F12.")
                 return "break"
-            self.hotkey_var.set(spec)
+            var.set(spec)
             cap.destroy()
             return "break"
 
@@ -1224,6 +1230,7 @@ class SettingsWindow:
         self.max_speakers_var.set(int(getattr(cfg.diarization, "max_speakers", 0)))
         self.min_speakers_var.set(int(getattr(cfg.diarization, "min_speakers", 0)))
         self.hotkey_var.set(cfg.ui.hotkey)
+        self.hotkey_split_var.set(getattr(cfg.ui, "hotkey_split", ""))
         self.min_secs_var.set(int(cfg.detection.min_call_seconds))
         self.split_gap_var.set(int(cfg.detection.split_gap_seconds))
         self.apps_var.set(cfg.detection.apps)
@@ -1321,7 +1328,11 @@ class SettingsWindow:
                 cloud_api_key=self.cloud_api_key_var.get().strip(),
                 cloud_model=self.cloud_model_var.get().strip() or cfg.whisper.cloud_model,
             ),
-            ui=dataclasses.replace(cfg.ui, overlay=self.overlay_var.get(), hotkey=self.hotkey_var.get().strip()),
+            ui=dataclasses.replace(
+                cfg.ui, overlay=self.overlay_var.get(),
+                hotkey=self.hotkey_var.get().strip(),
+                hotkey_split=self.hotkey_split_var.get().strip(),
+            ),
             audio=dataclasses.replace(
                 cfg.audio,
                 mic_device=self._dev_value(self.mic_device_var),

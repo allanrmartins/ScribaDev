@@ -289,6 +289,7 @@ class Detector:
         on_grace: Callable[[], None] | None = None,
         on_grace_cancel: Callable[[], None] | None = None,
         on_title: Callable[[str], None] | None = None,
+        is_recording: Callable[[], bool] | None = None,
     ):
         self.cfg = cfg
         self.patterns = patterns_from(cfg)
@@ -303,6 +304,7 @@ class Detector:
         self.on_grace = on_grace  # mic liberado: esperando a tolerância
         self.on_grace_cancel = on_grace_cancel  # mic voltou: era troca de device
         self.on_title = on_title  # título estável capturado (bônus #35: meta tardio)
+        self.is_recording = is_recording  # #38: p/ rearmar o auto-record após ■
         self.state = CallState.IDLE
         self._grace_deadline = 0.0
         self._grace_since = 0.0  # entrada no GRACE (para medir o gap do resume)
@@ -434,6 +436,8 @@ class Detector:
                 )
                 self._split(now, sessions)
                 return
+            if self._rearm_if_stopped(sense):  # ■ dado: a call nova grava sozinha
+                return
             log.warning("troca de app monitorado durante a call: %s -> %s", prev_app, sense[0])
             self._session_sub, self._session_start = sub, start
         elif tracked is not None and tracked[1] == 0 and start != self._session_start:
@@ -448,6 +452,8 @@ class Detector:
                     self._title_stable, now_title,
                 )
                 self._split(now, sessions)
+                return
+            if self._rearm_if_stopped(sense):  # ■ dado: a call nova grava sozinha
                 return
             log.warning(
                 "ciclo de sessão invisível em %s (start mudou) - nao divido na v1",
@@ -518,6 +524,18 @@ class Detector:
         self._title_last = self._title_stable = self._title_at_grace = ""
         self._polls_since_title = 0
         self.on_call_started(probe=probe)
+
+    def _rearm_if_stopped(self, sense: tuple[str, str, int]) -> bool:
+        """Rearma o auto-record quando um NOVO ciclo de sessão de mic começa mas não
+        há gravação em andamento — o usuário deu ■ com a call ainda ativa (#38). Fecha
+        a armadilha do "■ e esqueci o ⏺": a call seguinte passa a gravar sozinha."""
+        if not (self.cfg.auto_record and self.is_recording and not self.is_recording()):
+            return False
+        name, sub, start = sense
+        log.info("auto-record re-armado: novo ciclo de mic sem gravação em andamento (%s)", name)
+        self._session_sub, self._session_start = sub, start
+        self.on_call_started(probe=False)
+        return True
 
     def _end_call(self) -> None:
         """Encerra a call e volta a IDLE (timeout do GRACE ou parada de segurança)."""

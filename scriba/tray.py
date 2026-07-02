@@ -45,6 +45,8 @@ class Tray:
                 pystray.MenuItem("Configurações", self._open_settings),
                 pystray.MenuItem("Gravar agora", self._start_recording,
                                  visible=lambda item: not self.app.is_recording()),
+                pystray.MenuItem("Nova call (dividir gravação)", self._split_recording,
+                                 visible=lambda item: self.app.is_recording()),
                 pystray.MenuItem("Parar gravação", self._stop_recording,
                                  visible=lambda item: self.app.is_recording()),
                 pystray.MenuItem("Descartar gravação", self._discard_recording,
@@ -83,6 +85,9 @@ class Tray:
 
     def _start_recording(self, icon, item):
         self._bg(self.app.start_recording, "manual")
+
+    def _split_recording(self, icon, item):
+        self._bg(self.app._split_now)  # #38: fecha esta call e começa outra
 
     def _stop_recording(self, icon, item):
         self._bg(self.app.stop_recording, False, True)  # keep=True: intenção explícita
