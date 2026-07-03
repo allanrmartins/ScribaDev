@@ -87,6 +87,7 @@ class SettingsWindow(QWidget):
         self.setWindowTitle("ScribaDev — Configurações")
         self.setMinimumSize(720, 480)
         self.setWindowOpacity(0.98)
+        widgets.remember_geometry(self, "qt_settings", default=(180, 120, 880, 680))
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 10, 14, 10)
@@ -132,10 +133,14 @@ class SettingsWindow(QWidget):
         form.addRow(box)
         return gl
 
-    def _text(self, form, label, section, attr, secret=False, hint=None):
+    def _text(self, form, label, section, attr, secret=False, placeholder="", tooltip="", hint=None):
         e = QLineEdit()
         if secret:
             e.setEchoMode(QLineEdit.Password)
+        if placeholder:
+            e.setPlaceholderText(placeholder)
+        if tooltip:
+            widgets.add_tooltip(e, tooltip)
         self._fields.append((e, section, attr, "text", None))
         self._row(form, label, e, hint)
         return e
@@ -180,7 +185,7 @@ class SettingsWindow(QWidget):
             v = QVBoxLayout(wrap); v.setContentsMargins(0, 0, 0, 0); v.setSpacing(1)
             v.addWidget(widget)
             h = QLabel(hint); h.setProperty("role", "muted"); h.setWordWrap(True)
-            h.setStyleSheet("font-size:8pt;")
+            h.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
             v.addWidget(h)
             form.addRow(label, wrap)
         else:
@@ -191,8 +196,10 @@ class SettingsWindow(QWidget):
     def _build_recording_tab(self) -> None:
         f = self._tab("Gravação")
         au = self._group(f, "Áudio")
-        self._text(au, "Microfone", "audio", "mic_device", hint="vazio = padrão do Windows (veja: scribadev devices)")
-        self._text(au, "Áudio do sistema", "audio", "loopback_device", hint="vazio = saída padrão do Windows")
+        self._text(au, "Microfone", "audio", "mic_device", placeholder="padrão do Windows",
+                   tooltip="Vazio = microfone padrão do Windows. Liste os dispositivos com: scribadev devices")
+        self._text(au, "Áudio do sistema", "audio", "loopback_device", placeholder="saída padrão do Windows",
+                   tooltip="Vazio = dispositivo de saída padrão do Windows (loopback do sistema)")
         self._check(au, "Manter o áudio após transcrever", "audio", "keep_audio")
         self._choice(au, "Formato do áudio", "audio", "archive_format", _ARCHIVE)
         self._int(au, "Apagar gravação após (dias)", "audio", "retention_days", 0, 3650,
@@ -201,7 +208,7 @@ class SettingsWindow(QWidget):
         self._mic_btn = widgets.ModernButton("Testar microfone", self._toggle_mic_test)
         mr.addWidget(self._mic_btn)
         self._mic_status = QLabel(""); self._mic_status.setProperty("role", "muted")
-        self._mic_status.setStyleSheet("font-size:8pt;")
+        self._mic_status.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
         mr.addWidget(self._mic_status); mr.addStretch(1)
         au.addRow(mic)
         self._mic_bar = QProgressBar(); self._mic_bar.setRange(0, 100); self._mic_bar.setTextVisible(False)
@@ -212,7 +219,8 @@ class SettingsWindow(QWidget):
         dz = self._group(f, "Diarização (separar vozes)")
         self._check(dz, "Ativar diarização", "diarization", "enabled")
         self._text(dz, "Token Hugging Face", "diarization", "hf_token", secret=True,
-                   hint="hf.co/settings/tokens (grátis); cifrado com DPAPI ao salvar")
+                   placeholder="hf_… (cole seu token)",
+                   tooltip="Gere em hf.co/settings/tokens (grátis). Cifrado com DPAPI ao salvar.")
         self._int(dz, "Máx. de vozes", "diarization", "max_speakers", 0, 50, hint="0 = automático")
         self._int(dz, "Mín. de vozes", "diarization", "min_speakers", 0, 50, hint="0 = automático")
         self._check(dz, "Perguntar nº de participantes ao fim", "diarization", "ask_speakers")
@@ -223,8 +231,10 @@ class SettingsWindow(QWidget):
 
         ui = self._group(f, "Interface e atalhos")
         self._check(ui, "Pílula flutuante durante a gravação", "ui", "overlay")
-        self._text(ui, "Atalho gravar/parar", "ui", "hotkey", hint="ex.: ctrl+alt+r (vazio desativa)")
-        self._text(ui, "Atalho nova call (dividir)", "ui", "hotkey_split", hint="vazio desativa")
+        self._text(ui, "Atalho gravar/parar", "ui", "hotkey", placeholder="ex.: ctrl+alt+r",
+                   tooltip="Atalho global de gravar/parar. Vazio desativa.")
+        self._text(ui, "Atalho nova call (dividir)", "ui", "hotkey_split", placeholder="ex.: ctrl+alt+n",
+                   tooltip="Divide a call atual em duas. Vazio desativa.")
 
     def _build_transcription_tab(self) -> None:
         f = self._tab("Transcrição")
@@ -233,7 +243,8 @@ class SettingsWindow(QWidget):
         self._choice(f, "Dispositivo", "whisper", "device", _WHISPER_DEVICES)
         self._choice(f, "Idioma", "whisper", "language", _WHISPER_LANGS)
         self._text(f, "Vocabulário (hotwords)", "whisper", "hotwords",
-                   hint="termos da sua área que guiam a transcrição")
+                   placeholder="termos, nomes e siglas da sua área",
+                   tooltip="Vocabulário que guia a transcrição (separe por vírgula).")
         av = self._group(f, "Avançado")
         self._int(av, "Batch size", "whisper", "batch_size", 0, 64, hint="0 desliga o lote")
         self._int(av, "Beam size", "whisper", "beam_size", 0, 10)
@@ -241,9 +252,11 @@ class SettingsWindow(QWidget):
         self._int(av, "VAD silêncio mín. (ms)", "whisper", "vad_min_silence_ms", 0, 5000, hint="0 = padrão")
         self._float(av, "VAD limiar (0..1)", "whisper", "vad_threshold", 0.0, 1.0, 0.05, hint="0 = padrão")
         cl = self._group(f, "Nuvem (só com motor = Nuvem)")
-        self._text(cl, "Endpoint", "whisper", "cloud_base_url", hint="vazio = Groq")
-        self._text(cl, "Chave da API", "whisper", "cloud_api_key", secret=True)
-        self._text(cl, "Modelo (nuvem)", "whisper", "cloud_model")
+        self._text(cl, "Endpoint", "whisper", "cloud_base_url", placeholder="vazio = Groq",
+                   tooltip="URL do serviço compatível com OpenAI. Vazio usa a Groq.")
+        self._text(cl, "Chave da API", "whisper", "cloud_api_key", secret=True,
+                   placeholder="cole a chave da API", tooltip="Cifrada com DPAPI ao salvar.")
+        self._text(cl, "Modelo (nuvem)", "whisper", "cloud_model", placeholder="ex.: whisper-large-v3")
 
     def _build_ia_tab(self) -> None:
         f = self._tab("IA")
@@ -253,17 +266,19 @@ class SettingsWindow(QWidget):
         self._choice(f, "Modelo do chat", "summary", "chat_model", _CHAT_MODELS, editable=True)
         self._int(f, "Timeout (s)", "summary", "timeout_seconds", 30, 3600)
         ol = self._group(f, "Ollama")
-        self._text(ol, "Modelo", "summary", "ollama_model")
-        self._text(ol, "Endpoint", "summary", "ollama_base_url", hint="vazio = http://localhost:11434")
+        self._text(ol, "Modelo", "summary", "ollama_model", placeholder="ex.: llama3.1, qwen2.5")
+        self._text(ol, "Endpoint", "summary", "ollama_base_url", placeholder="vazio = http://localhost:11434")
         op = self._group(f, "OpenAI-compatível")
-        self._text(op, "Modelo", "summary", "openai_model")
-        self._text(op, "Endpoint", "summary", "openai_base_url", hint="inclua /v1")
-        self._text(op, "Chave da API", "summary", "openai_api_key", secret=True)
+        self._text(op, "Modelo", "summary", "openai_model", placeholder="ex.: gpt-4o-mini")
+        self._text(op, "Endpoint", "summary", "openai_base_url", placeholder="inclua /v1 no final",
+                   tooltip="URL base do provedor compatível com OpenAI, terminando em /v1.")
+        self._text(op, "Chave da API", "summary", "openai_api_key", secret=True,
+                   placeholder="cole a chave da API", tooltip="Cifrada com DPAPI ao salvar.")
 
         pr = self._group(f, "Prompt do resumo (prompt.md)")
         actions = QWidget(); ar = QHBoxLayout(actions); ar.setContentsMargins(0, 0, 0, 0)
         note = QLabel("Instruções que moldam o resumo das suas reuniões.")
-        note.setProperty("role", "muted"); note.setStyleSheet("font-size:8pt;")
+        note.setProperty("role", "muted"); note.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
         ar.addWidget(note); ar.addStretch(1)
         ar.addWidget(widgets.ModernButton("Assistente de perfil…", self._open_wizard))
         ar.addWidget(widgets.ModernButton("Restaurar padrão", self._restore_prompt))
@@ -296,10 +311,11 @@ class SettingsWindow(QWidget):
     def _build_detection_tab(self) -> None:
         f = self._tab("Detecção")
         self._check(f, "Gravar sozinho ao detectar a call", "detection", "auto_record")
-        self._text(f, "Apps (desktop)", "detection", "apps", hint="ex.: teams, zoom")
-        self._text(f, "Navegadores", "detection", "browsers", hint="vazio desliga a detecção no navegador")
+        self._text(f, "Apps (desktop)", "detection", "apps", placeholder="ex.: teams, zoom")
+        self._text(f, "Navegadores", "detection", "browsers", placeholder="ex.: chrome, msedge, firefox",
+                   tooltip="Vazio desliga a detecção de calls no navegador.")
         self._text(f, "Títulos de reunião", "detection", "browser_titles",
-                   hint="vazio = qualquer site usando o mic")
+                   placeholder="vazio = qualquer site usando o mic")
         self._float(f, "Poll (s)", "detection", "poll_seconds", 0.5, 60)
         self._float(f, "Tolerância / grace (s)", "detection", "grace_seconds", 0, 120)
         self._float(f, "Gap p/ dividir call (s)", "detection", "split_gap_seconds", 0, 60, hint="0 = nunca")
@@ -308,16 +324,20 @@ class SettingsWindow(QWidget):
 
     def _build_dirs_tab(self) -> None:
         f = self._tab("Pastas")
-        self._dir_row(f, "Notas (.md)", "output", "export_dir", "vazio = Documentos\\ScribaDev")
-        self._dir_row(f, "Gravações", "output", "recordings_dir", "vazio = C:\\temp\\scribadev\\gravacoes")
+        self._dir_row(f, "Notas (.md)", "output", "export_dir", placeholder="Documentos\\ScribaDev (padrão)")
+        self._dir_row(f, "Gravações", "output", "recordings_dir", placeholder="C:\\temp\\scribadev\\gravacoes (padrão)")
 
-    def _dir_row(self, form, label, section, attr, hint) -> None:
+    def _dir_row(self, form, label, section, attr, placeholder="", tooltip="") -> None:
         e = QLineEdit()
+        if placeholder:
+            e.setPlaceholderText(placeholder)
+        if tooltip:
+            widgets.add_tooltip(e, tooltip)
         self._fields.append((e, section, attr, "text", None))
         row = QWidget(); h = QHBoxLayout(row); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(e, 1)
         h.addWidget(widgets.ModernButton("…", lambda: self._pick_dir(e)))
-        self._row(form, label, row, hint)
+        self._row(form, label, row, None)
 
     def _pick_dir(self, entry: QLineEdit) -> None:
         d = QFileDialog.getExistingDirectory(self, "Escolher pasta", entry.text() or "")

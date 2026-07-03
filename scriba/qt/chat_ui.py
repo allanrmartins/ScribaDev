@@ -72,6 +72,7 @@ class ChatWindow(QWidget):
         self.setWindowTitle(("Perguntar à reunião — " + (title or "reunião"))[:90])
         self.setMinimumSize(560, 460)
         self.setWindowOpacity(0.98)
+        widgets.remember_geometry(self, "qt_chat", default=(240, 150, 640, 620))
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 10, 12, 10)
@@ -96,7 +97,7 @@ class ChatWindow(QWidget):
             self._toggle = widgets.ToggleSwitch(checked=False)
             hint = QLabel("buscar na transcrição (mais preciso; +1 chamada)")
             hint.setProperty("role", "muted")
-            hint.setStyleSheet("font-size:8pt;")
+            hint.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
             opt.addWidget(self._toggle)
             opt.addWidget(hint)
             opt.addStretch(1)

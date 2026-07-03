@@ -13,22 +13,27 @@ from typing import Callable
 
 from PySide6.QtCore import (
     Property,
+    QDate,
     QEasingCurve,
     QEvent,
     QObject,
     QPropertyAnimation,
     QSize,
     Qt,
+    QTime,
     QTimer,
     Signal,
 )
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QCheckBox,
+    QDateEdit,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QTimeEdit,
     QWidget,
 )
 
@@ -229,6 +234,87 @@ def make_entry(placeholder: str = "", parent=None) -> QLineEdit:
     if placeholder:
         e.setPlaceholderText(placeholder)
     return e
+
+
+# == filtros de data / hora opcionais =========================================
+
+class DateFilter(QWidget):
+    """Filtro de data OPCIONAL: um check "ativar" + QDateEdit com calendário popup.
+
+    Desmarcado (padrão) = sem filtro; o QDateEdit fica desabilitado. Substitui os
+    antigos QLineEdit "DD/MM/AAAA" (texto puro, sem validação, que falhavam em
+    silêncio). Expõe `br()` -> 'DD/MM/AAAA' quando ligado e '' quando desligado, de
+    modo que a lógica de filtro a jusante (que já trabalha com strings BR) não muda.
+    Emite `changed()` em qualquer alteração (liga/desliga ou nova data).
+    """
+
+    changed = Signal()
+
+    def __init__(self, label: str = "", parent=None):
+        super().__init__(parent)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        self._chk = QCheckBox(label)
+        self._chk.toggled.connect(self._on_toggle)
+        self._edit = QDateEdit(QDate.currentDate())
+        self._edit.setCalendarPopup(True)
+        self._edit.setDisplayFormat("dd/MM/yyyy")
+        self._edit.setEnabled(False)
+        self._edit.dateChanged.connect(lambda _=None: self.changed.emit())
+        lay.addWidget(self._chk)
+        lay.addWidget(self._edit, 1)
+
+    def _on_toggle(self, on: bool) -> None:
+        self._edit.setEnabled(on)
+        self.changed.emit()
+
+    def br(self) -> str:
+        """Data escolhida como 'DD/MM/AAAA', ou '' quando o filtro está desligado."""
+        if not self._chk.isChecked():
+            return ""
+        return self._edit.date().toString("dd/MM/yyyy")
+
+    def clear(self) -> None:
+        """Desliga o filtro (paridade de chamada com QLineEdit.clear())."""
+        self._chk.setChecked(False)
+
+
+class TimeFilter(QWidget):
+    """Filtro de hora mínima OPCIONAL: check "ativar" + QTimeEdit (HH:MM).
+
+    Mesma ideia do DateFilter: desmarcado = sem filtro; `hhmm()` -> 'HH:MM' quando
+    ligado, '' quando desligado. Emite `changed()`.
+    """
+
+    changed = Signal()
+
+    def __init__(self, label: str = "", parent=None):
+        super().__init__(parent)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        self._chk = QCheckBox(label)
+        self._chk.toggled.connect(self._on_toggle)
+        self._edit = QTimeEdit(QTime(0, 0))
+        self._edit.setDisplayFormat("HH:mm")
+        self._edit.setEnabled(False)
+        self._edit.timeChanged.connect(lambda _=None: self.changed.emit())
+        lay.addWidget(self._chk)
+        lay.addWidget(self._edit, 1)
+
+    def _on_toggle(self, on: bool) -> None:
+        self._edit.setEnabled(on)
+        self.changed.emit()
+
+    def hhmm(self) -> str:
+        """Hora escolhida como 'HH:MM', ou '' quando o filtro está desligado."""
+        if not self._chk.isChecked():
+            return ""
+        return self._edit.time().toString("HH:mm")
+
+    def clear(self) -> None:
+        self._chk.setChecked(False)
 
 
 # == stepper −/+ ==============================================================

@@ -83,6 +83,36 @@ class QtWidgetSmokeTests(unittest.TestCase):
         self.assertEqual(e.placeholderText(), "Buscar…")
         self.assertEqual(e.text(), "")  # placeholder não polui o valor
 
+    def test_date_filter_liga_desliga(self):
+        from PySide6.QtCore import QDate
+
+        from scriba.qt.widgets import DateFilter
+
+        seen = []
+        f = DateFilter("de")
+        f.changed.connect(lambda: seen.append(1))
+        self.assertEqual(f.br(), "")             # desmarcado (padrão) = sem filtro
+        self.assertFalse(f._edit.isEnabled())    # editor desabilitado enquanto desligado
+        f._chk.setChecked(True)
+        f._edit.setDate(QDate(2026, 7, 2))
+        self.assertEqual(f.br(), "02/07/2026")   # ligado = data em DD/MM/AAAA (formato BR)
+        self.assertTrue(seen)                    # emitiu changed
+        f.clear()
+        self.assertEqual(f.br(), "")             # clear desliga o filtro
+
+    def test_time_filter_liga_desliga(self):
+        from PySide6.QtCore import QTime
+
+        from scriba.qt.widgets import TimeFilter
+
+        f = TimeFilter("Hora ≥")
+        self.assertEqual(f.hhmm(), "")           # desligado = sem filtro
+        f._chk.setChecked(True)
+        f._edit.setTime(QTime(9, 30))
+        self.assertEqual(f.hhmm(), "09:30")
+        f.clear()
+        self.assertEqual(f.hhmm(), "")
+
     def test_troca_de_tema_repinta_widget(self):
         from scriba.qt import theme
         from scriba.qt.widgets import ToggleSwitch

@@ -45,6 +45,7 @@ class WizardWindow(QWidget):
         self.setWindowTitle("ScribaDev — Assistente de perfil")
         self.setMinimumSize(780, 640)
         self.setWindowOpacity(0.98)
+        self.resize(840, 720)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 12, 16, 12)
@@ -55,7 +56,7 @@ class WizardWindow(QWidget):
                      "resumo das suas reuniões — e o vocabulário que guia a transcrição. Você revisa antes.")
         sub.setProperty("role", "muted"); sub.setWordWrap(True); root.addWidget(sub)
         warn = QLabel("Ao gerar com IA, os dados deste formulário são enviados ao provedor de IA configurado.")
-        warn.setProperty("role", "warn"); warn.setWordWrap(True); warn.setStyleSheet("font-size:8pt;")
+        warn.setProperty("role", "warn"); warn.setWordWrap(True); warn.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
         root.addWidget(warn)
 
         base_row = QHBoxLayout()
@@ -92,7 +93,7 @@ class WizardWindow(QWidget):
         self._preview = QPlainTextEdit(); self._preview.setReadOnly(True)
         root.addWidget(self._preview, 1)
         self._hot = QLabel(""); self._hot.setProperty("role", "muted")
-        self._hot.setWordWrap(True); self._hot.setStyleSheet("font-size:8pt;")
+        self._hot.setWordWrap(True); self._hot.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
         root.addWidget(self._hot)
 
         self._prompt_ready.connect(self._on_prompt)

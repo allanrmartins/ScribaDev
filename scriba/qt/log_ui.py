@@ -71,19 +71,17 @@ class LogWindow(QWidget):
         row2 = QHBoxLayout()
         self._level_btn = widgets.ModernButton("Nível: Tudo", self._cycle_level)
         row2.addWidget(self._level_btn)
-        d = QLabel("Dia:"); d.setProperty("role", "muted"); row2.addWidget(d)
-        self._date = widgets.make_entry("DD/MM/AAAA"); self._date.setFixedWidth(120)
-        self._date.textChanged.connect(lambda: self._render_timer.start())
+        self._date = widgets.DateFilter("Dia")
+        self._date.changed.connect(lambda: self._render_timer.start())
         row2.addWidget(self._date)
-        h = QLabel("Hora ≥"); h.setProperty("role", "muted"); row2.addWidget(h)
-        self._time = widgets.make_entry("HH:MM"); self._time.setFixedWidth(72)
-        self._time.textChanged.connect(lambda: self._render_timer.start())
+        self._time = widgets.TimeFilter("Hora ≥")
+        self._time.changed.connect(lambda: self._render_timer.start())
         row2.addWidget(self._time)
         row2.addStretch(1)
         root.addLayout(row2)
 
         self._status = QLabel(""); self._status.setProperty("role", "muted")
-        self._status.setStyleSheet("font-size:8pt;")
+        self._status.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
         root.addWidget(self._status)
 
         self._view = QTextEdit(); self._view.setReadOnly(True)
@@ -110,10 +108,8 @@ class LogWindow(QWidget):
         self._render()
 
     def _render(self) -> None:
-        date_br = self._date.text().strip()
-        date_br = date_br if len(date_br) == 10 else ""
-        time_from = self._time.text().strip()
-        time_from = time_from if len(time_from) == 5 and util.time_hhmm_ok(time_from) else ""
+        date_br = self._date.br()
+        time_from = self._time.hhmm()
         level_min = _LEVELS_CYCLE[self._level_idx][1]
         shown = diagnostics.filter_entries(self._entries, level_min, date_br, time_from)
 

@@ -143,6 +143,7 @@ class NotesWindow(QWidget):
         self.setWindowTitle("ScribaDev — Notas")
         self.setMinimumSize(880, 560)
         self.setWindowOpacity(0.98)
+        widgets.remember_geometry(self, "qt_notes", default=(140, 110, 1040, 680))
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 12, 14, 12)
@@ -176,10 +177,13 @@ class NotesWindow(QWidget):
 
         self._f_participant = widgets.make_entry("participante")
         self._f_client = widgets.make_entry("cliente")
-        self._f_since = widgets.make_entry("de (DD/MM/AAAA)")
-        self._f_until = widgets.make_entry("até (DD/MM/AAAA)")
-        for f in (self._f_participant, self._f_client, self._f_since, self._f_until):
+        for f in (self._f_participant, self._f_client):
             f.textChanged.connect(lambda: self._search_timer.start())
+            lay.addWidget(f)
+        self._f_since = widgets.DateFilter("de")
+        self._f_until = widgets.DateFilter("até")
+        for f in (self._f_since, self._f_until):
+            f.changed.connect(lambda: self._search_timer.start())
             lay.addWidget(f)
 
         self._tree = QTreeWidget()
@@ -354,8 +358,8 @@ class NotesWindow(QWidget):
         q = self._search.text().strip()
         participant = self._f_participant.text().strip()
         client = self._f_client.text().strip()
-        since = self._f_since.text().strip()
-        until = self._f_until.text().strip()
+        since = self._f_since.br()
+        until = self._f_until.br()
         searching = bool(q or participant or client or since or until)
         entries: list[tuple[datetime, str, tuple]] = []
         pending: list = []
@@ -552,7 +556,7 @@ class NotesWindow(QWidget):
             name = QLabel(f"• {label}"); name.setStyleSheet("font-weight:bold;")
             bl.addWidget(name)
             d = QLabel(desc); d.setProperty("role", "muted"); d.setWordWrap(True)
-            d.setStyleSheet("font-size:8pt;")
+            d.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
             bl.addWidget(d)
         self._presentes.set_content(body)
         self._presentes.setVisible(True)

@@ -56,6 +56,7 @@ class MainWindow(QWidget):
 
         self.setWindowTitle(f"ScribaDev v{__version__}")
         self.setMinimumSize(520, 560)
+        widgets.remember_geometry(self, "qt_main", default=(200, 140, 560, 620))
         try:
             self.setWindowIcon(util_icon())
         except Exception:
@@ -264,7 +265,7 @@ class MainWindow(QWidget):
             rl.addWidget(name_lbl, 0, Qt.AlignTop)
             det = QLabel(detail)
             det.setProperty("role", "muted")
-            det.setStyleSheet("font-size:8pt;")
+            det.setStyleSheet(f"font-size:{t.font_size_small}pt;")
             det.setWordWrap(True)
             rl.addWidget(det, 1)
             self._rows_lay.addWidget(row)

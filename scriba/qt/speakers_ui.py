@@ -77,10 +77,11 @@ class AskNumSpeakers(QWidget):
         lay.addWidget(q)
         sub = QLabel("Conte só as outras vozes (não conte você). Isso ajuda a separar os "
                      "participantes na transcrição.")
-        sub.setProperty("role", "muted"); sub.setWordWrap(True); sub.setStyleSheet("font-size:8pt;")
+        sub.setProperty("role", "muted"); sub.setWordWrap(True); sub.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
         lay.addWidget(sub)
 
         self._entry = QLineEdit(str(last_value) if last_value and last_value >= 1 else "")
+        self._entry.setPlaceholderText("ex.: 3")
         self._entry.setValidator(QRegularExpressionValidator(QRegularExpression(r"\d{0,3}")))
         self._entry.setAlignment(Qt.AlignCenter)
         self._entry.setStyleSheet("font-size:22pt; font-weight:bold;")
@@ -96,7 +97,7 @@ class AskNumSpeakers(QWidget):
         lay.addLayout(btns)
 
         self._hint = QLabel(""); self._hint.setProperty("role", "muted")
-        self._hint.setStyleSheet("font-size:8pt;"); self._hint.setWordWrap(True)
+        self._hint.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;"); self._hint.setWordWrap(True)
         lay.addWidget(self._hint)
         self._sync_confirm()
 
@@ -191,7 +192,7 @@ class LabelSpeakersDialog(QWidget):
         lay.addWidget(title)
         sub = QLabel("Revise o nome de cada voz e MARQUE o check só nas que tiver certeza — só as "
                      "marcadas são salvas. O ScribaDev aprende as marcadas e corrige esta nota na hora.")
-        sub.setProperty("role", "muted"); sub.setWordWrap(True); sub.setStyleSheet("font-size:8pt;")
+        sub.setProperty("role", "muted"); sub.setWordWrap(True); sub.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
         lay.addWidget(sub)
 
         t = theme.active()
@@ -216,13 +217,14 @@ class LabelSpeakersDialog(QWidget):
             name_lbl = QLabel(slabel); name_lbl.setFixedWidth(120); name_lbl.setStyleSheet("font-weight:bold;")
             row.addWidget(name_lbl)
             entry = QLineEdit(prefill)
+            entry.setPlaceholderText("nome desta pessoa")
             row.addWidget(entry, 1)
             chk = QCheckBox()
             chk.setChecked(bool(auto or labeled))
 
             def _sync(on, _chk=chk, _base=base, _color=color):
                 _chk.setText("✓ Confirmado" if on else _base)
-                _chk.setStyleSheet(f"color:{t.ok if on else _color}; font-size:8pt;")
+                _chk.setStyleSheet(f"color:{t.ok if on else _color}; font-size:{t.font_size_small}pt;")
 
             chk.toggled.connect(lambda on, f=_sync: f(on))
             _sync(chk.isChecked())
@@ -230,7 +232,7 @@ class LabelSpeakersDialog(QWidget):
             lay.addLayout(row)
             self._rows.append((slabel, entry, chk))
 
-        self._status = QLabel(""); self._status.setWordWrap(True); self._status.setStyleSheet("font-size:8pt;")
+        self._status = QLabel(""); self._status.setWordWrap(True); self._status.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
         lay.addWidget(self._status)
 
         btns = QHBoxLayout()
@@ -244,7 +246,7 @@ class LabelSpeakersDialog(QWidget):
             return
         t = theme.active()
         if any(chk.isChecked() and not entry.text().strip() for _l, entry, chk in self._rows):
-            self._status.setStyleSheet(f"color:{t.warn}; font-size:8pt;")
+            self._status.setStyleSheet(f"color:{t.warn}; font-size:{t.font_size_small}pt;")
             self._status.setText("Dê um nome às vozes marcadas antes de salvar (ou desmarque-as).")
             return
         renames = {label: entry.text().strip() for label, entry, chk in self._rows
@@ -257,7 +259,7 @@ class LabelSpeakersDialog(QWidget):
             except Exception:
                 log.exception("falha ao rotular vozes")
             n = len(renames)
-            self._status.setStyleSheet(f"color:{t.ok}; font-size:8pt;")
+            self._status.setStyleSheet(f"color:{t.ok}; font-size:{t.font_size_small}pt;")
             self._status.setText(f"✓ Aprendi {n} voz{'es' if n != 1 else ''} para as próximas reuniões.")
             QTimer.singleShot(1400, self._close)
         else:

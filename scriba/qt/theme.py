@@ -77,6 +77,7 @@ class Theme:
     font_family: str   # UI
     font_mono: str     # código / log
     font_size: int
+    font_size_small: int  # textos secundários (hints/legendas); tokeniza o antigo 8pt hardcode
 
     # métricas
     radius: int      # raio de canto de botões/containers
@@ -106,7 +107,7 @@ _VSCODE = Theme(
     highlight="#ffe14d", highlight_current="#ff8c1a", on_highlight="#1f1f1f",
     code_bg="#181818", code_err="#f14c4c",
     selection_bg="#264f78", selection_fg="#ffffff",
-    font_family=_UI, font_mono=_MONO, font_size=9,
+    font_family=_UI, font_mono=_MONO, font_size=9, font_size_small=8,
     radius=6, radius_sm=4,
 )
 
@@ -120,7 +121,7 @@ _SUBLIME = Theme(
     highlight="#fac761", highlight_current="#f9ae58", on_highlight="#2d3540",
     code_bg="#232a33", code_err="#ec5f67",
     selection_bg="#4e5a65", selection_fg="#ffffff",
-    font_family=_UI, font_mono=_MONO, font_size=9,
+    font_family=_UI, font_mono=_MONO, font_size=9, font_size_small=8,
     radius=6, radius_sm=4,
 )
 
@@ -134,7 +135,7 @@ _CLAUDE = Theme(
     highlight="#f2c94c", highlight_current="#f2994a", on_highlight="#262624",
     code_bg="#1f1e1c", code_err="#e5484d",
     selection_bg="#4a3b2f", selection_fg="#ffffff",
-    font_family=_UI, font_mono=_MONO, font_size=9,
+    font_family=_UI, font_mono=_MONO, font_size=9, font_size_small=8,
     radius=8, radius_sm=5,
 )
 
@@ -148,7 +149,7 @@ _LIGHT = Theme(
     highlight="#ffd23f", highlight_current="#ff8c1a", on_highlight="#1f1f1f",
     code_bg="#f3f3f3", code_err="#d13438",
     selection_bg="#cce4f7", selection_fg="#1f1f1f",
-    font_family=_UI, font_mono=_MONO, font_size=9,
+    font_family=_UI, font_mono=_MONO, font_size=9, font_size_small=8,
     radius=6, radius_sm=4,
 )
 
@@ -301,7 +302,7 @@ def qss(theme: Theme | None = None) -> str:
     QPushButton[kind="primary"]:hover {{ background-color: {t.accent_hover}; }}
     QPushButton[kind="primary"]:pressed {{ background-color: {t.accent_press}; }}
 
-    QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox {{
+    QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QComboBox, QDateEdit, QTimeEdit {{
         background-color: {t.field};
         color: {t.text};
         border: 1px solid {t.border};
@@ -310,8 +311,13 @@ def qss(theme: Theme | None = None) -> str:
         selection-background-color: {t.selection_bg};
         selection-color: {t.selection_fg};
     }}
-    QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QSpinBox:focus {{
+    QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QSpinBox:focus,
+    QDoubleSpinBox:focus, QComboBox:focus, QDateEdit:focus, QTimeEdit:focus {{
         border: 1px solid {t.accent};
+    }}
+    QLineEdit:disabled, QDateEdit:disabled, QTimeEdit:disabled, QComboBox:disabled {{
+        color: {t.faint};
+        background-color: {t.bg};
     }}
 
     QLabel {{ background: transparent; }}
@@ -338,6 +344,80 @@ def qss(theme: Theme | None = None) -> str:
     }}
     QScrollBar::handle:horizontal:hover {{ background: {t.border_strong}; }}
     QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
+
+    QComboBox::drop-down {{ border: none; width: 22px; }}
+    QComboBox QAbstractItemView {{
+        background-color: {t.overlay};
+        color: {t.text};
+        border: 1px solid {t.border_strong};
+        selection-background-color: {t.accent};
+        selection-color: {t.on_accent};
+        outline: none;
+    }}
+
+    QCheckBox {{ background: transparent; spacing: 7px; }}
+    QCheckBox::indicator {{
+        width: 16px; height: 16px;
+        border: 1px solid {t.border_strong};
+        border-radius: {t.radius_sm}px;
+        background: {t.field};
+    }}
+    QCheckBox::indicator:hover {{ border-color: {t.accent}; }}
+    QCheckBox::indicator:checked {{ background: {t.accent}; border-color: {t.accent}; }}
+    QCheckBox::indicator:disabled {{ border-color: {t.field}; }}
+
+    QGroupBox {{
+        background: transparent;
+        border: 1px solid {t.border};
+        border-radius: {t.radius}px;
+        margin-top: 14px;
+        padding: 10px 8px 6px 8px;
+    }}
+    QGroupBox::title {{
+        subcontrol-origin: margin;
+        left: 10px;
+        padding: 0 4px;
+        color: {t.muted};
+    }}
+
+    QTabWidget::pane {{ border: 1px solid {t.border}; border-radius: {t.radius}px; top: -1px; }}
+    QTabBar {{ background: transparent; }}
+    QTabBar::tab {{
+        background: {t.surface};
+        color: {t.muted};
+        border: 1px solid {t.border};
+        border-bottom: none;
+        border-top-left-radius: {t.radius_sm}px;
+        border-top-right-radius: {t.radius_sm}px;
+        padding: 6px 14px;
+        margin-right: 2px;
+    }}
+    QTabBar::tab:selected {{ background: {t.field}; color: {t.text}; }}
+    QTabBar::tab:hover {{ color: {t.text}; }}
+
+    QProgressBar {{
+        background: {t.field};
+        border: 1px solid {t.border};
+        border-radius: {t.radius_sm}px;
+        text-align: center;
+        color: {t.text};
+    }}
+    QProgressBar::chunk {{ background: {t.accent}; border-radius: {t.radius_sm}px; }}
+
+    QTreeWidget, QTreeView {{
+        background: {t.field};
+        color: {t.text};
+        border: 1px solid {t.border};
+        border-radius: {t.radius_sm}px;
+        outline: none;
+    }}
+    QTreeWidget::item {{ padding: 3px 2px; }}
+    QTreeWidget::item:selected, QTreeView::item:selected {{ background: {t.accent}; color: {t.on_accent}; }}
+    QTreeWidget::item:hover, QTreeView::item:hover {{ background: {t.surface}; }}
+
+    QSplitter::handle {{ background: {t.border}; }}
+    QSplitter::handle:horizontal {{ width: 4px; }}
+    QSplitter::handle:vertical {{ height: 4px; }}
 
     QMenu {{
         background-color: {t.overlay};
