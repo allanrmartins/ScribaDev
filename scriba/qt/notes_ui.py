@@ -22,7 +22,7 @@ import threading
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QFrame,
@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QTextBrowser,
     QTextEdit,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -239,8 +240,14 @@ class NotesWindow(QWidget):
         self._find.textChanged.connect(lambda: self._find_timer.start())
         self._find.returnPressed.connect(self._next_hit)
         fl.addWidget(self._find, 1)
-        fl.addWidget(widgets.ModernButton("▲", self._prev_hit))
-        fl.addWidget(widgets.ModernButton("▼", self._next_hit))
+        self._find_prev = widgets.ModernButton("", self._prev_hit)
+        self._find_prev.setIcon(theme.qicon("chevron-up"))
+        widgets.add_tooltip(self._find_prev, "Ocorrência anterior")
+        self._find_next = widgets.ModernButton("", self._next_hit)
+        self._find_next.setIcon(theme.qicon("chevron-down"))
+        widgets.add_tooltip(self._find_next, "Próxima ocorrência")
+        fl.addWidget(self._find_prev)
+        fl.addWidget(self._find_next)
         self._find_count = QLabel(""); self._find_count.setProperty("role", "muted")
         self._find_count.setFixedWidth(48)
         fl.addWidget(self._find_count)
@@ -414,8 +421,11 @@ class NotesWindow(QWidget):
                 key = path
             else:
                 folder, status, title = payload
-                icon = "⚠" if status in ("failed", "no_audio") else "⏳"
-                item = QTreeWidgetItem(day_node, [f"{dt:%H:%M}  {icon} {util.stage_label(status)}"])
+                failed = status in ("failed", "no_audio")
+                item = QTreeWidgetItem(day_node, [f"{dt:%H:%M}  {util.stage_label(status)}"])
+                t = theme.active()
+                item.setIcon(0, theme.qicon("warning" if failed else "hourglass",
+                                            color=t.warn if failed else t.muted))
                 self._items[item] = (folder, title, status)
                 key = folder
             first_item = first_item or item
@@ -929,17 +939,21 @@ class _ActionItemsWindow(QWidget):
 
 
 class _Collapsible(QWidget):
-    """Cabeçalho clicável (▸/▾) + conteúdo colapsável."""
+    """Cabeçalho clicável (chevron Fluent) + conteúdo colapsável. Expander da fundação:
+    a linha INTEIRA é o alvo de clique (QToolButton `expander`), com hover; o chevron
+    gira (direita->baixo) ao abrir. Reusável (ex.: filtros colapsáveis, #65)."""
 
     def __init__(self, title: str):
         super().__init__()
         self._open = False
         lay = QVBoxLayout(self); lay.setContentsMargins(0, 0, 0, 6); lay.setSpacing(2)
-        self._hdr = QLabel()
+        self._hdr = QToolButton()
+        self._hdr.setProperty("expander", True)
+        self._hdr.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self._hdr.setCursor(Qt.PointingHandCursor)
-        self._hdr.setStyleSheet(f"color:{theme.active().accent_hover}; font-weight:bold; font-size:11pt;")
-        self._hdr.mousePressEvent = lambda _e: self._toggle()
-        lay.addWidget(self._hdr)
+        self._hdr.setIconSize(QSize(14, 14))
+        self._hdr.clicked.connect(self._toggle)
+        lay.addWidget(self._hdr, 0, Qt.AlignLeft)
         self._content: QWidget | None = None
         self._lay = lay
         self._title = title
@@ -957,7 +971,9 @@ class _Collapsible(QWidget):
         w.setVisible(self._open)
 
     def _render_hdr(self) -> None:
-        self._hdr.setText(f"{'▾' if self._open else '▸'} {self._title}")
+        self._hdr.setText(f"  {self._title}")
+        self._hdr.setIcon(theme.qicon("chevron-down" if self._open else "chevron-right",
+                                      color=theme.active().accent_hover))
 
     def _toggle(self) -> None:
         self._open = not self._open

@@ -295,6 +295,40 @@ def _calendar_icon_path(color: str) -> str:
     return _icon_path(f"calendar_{color.lstrip('#')}.svg", svg)
 
 
+# --------------------------------------------------------- ícones Fluent ------
+# Ícones vendorizados de github.com/microsoft/fluentui-system-icons (MIT; texto da
+# licença em scriba/qt/icons/LICENSE). São SVGs de cor única (#212121 na origem);
+# recolorimos para o token do tema e gravamos no MESMO cache de _icon_path. É só
+# texto no repo: nenhuma dependência de runtime. Vocabulário em scriba/qt/icons/*.svg.
+
+_FLUENT_SRC_COLOR = "#212121"
+
+
+def icon(name: str, color: str | None = None) -> str:
+    """Path (em cache) de um ícone Fluent recolorido para `color` (default: texto do
+    tema). Serve tanto p/ `url()` do QSS quanto p/ QIcon (ver `qicon`). Devolve ''
+    quando o ícone não existe (falha graciosa, sem levantar)."""
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parent / "icons" / f"{name}.svg"
+    try:
+        svg = src.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    col = color or active().text
+    return _icon_path(f"fluent_{name}_{col.lstrip('#')}.svg", svg.replace(_FLUENT_SRC_COLOR, col))
+
+
+def qicon(name: str, color: str | None = None):
+    """QIcon do ícone Fluent recolorido (p/ QAbstractButton.setIcon / QTreeWidgetItem.
+    setIcon). QIcon vazio se o ícone não existir. Nota: setIcon é estático — na troca
+    de tema a quente o ícone só reflete a nova cor quando reconstruído/reaberto."""
+    from PySide6.QtGui import QIcon
+
+    p = icon(name, color)
+    return QIcon(p) if p else QIcon()
+
+
 def window_gradient(theme: Theme | None = None, *, alpha: float = 1.0) -> str:
     """Valor QSS de fundo com gradiente sutil (bg2 -> bg) para a raiz das janelas.
     `alpha` < 1 deixa o fundo translúcido (para o backdrop acrílico aparecer atrás;
@@ -343,6 +377,27 @@ def qss(theme: Theme | None = None) -> str:
     }}
     QPushButton[kind="primary"]:hover {{ background-color: {t.accent_hover}; }}
     QPushButton[kind="primary"]:pressed {{ background-color: {t.accent_press}; }}
+
+    /* botão de ícone (find, command bar, expander) — leve, com hover discreto */
+    QToolButton {{
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: {t.radius}px;
+        padding: 4px 6px;
+        color: {t.text};
+    }}
+    QToolButton:hover {{ background-color: {t.surface}; border-color: {t.border}; }}
+    QToolButton:pressed {{ background-color: {t.field}; }}
+    QToolButton:checked {{ background-color: {t.field}; }}
+    QToolButton::menu-indicator {{ image: none; }}
+
+    /* expander (cabeçalho colapsável): a linha inteira é clicável, sem caixa */
+    QToolButton[expander="true"] {{
+        border: none; background: transparent;
+        color: {t.accent_hover}; font-weight: bold; font-size: 11pt;
+        padding: 2px 0;
+    }}
+    QToolButton[expander="true"]:hover {{ color: {t.accent}; background: transparent; }}
 
     QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QComboBox, QDateEdit, QTimeEdit {{
         background-color: {t.field};
