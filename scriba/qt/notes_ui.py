@@ -249,6 +249,23 @@ class NotesWindow(QWidget):
         acts.addWidget(self._overflow_btn)
         lay.addLayout(acts)
 
+        # faixa de PENDÊNCIA (logo abaixo da command bar): nasce quando a reunião tem
+        # vozes ainda não rotuladas e some ao rotular. Rotular participantes é uma ação
+        # que fica pendente ao usuário — a faixa dá importância a ela. Clicável (abre o
+        # mesmo diálogo do ícone de vozes). Numa faixa própria (não na fileira) porque o
+        # texto não caberia junto do botão de IA sem cortá-lo no minimumSize.
+        th = theme.active()
+        _wr = tuple(int(th.warn.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+        self._voice_hint = QLabel("Participantes ainda não rotulados - clique aqui para identificar quem falou")
+        self._voice_hint.setCursor(Qt.PointingHandCursor)
+        self._voice_hint.mousePressEvent = lambda _e: self._open_speaker_labeler()
+        self._voice_hint.setStyleSheet(
+            f"color:{th.warn}; font-weight:bold; font-size:{th.font_size_small}pt;"
+            f" background:rgba({_wr[0]},{_wr[1]},{_wr[2]},0.14);"
+            f" border:1px solid {th.warn}; border-radius:{th.radius_sm}px; padding:4px 10px;")
+        self._voice_hint.setVisible(False)
+        lay.addWidget(self._voice_hint)
+
         # Presentes (colapsável)
         self._presentes = _Collapsible("Presentes")
         lay.addWidget(self._presentes)
@@ -597,6 +614,7 @@ class NotesWindow(QWidget):
         self._overflow_btn.setEnabled(on)
         if not on:
             self._voice_btn.setEnabled(False)
+            self._voice_hint.setVisible(False)
 
     def _copy_prompt(self) -> None:
         md = self._selected_md()
@@ -778,15 +796,24 @@ class NotesWindow(QWidget):
     # -- rotular vozes (#1; diálogo do #51) ----------------------------------
 
     def _update_voice_button(self, note_path: Path) -> None:
-        from .speakers_ui import has_labelable_voices
+        from .speakers_ui import voice_label_state
 
         try:
-            has = has_labelable_voices(self._recording_folder_for(note_path))
+            state = voice_label_state(self._recording_folder_for(note_path))
         except Exception:
-            has = False
-        self._voice_btn.setEnabled(has)
-        widgets.add_tooltip(self._voice_btn,
-                            "Rotular vozes…" if has else "Esta gravação não tem vozes rotuláveis")
+            state = "none"
+        t = theme.active()
+        self._voice_btn.setEnabled(state != "none")
+        if state == "done":
+            # já rotulado: ícone VERDE, sem hint; segue clicável para revisar/alterar
+            self._voice_btn.setIcon(theme.qicon("people", color=t.ok))
+            widgets.add_tooltip(self._voice_btn, "Participantes rotulados — clique para revisar")
+        else:
+            self._voice_btn.setIcon(theme.qicon("people"))
+            widgets.add_tooltip(self._voice_btn,
+                                "Rotular participantes" if state == "pending"
+                                else "Esta gravação não tem vozes rotuláveis")
+        self._voice_hint.setVisible(state == "pending")
 
     def _open_speaker_labeler(self) -> None:
         sel = self._selected()
@@ -811,8 +838,14 @@ class NotesWindow(QWidget):
         return {str(v): notes.guess_voice_name(str(v), presentes.get(str(v), "")) for v in voices}
 
     def _after_relabel(self) -> None:
+        # mantém a MESMA nota aberta e re-renderiza: agora com os nomes na transcrição
+        # e o ícone de vozes VERDE (a pendência foi resolvida).
+        sel = self._selected()
+        keep = sel[0] if sel else None
         self._current_key = None   # força re-render (agora com os nomes)
         self._refresh_list()
+        if keep is not None:
+            self._select_in_tree(keep)
 
     # -- "Minhas pendências" (#22) -------------------------------------------
 

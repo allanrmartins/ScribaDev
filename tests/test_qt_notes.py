@@ -1,6 +1,7 @@
 """Notas Qt (#49, slice 1): helpers puros + smoke offscreen (lista, seleção, render, find)."""
 
 import importlib.util
+import json
 import os
 import sys
 import tempfile
@@ -174,6 +175,70 @@ class NotesSlice2Tests(unittest.TestCase):
         revealed = []
         w = _ActionItemsWindow([group], revealed.append)
         self.assertIn("aberta", w._count.text())             # 1 item aberto
+
+    def test_hint_de_pendencia_de_vozes_aparece_e_some_ao_rotular(self):
+        from scriba.qt.notes_ui import NotesWindow
+
+        base = Path(tempfile.mkdtemp(prefix="scriba_qt_hint_"))
+        (base / "2026-07-02_15-30_Boleto.md").write_text(_NOTE_MD, encoding="utf-8")
+        rec = base / "_rec" / "2026-07-02_15-30_Boleto"
+        rec.mkdir(parents=True)
+        vp = rec / "voices.json"
+        vp.write_text(json.dumps({"Ana": {"auto": True}, "Participante 2": {}}), encoding="utf-8")
+
+        class _Out:
+            def resolved_export_dir(_s): return base
+            def resolved_recordings_dir(_s): return base / "_rec"
+
+        class _App:
+            cfg = type("C", (), {"output": _Out()})()
+            def ui(_s, fn): fn()
+
+        win = NotesWindow(_App())
+        win._refresh_list()
+        win._tree.setCurrentItem(next(iter(win._items)))
+        win._show_selected()
+        # pendente: voz "Participante 2" ainda não resolvida -> hint fixo aparece
+        self.assertTrue(win._voice_btn.isEnabled())
+        self.assertTrue(win._voice_hint.isVisibleTo(win), "hint de pendência deveria aparecer")
+        # simula a rotulagem (relabel grava labeled=True) -> estado 'done'
+        vp.write_text(json.dumps({"Ana": {"auto": True}, "Bruno": {"labeled": True}}), encoding="utf-8")
+        win._show_selected()
+        self.assertFalse(win._voice_hint.isVisibleTo(win), "hint deveria sumir após rotular")
+
+
+@unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")
+class VoiceLabelStateTests(unittest.TestCase):
+    """Estado da pendência de rotular vozes (speakers_ui.voice_label_state)."""
+
+    def _folder(self, voices):
+        d = Path(tempfile.mkdtemp(prefix="scriba_vls_"))
+        if voices is not None:
+            (d / "voices.json").write_text(json.dumps(voices), encoding="utf-8")
+        return d
+
+    def test_none_sem_arquivo_ou_uma_voz(self):
+        from scriba.qt.speakers_ui import voice_label_state
+
+        self.assertEqual(voice_label_state(self._folder(None)), "none")
+        self.assertEqual(voice_label_state(self._folder({"Participante 1": {}})), "none")
+
+    def test_pending_voz_anonima_nao_resolvida(self):
+        from scriba.qt.speakers_ui import voice_label_state
+
+        self.assertEqual(
+            voice_label_state(self._folder({"Ana": {"auto": True}, "Participante 2": {}})),
+            "pending")
+
+    def test_done_reconhecidas_ou_rotuladas(self):
+        from scriba.qt.speakers_ui import voice_label_state
+
+        self.assertEqual(  # todas auto-reconhecidas
+            voice_label_state(self._folder({"Ana": {"auto": True}, "Bruno": {"auto": True}})),
+            "done")
+        self.assertEqual(  # o usuário rotulou pelo menos uma
+            voice_label_state(self._folder({"Bruno": {"labeled": True}, "Participante 3": {}})),
+            "done")
 
 
 @unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")

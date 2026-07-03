@@ -43,6 +43,35 @@ def has_labelable_voices(folder) -> bool:
         return False
 
 
+def voice_label_state(folder) -> str:
+    """Estado da rotulagem de vozes de uma gravação, para a pendência nas notas:
+
+    - "none": sem vozes suficientes para rotular (voices.json ausente ou < 2 vozes);
+    - "pending": há voz anônima ("Participante N") ainda não resolvida E o usuário
+      ainda não rotulou nenhuma — a ação está PENDENTE (merece um chamado à ação);
+    - "done": as vozes já estão resolvidas (auto-reconhecidas ou com nome próprio) ou
+      o usuário já rotulou pelo menos uma — nada mais a cobrar (ícone verde).
+
+    Uma voz conta como resolvida se foi reconhecida na hora (`auto`), rotulada à mão
+    (`labeled`, que o `notes.relabel_speakers` grava no voices.json) ou já tem nome
+    próprio (rótulo que não começa por "Participante ")."""
+    try:
+        voices = json.loads((Path(folder) / "voices.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "none"
+    if not isinstance(voices, dict) or len(voices) < 2:
+        return "none"
+
+    def _resolved(label, info) -> bool:
+        info = info or {}
+        return bool(info.get("auto") or info.get("labeled")
+                    or not str(label).startswith("Participante "))
+
+    any_labeled = any((info or {}).get("labeled") for info in voices.values())
+    has_unresolved = any(not _resolved(k, v) for k, v in voices.items())
+    return "pending" if (has_unresolved and not any_labeled) else "done"
+
+
 def _center_on_screen(win: QWidget, div_y: int = 3) -> None:
     win.adjustSize()
     scr = win.screen().availableGeometry() if win.screen() else None
