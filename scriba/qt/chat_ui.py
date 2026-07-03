@@ -90,6 +90,12 @@ class ChatWindow(QWidget):
         self._conv_lay.addStretch(1)  # empurra as mensagens p/ cima; novas entram antes deste
         self._scroll.setWidget(self._conv)
         root.addWidget(self._scroll, 1)
+        # auto-scroll: rola p/ o fim quando o conteúdo cresce (rangeChanged pega a altura
+        # final da bolha, inclusive markdown), a menos que o usuário tenha subido p/ ler
+        self._autoscroll = True
+        _sb = self._scroll.verticalScrollBar()
+        _sb.rangeChanged.connect(lambda *_: self._autoscroll and self._scroll_to_bottom())
+        _sb.valueChanged.connect(self._update_autoscroll)
 
         # toggle "buscar na transcrição" (só se a nota tem transcrição)
         self._toggle = None
@@ -156,11 +162,16 @@ class ChatWindow(QWidget):
             rl.addWidget(widget)
             rl.addStretch(1)
         self._conv_lay.insertWidget(self._conv_lay.count() - 1, row)  # antes do stretch final
-        QTimer.singleShot(0, self._scroll_to_bottom)
+        # o scroll de fato acontece no rangeChanged (quando o layout já cresceu de altura)
 
     def _scroll_to_bottom(self) -> None:
         bar = self._scroll.verticalScrollBar()
         bar.setValue(bar.maximum())
+
+    def _update_autoscroll(self, value: int) -> None:
+        # o usuário "assumiu" o scroll ao subir p/ longe do fim; volta a auto-rolar no fim
+        bar = self._scroll.verticalScrollBar()
+        self._autoscroll = value >= bar.maximum() - 8
 
     def _bubble_max(self) -> int:
         """Largura máxima das bolhas: acompanha a janela (~86% do viewport) em vez de um
@@ -242,6 +253,7 @@ class ChatWindow(QWidget):
             self._clear_context()
             return
         self._entry.clear()
+        self._autoscroll = True   # ao enviar, sempre acompanha o fim da conversa
         self._append_user(q)
         self._set_busy(True)
         self._start_thinking()

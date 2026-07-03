@@ -104,6 +104,22 @@ class ChatTests(unittest.TestCase):
             win._answered(f"r{i}", f"b{i}")
         self.assertTrue(win._warned)                         # avisou de novo no 2º ciclo
 
+    def test_autoscroll_acompanha_o_fim_e_respeita_subida(self):
+        win = self._win()
+        win.resize(400, 240); win.show()
+        self.app.processEvents(); self.app.processEvents()
+        for _ in range(6):
+            win._append_assistant("resposta longa " + "abc " * 30)
+        self.app.processEvents(); self.app.processEvents()
+        bar = win._scroll.verticalScrollBar()
+        self.assertGreater(bar.maximum(), 0)                     # há conteúdo transbordando
+        self.assertGreaterEqual(bar.value(), bar.maximum() - 8)  # rolou sozinho p/ o fim
+        bar.setValue(0); self.app.processEvents()
+        self.assertFalse(win._autoscroll)                        # usuário subiu -> pausa
+        bar.setValue(bar.maximum()); self.app.processEvents()
+        self.assertTrue(win._autoscroll)                         # voltou ao fim -> religa
+        win.close()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
