@@ -62,6 +62,21 @@ class QtWidgetSmokeTests(unittest.TestCase):
         self.assertEqual(seen, [True])
         t.repaint()  # exercita o paintEvent (interpolação de cor + knob)
 
+    def test_animated_checkbox(self):
+        from scriba.qt.widgets import AnimatedCheckBox
+
+        c = AnimatedCheckBox("Ativar")
+        self.assertFalse(c.isChecked())
+        self.assertEqual(c.get_fill(), 0.0)     # desmarcado = indicador vazio
+        c.repaint()
+        c.setChecked(True)
+        self.assertTrue(c.isChecked())
+        c._anim.stop(); c.set_fill(1.0)          # fim da animação (tick verde cheio)
+        self.assertEqual(c.get_fill(), 1.0)
+        c.repaint()                              # exercita o paintEvent (tick + texto)
+        c.setChecked(False); c._anim.stop(); c.set_fill(0.0)
+        c.repaint()
+
     def test_stepper(self):
         from scriba.qt.widgets import Stepper
 

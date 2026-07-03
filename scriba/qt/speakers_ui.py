@@ -219,7 +219,7 @@ class LabelSpeakersDialog(QWidget):
             entry = QLineEdit(prefill)
             entry.setPlaceholderText("nome desta pessoa")
             row.addWidget(entry, 1)
-            chk = QCheckBox()
+            chk = widgets.AnimatedCheckBox()
             chk.setChecked(bool(auto or labeled))
 
             def _sync(on, _chk=chk, _base=base, _color=color):

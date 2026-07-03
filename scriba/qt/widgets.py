@@ -17,14 +17,16 @@ from PySide6.QtCore import (
     QEasingCurve,
     QEvent,
     QObject,
+    QPointF,
     QPropertyAnimation,
+    QRectF,
     QSize,
     Qt,
     QTime,
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractButton,
     QAbstractScrollArea,
@@ -227,6 +229,87 @@ class ToggleSwitch(QAbstractButton):
         p.drawEllipse(cx - r, self.H / 2 - r, 2 * r, 2 * r)
 
 
+# == checkbox com tick verde + animação =======================================
+
+def _lerp_color(a: QColor, b: QColor, t: float) -> QColor:
+    return QColor(round(a.red() + (b.red() - a.red()) * t),
+                  round(a.green() + (b.green() - a.green()) * t),
+                  round(a.blue() + (b.blue() - a.blue()) * t))
+
+
+class AnimatedCheckBox(QCheckBox):
+    """Checkbox com tick VERDE e animação ao marcar/desmarcar. Mantém a API do QCheckBox
+    (setChecked/isChecked/toggled/text); só o indicador é desenhado à mão (paintEvent),
+    com uma Property `fill` (0..1) animada — o tick surge/some e a borda vira verde. O
+    QSS não anima, por isso o indicador é custom (mesmo caminho do ToggleSwitch)."""
+
+    _BOX = 18   # lado do indicador
+    _GAP = 9    # espaço indicador -> texto
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self._fill = 1.0 if self.isChecked() else 0.0
+        self._anim = QPropertyAnimation(self, b"fill", self)
+        self._anim.setDuration(170)
+        self._anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.toggled.connect(self._animate)
+
+    def _animate(self, on: bool) -> None:
+        self._anim.stop()
+        self._anim.setStartValue(self._fill)
+        self._anim.setEndValue(1.0 if on else 0.0)
+        self._anim.start()
+
+    def get_fill(self) -> float:
+        return self._fill
+
+    def set_fill(self, v: float) -> None:
+        self._fill = v
+        self.update()
+
+    fill = Property(float, get_fill, set_fill)
+
+    def sizeHint(self) -> QSize:
+        base = super().sizeHint()
+        return QSize(base.width(), max(base.height(), self._BOX + 6))
+
+    def hitButton(self, pos) -> bool:
+        return self.rect().contains(pos)   # clicar em qualquer lugar (box ou texto) alterna
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        t = theme.active()
+        f = max(0.0, min(1.0, self._fill))
+        box = self._BOX
+        rect = QRectF(1.0, (self.height() - box) / 2, box, box)
+
+        border = _lerp_color(QColor(t.border_strong), QColor(t.ok), f)
+        p.setPen(QPen(border, 1.6))
+        p.setBrush(QColor(t.field))
+        p.drawRoundedRect(rect, t.radius_sm, t.radius_sm)
+
+        if f > 0.02:   # tick verde (✓) surgindo com f
+            p.setOpacity(f)
+            tick = QPen(QColor(t.ok), 2.2)
+            tick.setCapStyle(Qt.RoundCap)
+            tick.setJoinStyle(Qt.RoundJoin)
+            p.setPen(tick)
+            cx, cy = rect.center().x(), rect.center().y()
+            p1 = QPointF(cx - 0.30 * box, cy + 0.02 * box)
+            p2 = QPointF(cx - 0.06 * box, cy + 0.22 * box)
+            p3 = QPointF(cx + 0.30 * box, cy - 0.22 * box)
+            p.drawLine(p1, p2)
+            p.drawLine(p2, p3)
+            p.setOpacity(1.0)
+
+        if self.text():
+            p.setPen(QColor(t.text if self.isEnabled() else t.faint))
+            tx = box + self._GAP
+            p.drawText(QRectF(tx, 0, self.width() - tx, self.height()),
+                       int(Qt.AlignVCenter | Qt.AlignLeft), self.text())
+
+
 # == campo com placeholder ====================================================
 
 def make_entry(placeholder: str = "", parent=None) -> QLineEdit:
@@ -285,7 +368,7 @@ class DateFilter(QWidget):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
-        self._chk = QCheckBox(label)
+        self._chk = AnimatedCheckBox(label)
         self._chk.toggled.connect(self._on_toggle)
         self._edit = QDateEdit(QDate.currentDate())
         self._edit.setCalendarPopup(True)
@@ -325,7 +408,7 @@ class TimeFilter(QWidget):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
-        self._chk = QCheckBox(label)
+        self._chk = AnimatedCheckBox(label)
         self._chk.toggled.connect(self._on_toggle)
         self._edit = QTimeEdit(QTime(0, 0))
         self._edit.setDisplayFormat("HH:mm")

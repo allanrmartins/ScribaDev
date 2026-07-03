@@ -14,7 +14,6 @@ import logging
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
-    QCheckBox,
     QHBoxLayout,
     QLabel,
     QTextEdit,
@@ -64,7 +63,7 @@ class LogWindow(QWidget):
         row1.addWidget(widgets.ModernButton("▼", self._next_hit))
         self._count = QLabel(""); self._count.setProperty("role", "muted"); self._count.setFixedWidth(56)
         row1.addWidget(self._count)
-        self._auto = QCheckBox("auto-atualizar"); self._auto.setChecked(True)
+        self._auto = widgets.AnimatedCheckBox("auto-atualizar"); self._auto.setChecked(True)
         row1.addWidget(self._auto)
         root.addLayout(row1)
 

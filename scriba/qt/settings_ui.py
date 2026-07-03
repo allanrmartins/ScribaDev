@@ -21,7 +21,6 @@ import threading
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -163,7 +162,7 @@ class SettingsWindow(QWidget):
         return e
 
     def _check(self, form, label, section, attr, hint=None):
-        c = QCheckBox()
+        c = widgets.AnimatedCheckBox()
         self._fields.append((c, section, attr, "bool", None))
         self._row(form, label, c, hint)
         return c

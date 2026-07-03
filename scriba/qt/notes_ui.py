@@ -25,7 +25,6 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
-    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -245,7 +244,7 @@ class NotesWindow(QWidget):
         self._find_count = QLabel(""); self._find_count.setProperty("role", "muted")
         self._find_count.setFixedWidth(48)
         fl.addWidget(self._find_count)
-        self._find_transcript = QCheckBox("incluir transcrição")
+        self._find_transcript = widgets.AnimatedCheckBox("incluir transcrição")
         self._find_transcript.toggled.connect(self._on_toggle_transcript)
         fl.addWidget(self._find_transcript)
         lay.addWidget(self._find_bar)
@@ -623,7 +622,7 @@ class NotesWindow(QWidget):
         box.setIcon(QMessageBox.Warning)
         box.setText(text)
         box.setInformativeText("A nota sai da lista e do índice de busca. Esta ação não pode ser desfeita.")
-        also = QCheckBox("Excluir também o áudio/gravação (sem volta)")
+        also = widgets.AnimatedCheckBox("Excluir também o áudio/gravação (sem volta)")
         box.setCheckBox(also)
         box.setStandardButtons(QMessageBox.Cancel | QMessageBox.Yes)
         box.setDefaultButton(QMessageBox.Cancel)
@@ -868,7 +867,7 @@ class _ActionItemsWindow(QWidget):
         head.addWidget(title)
         self._count = QLabel(""); self._count.setProperty("role", "muted")
         head.addWidget(self._count); head.addStretch(1)
-        self._show_done = QCheckBox("mostrar resolvidas")
+        self._show_done = widgets.AnimatedCheckBox("mostrar resolvidas")
         self._show_done.toggled.connect(self._render)
         head.addWidget(self._show_done)
         root.addLayout(head)
@@ -910,7 +909,7 @@ class _ActionItemsWindow(QWidget):
         from .. import notes
 
         text = (f"[{item['label']}] " if item.get("label") else "") + (item.get("text") or item.get("raw") or "")
-        cb = QCheckBox(text)
+        cb = widgets.AnimatedCheckBox(text)
         cb.setChecked(done)
         if done:
             cb.setStyleSheet(f"color:{theme.active().muted}; text-decoration:line-through;")
