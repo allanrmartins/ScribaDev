@@ -178,8 +178,9 @@ class NotesSlice2Tests(unittest.TestCase):
 
 @unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")
 class CommandBarTests(unittest.TestCase):
-    """Guarda de regressão do #58: o botão primário da command bar NÃO pode renderizar
-    cortado (o bug original passou pelo smoke por ninguém aferir largura vs sizeHint)."""
+    """Guarda de regressão do #58: o botão de destaque da command bar (a ação de IA
+    "Perguntar à reunião", texto + ícone) NÃO pode renderizar cortado (o bug original
+    passou pelo smoke por ninguém aferir largura-real vs sizeHint)."""
 
     @classmethod
     def setUpClass(cls):
@@ -216,7 +217,7 @@ class CommandBarTests(unittest.TestCase):
                 return
         self.fail("nenhuma nota real na árvore de teste")
 
-    def test_primario_nao_corta_no_minimo_e_default(self):
+    def test_botao_ia_em_destaque_nao_corta(self):
         w = self._win()
         w.show()
         for wd, ht in ((880, 560), (1040, 680)):
@@ -226,25 +227,30 @@ class CommandBarTests(unittest.TestCase):
             self.app.processEvents()
             self._select_first_note(w)
             self.app.processEvents()
-            pb = w._prompt_btn
+            cb = w._chat_btn   # "Perguntar à reunião": o botão de IA em destaque (texto + ícone)
             with self.subTest(size=f"{wd}x{ht}"):
                 self.assertGreaterEqual(
-                    pb.width(), pb.sizeHint().width(),
-                    f"primário cortado em {wd}x{ht}: {pb.width()} < {pb.sizeHint().width()}")
+                    cb.width(), cb.sizeHint().width(),
+                    f"botão de IA cortado em {wd}x{ht}: {cb.width()} < {cb.sizeHint().width()}")
         w.hide()
 
-    def test_excluir_no_overflow_e_secundarias_sao_icone(self):
+    def test_ia_em_destaque_e_demais_sao_icone(self):
         from PySide6.QtWidgets import QToolButton
 
         w = self._win()
         w.show()
         self.app.processEvents()
+        # a ação de IA é o botão de DESTAQUE: texto visível + ícone (não é só-ícone)
+        self.assertEqual(w._chat_btn.text(), "Perguntar à reunião")
+        self.assertFalse(w._chat_btn.icon().isNull(), "o botão de IA deveria ter ícone ao lado do texto")
+        # excluir mora no overflow, fora da fileira
         acts = [a.text() for a in w._overflow_btn.menu().actions()]
         self.assertTrue(any("Excluir" in a for a in acts), f"'Excluir' fora do overflow: {acts}")
-        for b in (w._tr_btn, w._chat_btn, w._voice_btn):
-            self.assertIsInstance(b, QToolButton, "secundária deveria ser QToolButton só-ícone")
-            self.assertEqual(b.text(), "", "secundária não deveria ter texto")
-            self.assertFalse(b.icon().isNull(), "secundária sem ícone")
+        # as demais (gerar prompt, copiar, vozes) são só-ícone
+        for b in (w._prompt_btn, w._tr_btn, w._voice_btn):
+            self.assertIsInstance(b, QToolButton, "ação secundária deveria ser QToolButton só-ícone")
+            self.assertEqual(b.text(), "", "ação secundária não deveria ter texto")
+            self.assertFalse(b.icon().isNull(), "ação secundária sem ícone")
         w.hide()
 
 

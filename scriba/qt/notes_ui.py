@@ -221,18 +221,20 @@ class NotesWindow(QWidget):
         header.addWidget(self._save_btn)
         lay.addLayout(header)
 
-        # command bar (Fluent/Win11): 1 ação primária com texto + secundárias só-ícone
-        # (ícone + tooltip) + overflow "…" com a ação destrutiva. Cabe no minimumSize
-        # sem cortar nada (antes: 5 botões de texto estouravam a linha).
+        # command bar (Fluent/Win11): a ação de IA "Perguntar à reunião" é o DESTAQUE
+        # (primário colorido, texto + ícone à esquerda) — é o que conversa com a IA, não
+        # pode ficar escondido atrás de um tooltip. As demais são só-ícone + tooltip; a
+        # destrutiva vai pro overflow "…". Cabe no minimumSize sem cortar nada.
         acts = QHBoxLayout(); acts.setSpacing(6)
-        self._prompt_btn = widgets.ModernButton("Gerar Prompt de Contexto", self._copy_prompt, kind="primary")
-        acts.addWidget(self._prompt_btn)
+        self._chat_btn = widgets.ModernButton("Perguntar à reunião", self._open_chat, kind="primary")
+        self._chat_btn.setIcon(theme.qicon("chat", color=theme.active().on_accent))
+        acts.addWidget(self._chat_btn)
+        self._prompt_btn = widgets.icon_button("sparkle", "Gerar Prompt de Contexto", self._copy_prompt)
         self._tr_btn = widgets.icon_button("copy", "Copiar transcrição", self._copy_transcript)
-        self._chat_btn = widgets.icon_button("chat", "Perguntar à reunião", self._open_chat)
         # "Rotular vozes" tem POSIÇÃO ESTÁVEL: nunca some (não desloca os vizinhos);
         # fica desabilitado quando a gravação não tem vozes (ver _update_voice_button).
         self._voice_btn = widgets.icon_button("people", "Rotular vozes…", self._open_speaker_labeler)
-        for b in (self._tr_btn, self._chat_btn, self._voice_btn):
+        for b in (self._prompt_btn, self._tr_btn, self._voice_btn):
             acts.addWidget(b)
         acts.addStretch(1)
         self._overflow_btn = QToolButton()
@@ -589,7 +591,7 @@ class NotesWindow(QWidget):
         overflow/excluir). Mantém a fileira com posição ESTÁVEL: os botões não somem,
         só ficam desabilitados. 'Rotular vozes' é refinado à parte (_update_voice_button),
         pois também depende de a gravação ter vozes."""
-        for w in (self._tr_btn, self._chat_btn):
+        for w in (self._prompt_btn, self._tr_btn, self._chat_btn):
             w.setEnabled(on)
         self._delete_action.setEnabled(on)
         self._overflow_btn.setEnabled(on)
@@ -603,7 +605,7 @@ class NotesWindow(QWidget):
         from .. import context_prompt
 
         _clip(context_prompt.build_context_prompt(md))
-        widgets.flash_button(self._prompt_btn, "✓ Copiado", "Gerar Prompt de Contexto")
+        widgets.flash_icon(self._prompt_btn, "checkmark", theme.active().ok)
 
     def _copy_transcript(self) -> None:
         md = self._selected_md()
