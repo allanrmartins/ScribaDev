@@ -271,6 +271,8 @@ class ChatWindow(QWidget):
                 out = ai.complete(_SYSTEM, self._summary_payload(q), timeout=_TIMEOUT,
                                   hidden_window=True, model=self._chat_model)
         except Exception:
+            searching = bool(self._transcript and self._toggle and self._toggle.isChecked())
+            log.exception("chat: falha ao responder (busca_transcrição=%s)", searching)
             out = None
         self._answered_sig.emit(q, out)
 
