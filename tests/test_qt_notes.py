@@ -194,6 +194,27 @@ class NotesWindowSmokeTests(unittest.TestCase):
         win._f_since.clear()
         self.assertEqual(win._filters._title, "Filtros")
 
+    def test_atalhos_registrados(self):
+        from PySide6.QtGui import QShortcut
+
+        win = self._win()
+        seqs = {sc.key().toString() for sc in win.findChildren(QShortcut)}
+        self.assertIn("Ctrl+F", seqs)
+        self.assertIn("F5", seqs)
+        self.assertIn("Del", seqs)
+        self.assertIn("Esc", seqs)
+
+    def test_menu_de_contexto_da_arvore(self):
+        win = self._win()
+        win._refresh_list()
+        item = next(iter(win._items))
+        menu = win._build_tree_menu(win._items[item][0])
+        texts = [a.text() for a in menu.actions() if a.text()]
+        self.assertTrue(any("Abrir pasta" in t for t in texts))
+        self.assertTrue(any("Excluir" in t for t in texts))
+        # esta nota de teste não tem voices.json -> sem "Rotular vozes" no menu
+        self.assertFalse(any("Rotular" in t for t in texts))
+
     def test_lista_vazia_mostra_mensagem(self):
         from scriba.qt.notes_ui import NotesWindow
 

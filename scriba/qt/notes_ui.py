@@ -172,6 +172,7 @@ class NotesWindow(QWidget):
         self._find_timer.setInterval(200); self._find_timer.timeout.connect(self._run_find)
         self._refresh_sig.connect(self._refresh_list)
         self._apply_theme()
+        self._setup_shortcuts()
 
     # -- construção da UI ----------------------------------------------------
 
@@ -210,10 +211,14 @@ class NotesWindow(QWidget):
         self._tree.setHeaderHidden(True)
         self._tree.setSelectionMode(QTreeWidget.ExtendedSelection)
         self._tree.itemSelectionChanged.connect(self._show_selected)
+        self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._tree.customContextMenuRequested.connect(self._tree_context_menu)
         lay.addWidget(self._tree, 1)
 
         actions = QHBoxLayout()
-        actions.addWidget(widgets.ModernButton("Atualizar", self._refresh_list))
+        _atu = widgets.ModernButton("Atualizar", self._refresh_list)
+        widgets.add_tooltip(_atu, "Atualizar a lista (F5)")
+        actions.addWidget(_atu)
         actions.addWidget(widgets.ModernButton("Abrir pasta", self._open_notes_dir))
         actions.addWidget(widgets.ModernButton("Pendências", self._open_action_items))
         actions.addStretch(1)
@@ -350,6 +355,62 @@ class NotesWindow(QWidget):
         t = theme.active()
         self._view.setStyleSheet(f"QTextBrowser {{ background:{t.field}; border:1px solid {t.border};"
                                  f" border-radius:{t.radius + 2}px; padding:8px; }}")
+
+    # -- atalhos e menu de contexto (#63) ------------------------------------
+
+    def _setup_shortcuts(self) -> None:
+        """Atalhos de teclado (ferramenta de uso diário). Del é escopado à ÁRVORE e Esc à
+        busca — assim não disparam enquanto você edita texto num campo do formulário."""
+        from PySide6.QtGui import QKeySequence, QShortcut
+
+        def _sc(seq, target, slot, context=Qt.WindowShortcut) -> None:
+            s = QShortcut(seq, target)
+            s.setContext(context)
+            s.activated.connect(slot)
+
+        _sc(QKeySequence.Find, self, self._focus_find)                       # Ctrl+F: busca na nota
+        _sc(QKeySequence(Qt.Key_F5), self, self._refresh_list)               # F5: atualiza a lista
+        _sc(QKeySequence(Qt.Key_Delete), self._tree, self._ask_delete,       # Del: exclui (só na árvore)
+            Qt.WidgetWithChildrenShortcut)
+        _sc(QKeySequence(Qt.Key_Escape), self._find, self._reset_find,       # Esc: limpa a busca
+            Qt.WidgetShortcut)
+
+    def _focus_find(self) -> None:
+        if self._find_bar.isVisible():
+            self._find.setFocus()
+            self._find.selectAll()
+
+    def _tree_context_menu(self, pos) -> None:
+        item = self._tree.itemAt(pos)
+        if item is None or item not in self._items or self._items[item][2] is not None:
+            return   # sem item, ou reunião em processamento/falha (nota ainda não existe)
+        if item not in self._tree.selectedItems():
+            self._tree.setCurrentItem(item)   # não quebra uma multi-seleção existente
+        menu = self._build_tree_menu(self._items[item][0])
+        menu.exec(self._tree.viewport().mapToGlobal(pos))
+
+    def _build_tree_menu(self, path: Path):
+        """Menu de contexto de uma nota (separado do _tree_context_menu p/ ser testável
+        sem o exec() modal)."""
+        t = theme.active()
+        menu = QMenu(self._tree)
+        menu.addAction(theme.qicon("folder"), "Abrir pasta da gravação",
+                       lambda: self._open_recording_folder(path))
+        from .speakers_ui import voice_label_state
+
+        try:
+            has_voices = voice_label_state(self._recording_folder_for(path)) != "none"
+        except Exception:
+            has_voices = False
+        if has_voices:
+            menu.addAction(theme.qicon("people"), "Rotular vozes…", self._open_speaker_labeler)
+        menu.addSeparator()
+        menu.addAction(theme.qicon("delete", color=t.rec), "Excluir nota…", self._ask_delete)
+        return menu
+
+    def _open_recording_folder(self, note_path: Path) -> None:
+        folder = self._recording_folder_for(note_path)
+        util.open_path(folder if folder.is_dir() else self._notes_dir())
 
     # -- lista ---------------------------------------------------------------
 
