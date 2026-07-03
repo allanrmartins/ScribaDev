@@ -189,8 +189,9 @@ class SettingsWindow(QWidget):
         return c
 
     def _list_choice(self, form, label, section, attr, values: tuple, hint=None):
-        """Combo editável cujo TEXTO é o valor (modelos Whisper: preset + passthrough)."""
-        c = QComboBox(); c.setEditable(True); widgets.no_wheel_steal(c)
+        """Dropdown NÃO editável cujo TEXTO é o valor (modelos Whisper). Abre ao clicar; um
+        valor salvo fora da lista é preservado como item no _widget_set (só exibição)."""
+        c = QComboBox(); widgets.no_wheel_steal(c)
         c.addItems(list(values))
         self._fields.append((c, section, attr, "editable_text", None))
         self._row(form, label, c, hint)
@@ -200,8 +201,7 @@ class SettingsWindow(QWidget):
         """Combo EDITÁVEL de dispositivo de áudio: '(padrão do Windows)' [valor ''] + a
         lista enumerada (populada em thread no 1º show). Editável = passthrough do valor
         salvo mesmo se o aparelho não estiver conectado agora. `key`: 'mics'|'loopbacks'."""
-        c = QComboBox(); c.setEditable(True); c.setInsertPolicy(QComboBox.NoInsert)
-        widgets.no_wheel_steal(c)
+        c = QComboBox(); widgets.no_wheel_steal(c)
         c.addItem("(padrão do Windows)", "")
         if tooltip:
             widgets.add_tooltip(c, tooltip)
@@ -296,8 +296,8 @@ class SettingsWindow(QWidget):
         f = self._tab("IA")
         self._check(f, "Gerar resumo (IA)", "summary", "enabled")
         self._choice(f, "Provedor", "summary", "provider", _PROVIDERS)
-        self._choice(f, "Modelo (Claude)", "summary", "model", _SUMMARY_MODELS, editable=True)
-        self._choice(f, "Modelo do chat", "summary", "chat_model", _CHAT_MODELS, editable=True)
+        self._choice(f, "Modelo (Claude)", "summary", "model", _SUMMARY_MODELS)
+        self._choice(f, "Modelo do chat", "summary", "chat_model", _CHAT_MODELS)
         self._int(f, "Timeout (s)", "summary", "timeout_seconds", 30, 3600)
         ol = self._group(f, "Ollama")
         self._text(ol, "Modelo", "summary", "ollama_model", placeholder="ex.: llama3.1, qwen2.5")
@@ -393,17 +393,17 @@ class SettingsWindow(QWidget):
         if not data:
             return
         for combo, key in self._device_combos:
-            current = combo.currentText()
+            current = combo.currentData()   # valor atual (data); "" = padrão
             names = data.get(key) or []
-            while combo.count() > 1:      # mantém só o "(padrão do Windows)" no topo
+            while combo.count() > 1:        # mantém só o "(padrão do Windows)" no topo
                 combo.removeItem(1)
             for n in names:
                 combo.addItem(n, n)
-            idx = combo.findText(current)
-            if idx >= 0:
-                combo.setCurrentIndex(idx)
-            else:
-                combo.setEditText(current)
+            idx = combo.findData(current)
+            if idx < 0 and current:         # valor salvo não enumerado: preserva como item
+                combo.addItem(current, current)
+                idx = combo.findData(current)
+            combo.setCurrentIndex(max(0, idx))
 
     # -- aba Sobre -----------------------------------------------------------
 
@@ -622,10 +622,7 @@ class SettingsWindow(QWidget):
         if kind == "choice":
             return widget.currentData()
         if kind == "device":
-            idx = widget.currentIndex()
-            if idx >= 0 and widget.itemText(idx) == widget.currentText():
-                return widget.currentData() or ""    # item selecionado ('(padrão)' -> '')
-            return widget.currentText().strip()       # texto digitado (passthrough)
+            return widget.currentData() or ""         # item selecionado ('(padrão)' -> '')
         return None
 
     def _widget_set(self, widget, kind, choices, value) -> None:
@@ -638,7 +635,10 @@ class SettingsWindow(QWidget):
         elif kind == "float":
             widget.setValue(float(value or 0))
         elif kind == "editable_text":
-            widget.setCurrentText(str(value or ""))   # passthrough: mostra valor fora da lista
+            v = str(value or "")
+            if v and widget.findText(v) < 0:
+                widget.addItem(v)                     # passthrough de EXIBIÇÃO (não editável)
+            widget.setCurrentText(v)
         elif kind == "bigtext":
             widget.setPlainText(str(value or ""))
         elif kind == "choice":
@@ -650,10 +650,10 @@ class SettingsWindow(QWidget):
         elif kind == "device":
             v = str(value or "")
             idx = widget.findData(v)
-            if idx >= 0:
-                widget.setCurrentIndex(idx)             # '' -> '(padrão)'; ou aparelho listado
-            else:
-                widget.setEditText(v)                   # passthrough: aparelho não listado (ainda)
+            if idx < 0:                                 # aparelho salvo não enumerado: exibe como item
+                widget.addItem(v, v)
+                idx = widget.findData(v)
+            widget.setCurrentIndex(idx)                 # '' -> '(padrão)'; ou aparelho
 
     def _load(self) -> None:
         cfg = self.app.cfg

@@ -134,6 +134,26 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(mic.currentText(), "Aparelho Desconectado")
         self.assertEqual(win._widget_get(mic, "device", None), "Aparelho Desconectado")
 
+    def test_dropdowns_nao_sao_editaveis(self):
+        # regra do Allan: todo dropdown abre ao clicar e NÃO deixa digitar (como o Motor).
+        from scriba.qt.settings_ui import SettingsWindow
+
+        win = SettingsWindow(self._app())
+        for sec, attr in (("whisper", "engine"), ("whisper", "model"), ("summary", "model"),
+                          ("summary", "chat_model"), ("audio", "mic_device"),
+                          ("audio", "loopback_device")):
+            w, _ = self._field(win, sec, attr)
+            self.assertFalse(w.isEditable(), f"{sec}.{attr} deveria ser dropdown puro (não editável)")
+
+    def test_whisper_model_passthrough_exibe_valor_fora_da_lista(self):
+        from scriba.qt.settings_ui import SettingsWindow
+
+        win = SettingsWindow(self._app())
+        model, _ = self._field(win, "whisper", "model")
+        win._widget_set(model, "editable_text", None, "meu-modelo-custom")   # valor salvo fora dos presets
+        self.assertEqual(model.currentText(), "meu-modelo-custom")           # exibido, sem precisar digitar
+        self.assertEqual(win._widget_get(model, "editable_text", None), "meu-modelo-custom")
+
     def test_hotwords_bigtext_normaliza_whitespace(self):
         from scriba import config as config_mod
         from scriba.qt.settings_ui import SettingsWindow
