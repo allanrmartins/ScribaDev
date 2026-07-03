@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QTimeEdit,
+    QToolButton,
     QWidget,
 )
 
@@ -160,6 +161,43 @@ def flash_button(btn, text: str, revert_to: str, *, ms: int = 1500) -> None:
         QTimer.singleShot(ms, lambda: btn.setText(revert_to))
     except RuntimeError:
         pass  # botão já destruído
+
+
+# == botão de ícone (command bar / find) ======================================
+
+def icon_button(name: str, tooltip: str, command: Callable[[], None] | None = None,
+                *, color: str | None = None, size: int = 18, parent=None) -> QToolButton:
+    """QToolButton compacto, só-ícone (Fluent via `theme.qicon`) + tooltip. Para command
+    bars e barras de busca, onde o texto ocuparia espaço demais e estouraria a linha.
+    O visual (hover/raio) vem do QSS `QToolButton` do tema; `color` default = texto."""
+    b = QToolButton(parent)
+    b.setIcon(theme.qicon(name, color))
+    b.setIconSize(QSize(size, size))
+    b.setCursor(Qt.PointingHandCursor)
+    if tooltip:
+        b.setToolTip(tooltip)
+    if command is not None:
+        b.clicked.connect(lambda: command())
+    return b
+
+
+def flash_icon(btn, name: str, color: str, *, ms: int = 1500) -> None:
+    """Feedback efêmero num botão de ícone: troca o ícone por `name` (cor `color`) e
+    restaura o original após `ms`. Par do `flash_button` para botões só-ícone (a mesma
+    regra: nenhuma ação termina sem resposta visível)."""
+    try:
+        old = btn.icon()
+    except RuntimeError:
+        return
+    btn.setIcon(theme.qicon(name, color))
+
+    def _restore() -> None:
+        try:
+            btn.setIcon(old)
+        except RuntimeError:
+            pass  # botão já destruído
+
+    QTimer.singleShot(ms, _restore)
 
 
 # == interruptor estilo Win11 =================================================

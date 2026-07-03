@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QScrollArea,
@@ -35,6 +36,7 @@ from PySide6.QtWidgets import (
     QTextBrowser,
     QTextEdit,
     QToolButton,
+    QToolTip,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -202,6 +204,9 @@ class NotesWindow(QWidget):
 
     def _build_right(self) -> QWidget:
         right = QWidget()
+        # proteção estrutural (fatia mínima do #61): garante que a command bar caiba
+        # sem cortar o botão primário, mesmo no minimumSize da janela.
+        right.setMinimumWidth(500)
         lay = QVBoxLayout(right); lay.setContentsMargins(12, 0, 0, 0)
 
         header = QHBoxLayout()
@@ -216,17 +221,30 @@ class NotesWindow(QWidget):
         header.addWidget(self._save_btn)
         lay.addLayout(header)
 
-        acts = QHBoxLayout()
+        # command bar (Fluent/Win11): 1 ação primária com texto + secundárias só-ícone
+        # (ícone + tooltip) + overflow "…" com a ação destrutiva. Cabe no minimumSize
+        # sem cortar nada (antes: 5 botões de texto estouravam a linha).
+        acts = QHBoxLayout(); acts.setSpacing(6)
         self._prompt_btn = widgets.ModernButton("Gerar Prompt de Contexto", self._copy_prompt, kind="primary")
-        self._tr_btn = widgets.ModernButton("Copiar transcrição", self._copy_transcript)
-        self._chat_btn = widgets.ModernButton("Perguntar à reunião", self._open_chat)
-        self._voice_btn = widgets.ModernButton("Rotular vozes…", self._open_speaker_labeler)
-        self._voice_btn.setVisible(False)   # só quando a gravação tem vozes (voices.json)
-        self._delete_btn = widgets.ModernButton("Excluir nota…", self._ask_delete)
-        for b in (self._prompt_btn, self._tr_btn, self._chat_btn, self._voice_btn):
+        acts.addWidget(self._prompt_btn)
+        self._tr_btn = widgets.icon_button("copy", "Copiar transcrição", self._copy_transcript)
+        self._chat_btn = widgets.icon_button("chat", "Perguntar à reunião", self._open_chat)
+        # "Rotular vozes" tem POSIÇÃO ESTÁVEL: nunca some (não desloca os vizinhos);
+        # fica desabilitado quando a gravação não tem vozes (ver _update_voice_button).
+        self._voice_btn = widgets.icon_button("people", "Rotular vozes…", self._open_speaker_labeler)
+        for b in (self._tr_btn, self._chat_btn, self._voice_btn):
             acts.addWidget(b)
         acts.addStretch(1)
-        acts.addWidget(self._delete_btn)
+        self._overflow_btn = QToolButton()
+        self._overflow_btn.setIcon(theme.qicon("more-horizontal"))
+        self._overflow_btn.setPopupMode(QToolButton.InstantPopup)
+        self._overflow_btn.setCursor(Qt.PointingHandCursor)
+        widgets.add_tooltip(self._overflow_btn, "Mais ações")
+        menu = QMenu(self._overflow_btn)
+        self._delete_action = menu.addAction(theme.qicon("delete", color=theme.active().rec), "Excluir nota…")
+        self._delete_action.triggered.connect(self._ask_delete)
+        self._overflow_btn.setMenu(menu)
+        acts.addWidget(self._overflow_btn)
         lay.addLayout(acts)
 
         # Presentes (colapsável)
@@ -240,12 +258,8 @@ class NotesWindow(QWidget):
         self._find.textChanged.connect(lambda: self._find_timer.start())
         self._find.returnPressed.connect(self._next_hit)
         fl.addWidget(self._find, 1)
-        self._find_prev = widgets.ModernButton("", self._prev_hit)
-        self._find_prev.setIcon(theme.qicon("chevron-up"))
-        widgets.add_tooltip(self._find_prev, "Ocorrência anterior")
-        self._find_next = widgets.ModernButton("", self._next_hit)
-        self._find_next.setIcon(theme.qicon("chevron-down"))
-        widgets.add_tooltip(self._find_next, "Próxima ocorrência")
+        self._find_prev = widgets.icon_button("chevron-up", "Ocorrência anterior", self._prev_hit)
+        self._find_next = widgets.icon_button("chevron-down", "Próxima ocorrência", self._next_hit)
         fl.addWidget(self._find_prev)
         fl.addWidget(self._find_next)
         self._find_count = QLabel(""); self._find_count.setProperty("role", "muted")
@@ -392,8 +406,7 @@ class NotesWindow(QWidget):
             msg = ("Nenhuma reunião encontrada para a busca/filtros." if searching
                    else "Nenhuma nota ainda — elas aparecem aqui depois da primeira reunião.")
             self._show_note_pane()
-            self._delete_btn.setVisible(False)
-            self._voice_btn.setVisible(False)
+            self._set_note_actions(False)
             self._find_bar.setVisible(False)
             self._presentes.setVisible(False)
             self._view.setMarkdown(msg)
@@ -458,8 +471,7 @@ class NotesWindow(QWidget):
 
     def _render_progress(self, folder: Path, status: str) -> None:
         self._show_progress_pane()
-        self._delete_btn.setVisible(False)
-        self._voice_btn.setVisible(False)
+        self._set_note_actions(False)
         self._title.setText("")
         self._client.setText("")
         self._current_key = folder
@@ -515,7 +527,7 @@ class NotesWindow(QWidget):
         self._show_note_pane()
         self._title.setText(title or "")
         self._client.setText(_client_of(path))
-        self._delete_btn.setVisible(True)
+        self._set_note_actions(True)
         self._update_voice_button(path)
         self._find_bar.setVisible(True)
         try:
@@ -572,6 +584,18 @@ class NotesWindow(QWidget):
 
     # -- ações ---------------------------------------------------------------
 
+    def _set_note_actions(self, on: bool) -> None:
+        """Liga/desliga as ações que exigem uma nota real selecionada (secundárias +
+        overflow/excluir). Mantém a fileira com posição ESTÁVEL: os botões não somem,
+        só ficam desabilitados. 'Rotular vozes' é refinado à parte (_update_voice_button),
+        pois também depende de a gravação ter vozes."""
+        for w in (self._tr_btn, self._chat_btn):
+            w.setEnabled(on)
+        self._delete_action.setEnabled(on)
+        self._overflow_btn.setEnabled(on)
+        if not on:
+            self._voice_btn.setEnabled(False)
+
     def _copy_prompt(self) -> None:
         md = self._selected_md()
         if md is None:
@@ -587,15 +611,16 @@ class NotesWindow(QWidget):
             return
         _summary, tr = _summary_and_transcript(md)
         if not tr:
-            widgets.flash_button(self._tr_btn, "Sem transcrição", "Copiar transcrição")
+            QToolTip.showText(self._tr_btn.mapToGlobal(self._tr_btn.rect().bottomLeft()),
+                              "Sem transcrição", self._tr_btn)
+            widgets.flash_icon(self._tr_btn, "dismiss", theme.active().warn)
             return
         _clip(tr)
-        widgets.flash_button(self._tr_btn, "✓ Copiado", "Copiar transcrição")
+        widgets.flash_icon(self._tr_btn, "checkmark", theme.active().ok)
 
     def _open_chat(self) -> None:
         md = self._selected_md()
-        if md is None:
-            widgets.flash_button(self._chat_btn, "Selecione uma nota", "Perguntar à reunião")
+        if md is None:   # botão fica desabilitado sem nota; guarda por segurança
             return
         from .chat_ui import ChatWindow
 
@@ -757,7 +782,9 @@ class NotesWindow(QWidget):
             has = has_labelable_voices(self._recording_folder_for(note_path))
         except Exception:
             has = False
-        self._voice_btn.setVisible(has)
+        self._voice_btn.setEnabled(has)
+        widgets.add_tooltip(self._voice_btn,
+                            "Rotular vozes…" if has else "Esta gravação não tem vozes rotuláveis")
 
     def _open_speaker_labeler(self) -> None:
         sel = self._selected()

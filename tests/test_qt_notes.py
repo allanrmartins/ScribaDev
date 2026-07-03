@@ -160,7 +160,10 @@ class NotesSlice2Tests(unittest.TestCase):
         win._refresh_list()
         win._tree.setCurrentItem(next(iter(win._items)))
         win._show_selected()
-        self.assertTrue(win._voice_btn.isVisibleTo(win))     # a gravação tem voices.json
+        # posição estável (#58): o botão nunca some (não desloca a fileira); com
+        # voices.json ele fica HABILITADO (sem, ficaria visível porém desabilitado).
+        self.assertTrue(win._voice_btn.isVisibleTo(win))
+        self.assertTrue(win._voice_btn.isEnabled())          # a gravação tem voices.json
 
     def test_janela_pendencias_renderiza(self):
         from scriba.qt.notes_ui import _ActionItemsWindow
@@ -171,6 +174,78 @@ class NotesSlice2Tests(unittest.TestCase):
         revealed = []
         w = _ActionItemsWindow([group], revealed.append)
         self.assertIn("aberta", w._count.text())             # 1 item aberto
+
+
+@unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")
+class CommandBarTests(unittest.TestCase):
+    """Guarda de regressão do #58: o botão primário da command bar NÃO pode renderizar
+    cortado (o bug original passou pelo smoke por ninguém aferir largura vs sizeHint)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+
+        from scriba.qt import theme
+
+        cls.app = QApplication.instance() or QApplication([])
+        theme.apply(cls.app)   # o QSS de QToolButton importa p/ a largura das secundárias
+
+    def _win(self):
+        from scriba.qt.notes_ui import NotesWindow
+
+        base = Path(tempfile.mkdtemp(prefix="scriba_qt_cmd_"))
+        (base / "2026-07-03_09-41_Alinhamento.md").write_text(
+            "---\ntitulo: Alinhamento interno ferramentas Claude Code\n"
+            "data: 2026-07-03T09:41:00\ncliente: Abaco\n---\n\n## Objetivo\nX.\n\n"
+            "## Transcrição completa\nfala\n", encoding="utf-8")
+
+        class _Out:
+            def resolved_export_dir(_s): return base
+            def resolved_recordings_dir(_s): return base / "_rec"
+
+        class _App:
+            cfg = type("C", (), {"output": _Out()})()
+            def ui(_s, fn): fn()
+
+        return NotesWindow(_App())
+
+    def _select_first_note(self, w):
+        for item, (_p, _t, status) in w._items.items():
+            if status is None:
+                w._tree.setCurrentItem(item)
+                return
+        self.fail("nenhuma nota real na árvore de teste")
+
+    def test_primario_nao_corta_no_minimo_e_default(self):
+        w = self._win()
+        w.show()
+        for wd, ht in ((880, 560), (1040, 680)):
+            w.resize(wd, ht)
+            self.app.processEvents()
+            w._refresh_list()
+            self.app.processEvents()
+            self._select_first_note(w)
+            self.app.processEvents()
+            pb = w._prompt_btn
+            with self.subTest(size=f"{wd}x{ht}"):
+                self.assertGreaterEqual(
+                    pb.width(), pb.sizeHint().width(),
+                    f"primário cortado em {wd}x{ht}: {pb.width()} < {pb.sizeHint().width()}")
+        w.hide()
+
+    def test_excluir_no_overflow_e_secundarias_sao_icone(self):
+        from PySide6.QtWidgets import QToolButton
+
+        w = self._win()
+        w.show()
+        self.app.processEvents()
+        acts = [a.text() for a in w._overflow_btn.menu().actions()]
+        self.assertTrue(any("Excluir" in a for a in acts), f"'Excluir' fora do overflow: {acts}")
+        for b in (w._tr_btn, w._chat_btn, w._voice_btn):
+            self.assertIsInstance(b, QToolButton, "secundária deveria ser QToolButton só-ícone")
+            self.assertEqual(b.text(), "", "secundária não deveria ter texto")
+            self.assertFalse(b.icon().isNull(), "secundária sem ícone")
+        w.hide()
 
 
 if __name__ == "__main__":
