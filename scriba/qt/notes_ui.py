@@ -145,6 +145,7 @@ class NotesWindow(QWidget):
         self._chat = None            # única janela de chat ativa por vez (#48)
         self._chat_key: Path | None = None   # nota da conversa aberta
         self._chat_title = ""        # título p/ o aviso "fechar a conversa atual"
+        self._header_orig: tuple[str, str] | None = None   # (título, cliente) salvos, p/ dirty-tracking
 
         self.setWindowTitle("ScribaDev — Notas")
         self.setMinimumSize(880, 560)
@@ -246,13 +247,18 @@ class NotesWindow(QWidget):
 
         header = QHBoxLayout()
         self._title = widgets.make_entry("título da reunião")
-        header.addWidget(self._title, 1)
+        self._title.textChanged.connect(lambda: self._update_save_state())
+        self._title.returnPressed.connect(self._save_header)
+        header.addWidget(self._title, 3)
         cli = QLabel("Cliente:"); cli.setProperty("role", "muted")
         header.addWidget(cli)
         self._client = widgets.make_entry("empresa")
-        self._client.setFixedWidth(150)
-        header.addWidget(self._client)
+        self._client.setMinimumWidth(140)   # sem fixedWidth: nomes de cliente longos não truncam
+        self._client.textChanged.connect(lambda: self._update_save_state())
+        self._client.returnPressed.connect(self._save_header)
+        header.addWidget(self._client, 1)
         self._save_btn = widgets.ModernButton("Salvar", self._save_header)
+        self._save_btn.setEnabled(False)   # dirty-only: só habilita quando título/cliente mudam
         header.addWidget(self._save_btn)
         lay.addLayout(header)
 
@@ -461,6 +467,7 @@ class NotesWindow(QWidget):
                    else "Nenhuma nota ainda — elas aparecem aqui depois da primeira reunião.")
             self._show_note_pane()
             self._set_note_actions(False)
+            self._clear_header()
             self._find_bar.setVisible(False)
             self._presentes.setVisible(False)
             self._view.setMarkdown(msg)
@@ -526,8 +533,7 @@ class NotesWindow(QWidget):
     def _render_progress(self, folder: Path, status: str) -> None:
         self._show_progress_pane()
         self._set_note_actions(False)
-        self._title.setText("")
-        self._client.setText("")
+        self._clear_header()
         self._current_key = folder
         self._prog_stage.setText(util.stage_label(status))
         if status in ("failed", "no_audio"):
@@ -579,8 +585,11 @@ class NotesWindow(QWidget):
             self._render_progress(path, status)
             return
         self._show_note_pane()
-        self._title.setText(title or "")
-        self._client.setText(_client_of(path))
+        title_text, client_text = title or "", _client_of(path)
+        self._header_orig = (title_text, client_text)   # baseline do dirty-tracking do Salvar
+        self._title.setText(title_text)
+        self._client.setText(client_text)
+        self._update_save_state()   # começa limpo (Salvar desabilitado)
         self._set_note_actions(True)
         self._update_voice_button(path)
         self._find_bar.setVisible(True)
@@ -743,9 +752,25 @@ class NotesWindow(QWidget):
         box.button(QMessageBox.Cancel).setText("Cancelar")
         return box.exec() == QMessageBox.Ok
 
+    def _update_save_state(self) -> None:
+        """Salvar só fica ativo quando título/cliente DIVERGEM do que está salvo (dirty).
+        Autosave foi rejeitado de propósito: salvar renomeia arquivo e pasta."""
+        if self._header_orig is None:
+            self._save_btn.setEnabled(False)
+            return
+        cur = (self._title.text().strip(), self._client.text().strip())
+        self._save_btn.setEnabled(cur != self._header_orig)
+
+    def _clear_header(self) -> None:
+        """Zera o cabeçalho (sem nota / em processamento) e desabilita o Salvar."""
+        self._header_orig = None
+        self._title.clear()
+        self._client.clear()
+        self._save_btn.setEnabled(False)
+
     def _save_header(self) -> None:
         sel = self._selected()
-        if not sel or sel[2] is not None:
+        if not sel or sel[2] is not None or not self._save_btn.isEnabled():
             return
         path = sel[0]
         new_title = self._title.text().strip()
@@ -755,6 +780,8 @@ class NotesWindow(QWidget):
         if new_title:
             set_note_title(path, new_title)
         set_note_client(path, new_client)
+        self._header_orig = (new_title, new_client)   # salvo agora -> volta a limpo
+        self._update_save_state()
         self._refresh_list()
         widgets.flash_button(self._save_btn, "✓ Salvo", "Salvar")
 

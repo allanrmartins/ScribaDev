@@ -408,6 +408,11 @@ def qss(theme: Theme | None = None) -> str:
         selection-background-color: {t.selection_bg};
         selection-color: {t.selection_fg};
     }}
+    /* hover: sinaliza que o campo é editável antes de receber foco (ex.: título da nota,
+       que sem isto parece um label). O foco (abaixo) vence quando ambos valem. */
+    QLineEdit:hover, QPlainTextEdit:hover, QTextEdit:hover, QComboBox:hover, QDateEdit:hover, QTimeEdit:hover {{
+        border-color: {t.border_strong};
+    }}
     QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QSpinBox:focus,
     QDoubleSpinBox:focus, QComboBox:focus, QDateEdit:focus, QTimeEdit:focus {{
         border: 1px solid {t.accent};

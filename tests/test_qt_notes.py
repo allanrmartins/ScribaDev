@@ -156,6 +156,24 @@ class NotesWindowSmokeTests(unittest.TestCase):
         self.assertEqual(jumped, [], "alternar a transcrição não deveria saltar para um hit")
         self.assertGreaterEqual(len(win._hits), 1, "os hits deveriam ser recoloridos no novo conteúdo")
 
+    def test_salvar_so_habilita_quando_ha_mudanca(self):
+        win = self._win()
+        win._refresh_list()
+        win._tree.setCurrentItem(next(iter(win._items)))
+        win._show_selected()
+        # nada mudou desde que a nota abriu -> Salvar desabilitado
+        self.assertFalse(win._save_btn.isEnabled())
+        # editar o título deixa "dirty" -> habilita
+        win._title.setText("Boleto não gera (revisado)")
+        self.assertTrue(win._save_btn.isEnabled())
+        # salvar volta a limpo -> desabilita de novo
+        win._save_header()
+        self.assertFalse(win._save_btn.isEnabled())
+        # sem nota selecionada, o cabeçalho zera e o Salvar fica desabilitado
+        win._clear_header()
+        self.assertFalse(win._save_btn.isEnabled())
+        self.assertEqual(win._title.text(), "")
+
     def test_filtros_colapsaveis_com_badge(self):
         win = self._win()
         win._refresh_list()
