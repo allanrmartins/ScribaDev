@@ -130,6 +130,7 @@ class ChatWindow(QWidget):
         self.activateWindow()
         widgets.enable_dark_titlebar(self)
         self._entry.setFocus()
+        QTimer.singleShot(0, self._refit_all)   # re-ajusta as bolhas com o viewport já dimensionado
 
     def closeEvent(self, event) -> None:
         self._stop_thinking()
@@ -162,10 +163,10 @@ class ChatWindow(QWidget):
         bar.setValue(bar.maximum())
 
     def _bubble_max(self) -> int:
-        """Largura máxima das bolhas: acompanha a janela (~82% do viewport) em vez de um
+        """Largura máxima das bolhas: acompanha a janela (~86% do viewport) em vez de um
         valor fixo, p/ a conversa usar a largura toda e não ficar espremida num canto."""
         w = self._scroll.viewport().width() if self._scroll is not None else self.width()
-        return max(300, int(w * 0.82))
+        return max(320, int(w * 0.86))
 
     def _bubble(self, text: str, *, markdown: bool) -> QLabel:
         lbl = QLabel()
@@ -175,18 +176,32 @@ class ChatWindow(QWidget):
         if markdown:
             lbl.setTextFormat(Qt.MarkdownText)   # render nativo (mata a mdview.py)
         lbl.setText(text)
-        lbl.setMaximumWidth(self._bubble_max())
         self._bubbles.append(lbl)
         return lbl
 
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
+    def _fit_bubble(self, lbl: QLabel) -> None:
+        """QLabel com wordWrap NÃO cresce sozinho até o limite (fica espremido num canto);
+        `setMaximumWidth` só limita, não força. Então medimos a largura natural (sem quebra)
+        e FIXAMOS em min(natural, ~86% da janela): bolha curta fica compacta, bolha longa
+        ocupa a largura da janela."""
         mx = self._bubble_max()
+        lbl.setMinimumWidth(0)
+        lbl.setMaximumWidth(16777215)        # solta o fixedWidth anterior antes de re-medir
+        lbl.setWordWrap(False)
+        natural = lbl.sizeHint().width()
+        lbl.setWordWrap(True)
+        lbl.setFixedWidth(min(natural, mx))
+
+    def _refit_all(self) -> None:
         for b in list(self._bubbles):
             try:
-                b.setMaximumWidth(mx)
+                self._fit_bubble(b)
             except RuntimeError:
                 self._bubbles.remove(b)   # bolha já destruída (após /clear)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._refit_all)   # após o layout atualizar a largura do viewport
 
     def _append_user(self, text: str) -> None:
         t = theme.active()
@@ -195,6 +210,7 @@ class ChatWindow(QWidget):
             f"background:{theme._rgba(t.accent, 0.20)}; border:1px solid {theme._rgba(t.accent, 0.42)};"
             f" border-radius:13px; padding:10px 14px; color:{t.text}; font-size:{t.font_size + 2}pt;"
         )
+        self._fit_bubble(lbl)
         self._add_row(lbl, "right")
 
     def _append_assistant(self, md: str) -> None:
@@ -204,6 +220,7 @@ class ChatWindow(QWidget):
             f"background:{theme._rgba(t.surface, 0.60)}; border:1px solid {theme._rgba(t.border, 0.55)};"
             f" border-radius:13px; padding:10px 14px; color:{t.text}; font-size:{t.font_size + 2}pt;"
         )
+        self._fit_bubble(lbl)
         self._add_row(lbl, "left")
 
     def _append_system(self, text: str) -> None:
@@ -211,6 +228,7 @@ class ChatWindow(QWidget):
         lbl = self._bubble(text, markdown=False)
         lbl.setAlignment(Qt.AlignCenter)
         lbl.setStyleSheet(f"color:{t.muted}; font-size:{t.font_size + 1}pt; font-style:italic; padding:4px;")
+        self._fit_bubble(lbl)
         self._add_row(lbl, "center")
 
     # -------------------------------------------------------------- chat -------
