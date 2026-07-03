@@ -141,6 +141,9 @@ class NotesWindow(QWidget):
         self._transcript_shown = False
         self._hits: list[QTextCursor] = []
         self._hit_idx = -1
+        self._chat = None            # única janela de chat ativa por vez (#48)
+        self._chat_key: Path | None = None   # nota da conversa aberta
+        self._chat_title = ""        # título p/ o aviso "fechar a conversa atual"
 
         self.setWindowTitle("ScribaDev — Notas")
         self.setMinimumSize(880, 560)
@@ -639,14 +642,55 @@ class NotesWindow(QWidget):
         widgets.flash_icon(self._tr_btn, "checkmark", theme.active().ok)
 
     def _open_chat(self) -> None:
-        md = self._selected_md()
-        if md is None:   # botão fica desabilitado sem nota; guarda por segurança
+        sel = self._selected()
+        if not sel or sel[2] is not None:   # sem nota real selecionada
             return
+        note_path = sel[0]
+        md = self._selected_md()
+        if md is None:
+            return
+        # SÓ UMA conversa por vez (#48) — não confundir perguntas de reuniões diferentes.
+        if self._chat_alive():
+            if self._chat_key == note_path:
+                self._chat.raise_(); self._chat.activateWindow()   # mesma reunião: traz à frente
+                return
+            if not self._confirm_close_chat(self._chat_title or "outra reunião"):
+                self._chat.raise_(); self._chat.activateWindow()   # cancelou: mantém a atual
+                return
+            self._chat.close()   # confirmou: fecha a anterior antes de abrir a nova
         from .chat_ui import ChatWindow
 
+        title = sel[1] or self._title.text().strip() or "reunião"
         summary, transcript = _summary_and_transcript(md)
-        self._chat = ChatWindow(summary, transcript, self._title.text().strip() or "reunião")
+        self._chat = ChatWindow(summary, transcript, title)
+        self._chat_key = note_path
+        self._chat_title = title
         self._chat.show()
+
+    def _chat_alive(self) -> bool:
+        """Há uma janela de chat aberta (viva e visível)? Fechada pelo usuário (X) conta
+        como não-aberta: o objeto persiste, mas fica invisível."""
+        if self._chat is None:
+            return False
+        try:
+            return bool(self._chat.isVisible())
+        except RuntimeError:   # objeto C++ já destruído
+            self._chat = None
+            return False
+
+    def _confirm_close_chat(self, other_title: str) -> bool:
+        """Confirma fechar a conversa atual antes de abrir outra. Método à parte para o
+        teste conseguir sobrepor (o QMessageBox é modal e bloquearia)."""
+        box = QMessageBox(self)
+        box.setWindowTitle("Fechar a conversa atual?")
+        box.setIcon(QMessageBox.Question)
+        box.setText(f'Já existe uma conversa aberta sobre "{other_title[:60]}".')
+        box.setInformativeText("Só é possível uma conversa por vez. Abrir esta vai fechar a atual. Continuar?")
+        box.setStandardButtons(QMessageBox.Cancel | QMessageBox.Ok)
+        box.setDefaultButton(QMessageBox.Cancel)
+        box.button(QMessageBox.Ok).setText("Fechar e abrir a nova")
+        box.button(QMessageBox.Cancel).setText("Cancelar")
+        return box.exec() == QMessageBox.Ok
 
     def _save_header(self) -> None:
         sel = self._selected()

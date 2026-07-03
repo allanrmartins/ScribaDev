@@ -323,5 +323,70 @@ class CommandBarTests(unittest.TestCase):
         w.hide()
 
 
+@unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")
+class ChatSingleInstanceTests(unittest.TestCase):
+    """Só uma janela de chat por vez (#48): mesma reunião traz à frente; outra reunião
+    pede confirmação e, se confirmado, fecha a atual antes de abrir a nova."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def _win(self):
+        from scriba.qt.notes_ui import NotesWindow
+
+        base = Path(tempfile.mkdtemp(prefix="scriba_qt_chat1_"))
+        (base / "2026-07-02_15-30_A.md").write_text(_NOTE_MD, encoding="utf-8")
+        (base / "2026-07-01_10-00_B.md").write_text(
+            _NOTE_MD.replace("Boleto não gera", "Reunião B"), encoding="utf-8")
+
+        class _Out:
+            def resolved_export_dir(_s): return base
+            def resolved_recordings_dir(_s): return base / "_rec"
+
+        class _App:
+            cfg = type("C", (), {"output": _Out()})()
+            def ui(_s, fn): fn()
+
+        return NotesWindow(_App())
+
+    def _select(self, win, name_part):
+        for item, (p, _t, _s) in win._items.items():
+            if name_part in p.name:
+                win._tree.setCurrentItem(item)
+                return
+        self.fail(f"nota {name_part} não encontrada na árvore")
+
+    def test_uma_conversa_por_vez(self):
+        win = self._win()
+        win._refresh_list()
+
+        # abre o chat da nota A
+        self._select(win, "_A")
+        win._open_chat()
+        first = win._chat
+        self.assertIsNotNone(first)
+        self.assertTrue(win._chat_alive())
+
+        # reabrir a MESMA nota não recria a janela (só traz à frente)
+        win._open_chat()
+        self.assertIs(win._chat, first, "mesma reunião deveria reusar a janela")
+
+        # outra nota + CANCELAR mantém a conversa atual (não abre a nova)
+        self._select(win, "_B")
+        win._confirm_close_chat = lambda _t: False
+        win._open_chat()
+        self.assertIs(win._chat, first, "cancelar deveria manter a conversa atual")
+
+        # outra nota + CONFIRMAR fecha a antiga e abre a nova
+        win._confirm_close_chat = lambda _t: True
+        win._open_chat()
+        self.assertIsNot(win._chat, first, "confirmar deveria abrir uma nova janela")
+        self.assertFalse(first.isVisible(), "a conversa anterior deveria ter sido fechada")
+        win._chat.close()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
