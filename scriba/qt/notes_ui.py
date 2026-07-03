@@ -215,12 +215,12 @@ class NotesWindow(QWidget):
         self._tree.customContextMenuRequested.connect(self._tree_context_menu)
         lay.addWidget(self._tree, 1)
 
+        # rodapé só-ícone: 3 botões de texto não cabiam no painel estreito (#64 pegou o
+        # corte). Ícones + tooltip, no mesmo idioma da command bar.
         actions = QHBoxLayout()
-        _atu = widgets.ModernButton("Atualizar", self._refresh_list)
-        widgets.add_tooltip(_atu, "Atualizar a lista (F5)")
-        actions.addWidget(_atu)
-        actions.addWidget(widgets.ModernButton("Abrir pasta", self._open_notes_dir))
-        actions.addWidget(widgets.ModernButton("Pendências", self._open_action_items))
+        actions.addWidget(widgets.icon_button("refresh", "Atualizar a lista (F5)", self._refresh_list))
+        actions.addWidget(widgets.icon_button("folder", "Abrir a pasta das notas", self._open_notes_dir))
+        actions.addWidget(widgets.icon_button("task-list", "Minhas pendências", self._open_action_items))
         actions.addStretch(1)
         lay.addLayout(actions)
         return left

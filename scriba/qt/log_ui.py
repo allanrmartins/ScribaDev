@@ -51,7 +51,11 @@ class LogWindow(QWidget):
         bar.addWidget(t_lbl); bar.addStretch(1)
         bar.addWidget(widgets.ModernButton("Copiar", self._copy))
         bar.addWidget(widgets.ModernButton("Abrir pasta", self._open_folder))
-        bar.addWidget(widgets.ModernButton("Exportar diagnóstico", self._export, kind="primary"))
+        # "Diagnóstico" (era "Exportar diagnóstico"): o rótulo longo estourava a barra no
+        # tamanho mínimo (#64 pegou o corte); o tooltip mantém o sentido completo.
+        _exp = widgets.ModernButton("Diagnóstico", self._export, kind="primary")
+        widgets.add_tooltip(_exp, "Exportar diagnóstico (.zip) para suporte")
+        bar.addWidget(_exp)
         root.addLayout(bar)
 
         row1 = QHBoxLayout()
