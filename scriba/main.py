@@ -89,6 +89,7 @@ class ScribaApp:
         self.call_active = False  # call do Teams em andamento (a pílula segue a call)
         self._app = None  # QApplication (criado em run())
         self._pump = None  # UiPump que drena a ui_queue na thread da GUI
+        self._quit_watchdog = None  # Timer que força a saída se o encerramento travar
         self.pill = None
         self.tray = None
         self.settings = None
@@ -898,6 +899,14 @@ class ScribaApp:
         self.stop_event.set()
         if self._app is not None:
             self.ui(self._app.quit)   # encerra o loop Qt na thread da GUI
+        # rede de segurança: se a saída travar (quit engolido, thread da GUI ocupada,
+        # teardown do Qt preso), força o encerramento — assim "Sair" não deixa o processo
+        # pendurado (o sintoma de "clicar 3x"). Mesmo watchdog que o relaunch já usa. O
+        # run() CANCELA este timer assim que o exec() volta, então uma gravação sendo
+        # salva na saída limpa nunca é cortada por ele. daemon=True não atrasa a saída.
+        self._quit_watchdog = threading.Timer(3.0, lambda: os._exit(0))
+        self._quit_watchdog.daemon = True
+        self._quit_watchdog.start()
 
     def run(self) -> int:
         # exceções não tratadas (em threads/slots) iam para o nada no modo sem console —
@@ -955,12 +964,21 @@ class ScribaApp:
         log.info("ScribaDev iniciado — monitorando calls do Teams")
         self._app.exec()
 
+        # o exec() voltou: estamos na saída LIMPA. Cancela o watchdog do request_quit
+        # antes de qualquer passo lento (salvar gravação), para ele não cortar o save.
+        if self._quit_watchdog is not None:
+            self._quit_watchdog.cancel()
         # saída: salva gravação em andamento; pendências ficam para o próximo start
         if self.is_recording():
             self.stop_recording(False)
         self.tray.stop()
         log.info("ScribaDev encerrado")
-        return 0
+        # os._exit pula o teardown do interpretador/Qt — que no PySide6 às vezes TRAVA
+        # (deixando o processo pendurado após "Sair") ou segfalha. Mesmo padrão dos
+        # harnesses das janelas; logging.shutdown() antes p/ não perder as últimas linhas.
+        logging.shutdown()
+        os._exit(0)
+        return 0  # inalcançável (os._exit não retorna); mantém a assinatura -> int
 
 
 def run_app(minimized: bool = False) -> int:
