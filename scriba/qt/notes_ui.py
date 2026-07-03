@@ -185,16 +185,25 @@ class NotesWindow(QWidget):
         self._search.textChanged.connect(lambda: self._search_timer.start())
         lay.addWidget(self._search)
 
+        # filtros estruturados: COLAPSADOS por padrão (só a busca fica sempre visível),
+        # com badge de quantos estão ativos no cabeçalho. Libera espaço vertical p/ a árvore.
+        self._filters = _Collapsible("Filtros")
         self._f_participant = widgets.make_entry("participante")
         self._f_client = widgets.make_entry("cliente")
-        for f in (self._f_participant, self._f_client):
-            f.textChanged.connect(lambda: self._search_timer.start())
-            lay.addWidget(f)
         self._f_since = widgets.DateFilter("de")
         self._f_until = widgets.DateFilter("até")
+        fbody = QWidget()
+        fl = QVBoxLayout(fbody); fl.setContentsMargins(0, 4, 0, 2); fl.setSpacing(6)
+        for f in (self._f_participant, self._f_client):
+            f.textChanged.connect(lambda: self._search_timer.start())
+            f.textChanged.connect(lambda: self._update_filter_badge())
+            fl.addWidget(f)
         for f in (self._f_since, self._f_until):
             f.changed.connect(lambda: self._search_timer.start())
-            lay.addWidget(f)
+            f.changed.connect(lambda: self._update_filter_badge())
+            fl.addWidget(f)
+        self._filters.set_content(fbody)
+        lay.addWidget(self._filters)
 
         self._tree = QTreeWidget()
         self._tree.setHeaderHidden(True)
@@ -209,6 +218,24 @@ class NotesWindow(QWidget):
         actions.addStretch(1)
         lay.addLayout(actions)
         return left
+
+    def _active_filter_count(self) -> int:
+        """Quantos filtros ESTRUTURADOS estão ativos (a busca FTS, sempre visível, não
+        conta) — vira o badge do cabeçalho "Filtros"."""
+        n = 0
+        if self._f_participant.text().strip():
+            n += 1
+        if self._f_client.text().strip():
+            n += 1
+        if self._f_since.br():
+            n += 1
+        if self._f_until.br():
+            n += 1
+        return n
+
+    def _update_filter_badge(self) -> None:
+        n = self._active_filter_count()
+        self._filters.set_header(f"Filtros ({n})" if n else "Filtros")
 
     def _build_right(self) -> QWidget:
         right = QWidget()

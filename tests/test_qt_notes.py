@@ -156,6 +156,26 @@ class NotesWindowSmokeTests(unittest.TestCase):
         self.assertEqual(jumped, [], "alternar a transcrição não deveria saltar para um hit")
         self.assertGreaterEqual(len(win._hits), 1, "os hits deveriam ser recoloridos no novo conteúdo")
 
+    def test_filtros_colapsaveis_com_badge(self):
+        win = self._win()
+        win._refresh_list()
+        # colapsado por padrão, badge sem número (a busca FTS fica sempre visível fora dele)
+        self.assertFalse(win._filters._open)
+        self.assertEqual(win._filters._title, "Filtros")
+        # ativar filtros de texto atualiza o badge
+        win._f_participant.setText("ana")
+        self.assertEqual(win._filters._title, "Filtros (1)")
+        win._f_client.setText("acme")
+        self.assertEqual(win._filters._title, "Filtros (2)")
+        # o filtro de data também conta
+        win._f_since._chk.setChecked(True)
+        self.assertEqual(win._filters._title, "Filtros (3)")
+        # limpar zera o badge
+        win._f_participant.clear()
+        win._f_client.clear()
+        win._f_since.clear()
+        self.assertEqual(win._filters._title, "Filtros")
+
     def test_lista_vazia_mostra_mensagem(self):
         from scriba.qt.notes_ui import NotesWindow
 
