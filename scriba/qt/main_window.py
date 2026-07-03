@@ -78,7 +78,7 @@ class MainWindow(QWidget):
         head.addStretch(1)
         head.addWidget(widgets.ModernButton("Log", lambda: self.app.show_log()))
         head.addWidget(widgets.ModernButton("Notas", lambda: self.app.show_notes()))
-        head.addWidget(widgets.ModernButton("⚙", lambda: self.app.show_settings()))
+        head.addWidget(widgets.icon_button("settings", "Configurações", lambda: self.app.show_settings()))
         root.addLayout(head)
 
         # ---- aviso de nova versão (#19): oculto até haver atualização ---------
@@ -87,7 +87,8 @@ class MainWindow(QWidget):
         ub = QHBoxLayout(self._update_bar)
         ub.setContentsMargins(12, 8, 12, 8)
         self._update_lbl = QLabel("")
-        self._update_btn = widgets.ModernButton("Atualizar agora", self._do_update, kind="primary")
+        self._update_btn = widgets.ModernButton("Atualizar", self._do_update, kind="primary")
+        self._update_btn.setIcon(theme.qicon("arrow-upload", color=theme.active().on_accent))
         ub.addWidget(self._update_lbl)
         ub.addStretch(1)
         ub.addWidget(self._update_btn)
@@ -112,7 +113,8 @@ class MainWindow(QWidget):
         self._call_timer = QLabel("—")
         self._call_timer.setStyleSheet("font-size:28pt; font-weight:bold;")
         cv.addWidget(self._call_timer)
-        self._rec_btn = widgets.ModernButton("⏺  Gravar agora", self._toggle_record, kind="primary")
+        self._rec_btn = widgets.ModernButton("Gravar agora", self._toggle_record, kind="primary")
+        self._rec_btn.setIcon(theme.qicon("record", color=theme.active().on_accent))
         cv.addWidget(self._rec_btn, 0, Qt.AlignLeft)
         root.addWidget(self._card)
         root.addSpacing(16)
@@ -158,6 +160,7 @@ class MainWindow(QWidget):
         if self.app.is_recording():
             self._processing = True
             self._rec_btn.setText("Processando…")
+            self._rec_btn.setIcon(theme.qicon("hourglass", color=theme.active().on_accent))
             self._rec_btn.setEnabled(False)
             t = threading.Thread(target=self.app.stop_recording, kwargs={"keep": True}, daemon=True)
             t.start()
@@ -176,9 +179,9 @@ class MainWindow(QWidget):
 
     def show_update(self, ver: str) -> None:
         self._update_ver = ver
-        self._update_lbl.setText(f"⬆  Nova versão v{ver} disponível")
+        self._update_lbl.setText(f"Nova versão v{ver} disponível")
         self._update_lbl.setStyleSheet(f"color:{theme.active().ok}; font-weight:bold;")
-        self._update_btn.setText("Atualizar agora" if updates.is_git_install() else "Baixar")
+        self._update_btn.setText("Atualizar" if updates.is_git_install() else "Baixar")
         self._update_bar.show()
 
     def _do_update(self) -> None:
@@ -217,26 +220,33 @@ class MainWindow(QWidget):
             app_name = self.app.current_call_app()
             self._call_state.setText(f"Gravando ({app_name or 'manual'})")
             self._call_timer.setText(_fmt(self.app.recording_duration()))
-            self._set_rec_idle("■  Parar e processar")
+            self._set_rec_idle(True)
             _paint_dot(self._call_dot, t.accent)
         elif getattr(self.app, "call_active", False):
             app_name = self.app.current_call_app()
             self._call_state.setText(f"Em call ({app_name or '?'}) — sem gravar")
             self._call_timer.setText(_fmt(self.app.call_duration()))
-            self._set_rec_idle("⏺  Gravar agora")
+            self._set_rec_idle(False)
             _paint_dot(self._call_dot, t.warn)
         else:
             self._call_state.setText("Nenhuma ligação em andamento")
             self._call_timer.setText("—")
-            self._set_rec_idle("⏺  Gravar agora")
+            self._set_rec_idle(False)
             _paint_dot(self._call_dot, t.muted)
         news = getattr(self.app, "update_news", None)
         if news and self._update_bar.isHidden():
             self.show_update(news)
 
-    def _set_rec_idle(self, text: str) -> None:
-        if not self._processing:
-            self._rec_btn.setText(text)
+    def _set_rec_idle(self, recording: bool) -> None:
+        if self._processing:
+            return
+        t = theme.active()
+        if recording:
+            self._rec_btn.setText("Parar e processar")
+            self._rec_btn.setIcon(theme.qicon("stop", color=t.on_accent))
+        else:
+            self._rec_btn.setText("Gravar agora")
+            self._rec_btn.setIcon(theme.qicon("record", color=t.on_accent))
 
     # ---- status dos serviços ---------------------------------------------------
 

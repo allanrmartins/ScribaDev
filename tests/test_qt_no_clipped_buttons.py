@@ -131,6 +131,28 @@ class NoClippedButtonsTests(unittest.TestCase):
         bad = _sweep(win, [(640, 380), (960, 600)])
         self.assertEqual(bad, [], "botões cortados no Log: " + "; ".join(bad))
 
+    def test_capa_sem_botao_cortado(self):
+        from scriba.qt.main_window import MainWindow
+
+        class _App:
+            call_active = False
+            update_news = None
+            def is_recording(self): return False
+            def current_call_app(self): return "Teams"
+            def recording_duration(self): return 72.0
+            def call_duration(self): return 30.0
+            def show_settings(self): pass
+            def show_notes(self): pass
+            def show_log(self): pass
+            def start_recording(self, *a): pass
+            def stop_recording(self, **k): pass
+            def ui(self, fn): fn()
+
+        win = MainWindow(_App())
+        win.show_update("0.9.0")   # mostra a barra de update (com o botão)
+        bad = _sweep(win, [(520, 560), (560, 620)])
+        self.assertEqual(bad, [], "botões cortados na capa: " + "; ".join(bad))
+
     def test_configuracoes_sem_botao_cortado(self):
         from PySide6.QtWidgets import QTabWidget
 

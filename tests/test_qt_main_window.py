@@ -68,7 +68,9 @@ class MainWindowTests(unittest.TestCase):
         win._tick()
         self.assertIn("Gravando", win._call_state.text())
         self.assertEqual(win._call_timer.text(), "01:12")
-        self.assertEqual(win._rec_btn.text(), "■  Parar e processar")
+        # texto sem glifo (o ■ virou ícone Fluent "stop" via setIcon, #66)
+        self.assertEqual(win._rec_btn.text(), "Parar e processar")
+        self.assertFalse(win._rec_btn.icon().isNull())
 
     def test_tick_em_call_sem_gravar(self):
         win = self._win(recording=False, call_active=True)
