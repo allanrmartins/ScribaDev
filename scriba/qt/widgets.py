@@ -27,6 +27,8 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QAbstractScrollArea,
+    QApplication,
     QCheckBox,
     QDateEdit,
     QHBoxLayout,
@@ -236,6 +238,34 @@ def make_entry(placeholder: str = "", parent=None) -> QLineEdit:
     return e
 
 
+# == scroll: campos não "roubam" a roda do mouse ==============================
+
+class _WheelGuard(QObject):
+    """Faz a roda do mouse rolar a PÁGINA (o QScrollArea ancestral) em vez de mudar o
+    valor de um combo/spin/date sob o cursor que NÃO está com foco. Sem isso, rolar por
+    cima de um campo num formulário longo altera o campo sem querer (queixa recorrente)."""
+
+    def eventFilter(self, obj, event) -> bool:
+        if event.type() == QEvent.Wheel and not obj.hasFocus():
+            area = obj.parent()
+            while area is not None and not isinstance(area, QAbstractScrollArea):
+                area = area.parent()
+            if area is not None:
+                QApplication.sendEvent(area.viewport(), event)   # rola o formulário
+            return True   # o campo não processa a roda
+        return False
+
+
+_wheel_guard = _WheelGuard()  # singleton stateless; a ref de módulo o mantém vivo
+
+
+def no_wheel_steal(widget) -> None:
+    """Impede `widget` (combo/spin/date) de capturar a roda a menos que esteja focado;
+    a roda passa a rolar o formulário. Também remove o foco-por-roda (WheelFocus)."""
+    widget.setFocusPolicy(Qt.StrongFocus)
+    widget.installEventFilter(_wheel_guard)
+
+
 # == filtros de data / hora opcionais =========================================
 
 class DateFilter(QWidget):
@@ -261,6 +291,7 @@ class DateFilter(QWidget):
         self._edit.setCalendarPopup(True)
         self._edit.setDisplayFormat("dd/MM/yyyy")
         self._edit.setEnabled(False)
+        no_wheel_steal(self._edit)
         self._edit.dateChanged.connect(lambda _=None: self.changed.emit())
         lay.addWidget(self._chk)
         lay.addWidget(self._edit, 1)
@@ -299,6 +330,7 @@ class TimeFilter(QWidget):
         self._edit = QTimeEdit(QTime(0, 0))
         self._edit.setDisplayFormat("HH:mm")
         self._edit.setEnabled(False)
+        no_wheel_steal(self._edit)
         self._edit.timeChanged.connect(lambda _=None: self.changed.emit())
         lay.addWidget(self._chk)
         lay.addWidget(self._edit, 1)

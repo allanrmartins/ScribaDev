@@ -149,6 +149,19 @@ class SettingsWindow(QWidget):
         self._row(form, label, e, hint)
         return e
 
+    def _bigtext(self, form, label, section, attr, placeholder="", tooltip="", rows=3):
+        """Campo de VÁRIAS linhas (QPlainTextEdit, com word-wrap) p/ valores longos como
+        hotwords. O config guarda uma string única: o get normaliza o whitespace (quebras
+        e espaços viram espaço simples), então digitar em linhas não muda o formato salvo."""
+        e = QPlainTextEdit()
+        e.setPlaceholderText(placeholder)
+        if tooltip:
+            widgets.add_tooltip(e, tooltip)
+        e.setFixedHeight(e.fontMetrics().lineSpacing() * rows + 16)
+        self._fields.append((e, section, attr, "bigtext", None))
+        self._row(form, label, e, None)
+        return e
+
     def _check(self, form, label, section, attr, hint=None):
         c = QCheckBox()
         self._fields.append((c, section, attr, "bool", None))
@@ -156,19 +169,20 @@ class SettingsWindow(QWidget):
         return c
 
     def _int(self, form, label, section, attr, lo=0, hi=100000, hint=None):
-        s = QSpinBox(); s.setRange(lo, hi)
+        s = QSpinBox(); s.setRange(lo, hi); widgets.no_wheel_steal(s)
         self._fields.append((s, section, attr, "int", None))
         self._row(form, label, s, hint)
         return s
 
     def _float(self, form, label, section, attr, lo=0.0, hi=100000.0, step=0.5, hint=None):
         s = QDoubleSpinBox(); s.setRange(lo, hi); s.setSingleStep(step); s.setDecimals(2)
+        widgets.no_wheel_steal(s)
         self._fields.append((s, section, attr, "float", None))
         self._row(form, label, s, hint)
         return s
 
     def _choice(self, form, label, section, attr, choices: dict, editable=False, hint=None):
-        c = QComboBox(); c.setEditable(editable)
+        c = QComboBox(); c.setEditable(editable); widgets.no_wheel_steal(c)
         for lbl, val in choices.items():
             c.addItem(lbl, val)
         self._fields.append((c, section, attr, "choice", choices))
@@ -177,7 +191,7 @@ class SettingsWindow(QWidget):
 
     def _list_choice(self, form, label, section, attr, values: tuple, hint=None):
         """Combo editável cujo TEXTO é o valor (modelos Whisper: preset + passthrough)."""
-        c = QComboBox(); c.setEditable(True)
+        c = QComboBox(); c.setEditable(True); widgets.no_wheel_steal(c)
         c.addItems(list(values))
         self._fields.append((c, section, attr, "editable_text", None))
         self._row(form, label, c, hint)
@@ -188,6 +202,7 @@ class SettingsWindow(QWidget):
         lista enumerada (populada em thread no 1º show). Editável = passthrough do valor
         salvo mesmo se o aparelho não estiver conectado agora. `key`: 'mics'|'loopbacks'."""
         c = QComboBox(); c.setEditable(True); c.setInsertPolicy(QComboBox.NoInsert)
+        widgets.no_wheel_steal(c)
         c.addItem("(padrão do Windows)", "")
         if tooltip:
             widgets.add_tooltip(c, tooltip)
@@ -259,9 +274,12 @@ class SettingsWindow(QWidget):
         self._list_choice(f, "Modelo", "whisper", "model", _WHISPER_MODELS)
         self._choice(f, "Dispositivo", "whisper", "device", _WHISPER_DEVICES)
         self._choice(f, "Idioma", "whisper", "language", _WHISPER_LANGS)
-        self._text(f, "Vocabulário (hotwords)", "whisper", "hotwords",
-                   placeholder="termos, nomes e siglas da sua área",
-                   tooltip="Vocabulário que guia a transcrição (separe por vírgula).")
+        self._bigtext(f, "Vocabulário (hotwords)", "whisper", "hotwords", rows=4,
+                      placeholder="Termos, siglas e nomes próprios que aparecem nas suas reuniões e "
+                                  "guiam a transcrição.  Ex.: SAP ABAP BAPI CDS Fiori OData, nomes "
+                                  "de clientes, produtos e projetos, jargão da sua área.",
+                      tooltip="Quanto mais específico do seu dia a dia, melhor a transcrição acerta "
+                              "os termos difíceis. Pode escrever em várias linhas.")
         av = self._group(f, "Avançado")
         self._int(av, "Batch size", "whisper", "batch_size", 0, 64, hint="0 desliga o lote")
         self._int(av, "Beam size", "whisper", "beam_size", 0, 10)
@@ -600,6 +618,8 @@ class SettingsWindow(QWidget):
             return widget.value()
         if kind == "editable_text":
             return widget.currentText().strip()
+        if kind == "bigtext":
+            return " ".join(widget.toPlainText().split())   # normaliza p/ string única
         if kind == "choice":
             return widget.currentData()
         if kind == "device":
@@ -620,6 +640,8 @@ class SettingsWindow(QWidget):
             widget.setValue(float(value or 0))
         elif kind == "editable_text":
             widget.setCurrentText(str(value or ""))   # passthrough: mostra valor fora da lista
+        elif kind == "bigtext":
+            widget.setPlainText(str(value or ""))
         elif kind == "choice":
             idx = widget.findData(value)
             if idx < 0:                                 # passthrough: valor fora do mapa

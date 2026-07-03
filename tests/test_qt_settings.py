@@ -134,6 +134,17 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(mic.currentText(), "Aparelho Desconectado")
         self.assertEqual(win._widget_get(mic, "device", None), "Aparelho Desconectado")
 
+    def test_hotwords_bigtext_normaliza_whitespace(self):
+        from scriba import config as config_mod
+        from scriba.qt.settings_ui import SettingsWindow
+
+        win = SettingsWindow(self._app())
+        hw, kind = self._field(win, "whisper", "hotwords")
+        self.assertEqual(kind, "bigtext")                 # virou campo multi-linha
+        hw.setPlainText("SAP  ABAP\nBAPI\n\nCDS")         # linhas / espaços múltiplos
+        win._save()
+        self.assertEqual(config_mod.load().whisper.hotwords, "SAP ABAP BAPI CDS")  # normalizado
+
     def test_prompt_editor_carrega_e_salva(self):
         from scriba import util
         from scriba.qt.settings_ui import SettingsWindow

@@ -17,6 +17,7 @@ Decisões (épico #44, 2026-07-02):
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass, fields
 
 from .. import util
@@ -256,6 +257,16 @@ def _rgba(hex_color: str, alpha: float) -> str:
     return f"rgba({r}, {g}, {b}, {alpha})"
 
 
+def _svg_arrow_uri(color: str, *, up: bool = False) -> str:
+    """data-uri (base64) de uma setinha triangular na cor do tema, para as setas de
+    QComboBox/QSpinBox/QDateEdit no QSS (as nativas ficam pequenas e fora do tema).
+    base64 evita as dores de escaping de `url(data:...)` com '#' e '<' no QSS."""
+    pts = "3,7.5 9,7.5 6,3" if up else "3,4.5 9,4.5 6,9"
+    svg = (f"<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12'>"
+           f"<polygon points='{pts}' fill='{color}'/></svg>")
+    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
+
+
 def window_gradient(theme: Theme | None = None, *, alpha: float = 1.0) -> str:
     """Valor QSS de fundo com gradiente sutil (bg2 -> bg) para a raiz das janelas.
     `alpha` < 1 deixa o fundo translúcido (para o backdrop acrílico aparecer atrás;
@@ -273,6 +284,8 @@ def qss(theme: Theme | None = None) -> str:
     t = theme or active()
     ui = _ui_stack(t)
     field_radius = t.radius + 3  # campos mais macios/arredondados (não "terminal")
+    arrow_dn = _svg_arrow_uri(t.text)
+    arrow_up = _svg_arrow_uri(t.text, up=True)
     return f"""
     QWidget {{
         background-color: {t.bg};
@@ -345,7 +358,33 @@ def qss(theme: Theme | None = None) -> str:
     QScrollBar::handle:horizontal:hover {{ background: {t.border_strong}; }}
     QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 
-    QComboBox::drop-down {{ border: none; width: 22px; }}
+    QComboBox::drop-down {{
+        subcontrol-origin: padding; subcontrol-position: center right;
+        border: none; width: 24px;
+    }}
+    QComboBox::down-arrow {{ image: url({arrow_dn}); width: 12px; height: 12px; }}
+
+    QSpinBox::up-button, QDoubleSpinBox::up-button, QDateEdit::up-button, QTimeEdit::up-button {{
+        subcontrol-origin: border; subcontrol-position: top right; width: 20px;
+        border-left: 1px solid {t.border}; border-top-right-radius: {field_radius}px;
+        background: {t.surface};
+    }}
+    QSpinBox::down-button, QDoubleSpinBox::down-button, QDateEdit::down-button, QTimeEdit::down-button {{
+        subcontrol-origin: border; subcontrol-position: bottom right; width: 20px;
+        border-left: 1px solid {t.border}; border-bottom-right-radius: {field_radius}px;
+        background: {t.surface};
+    }}
+    QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover, QDateEdit::up-button:hover, QTimeEdit::up-button:hover,
+    QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover, QDateEdit::down-button:hover, QTimeEdit::down-button:hover {{
+        background: {t.border};
+    }}
+    QSpinBox::up-arrow, QDoubleSpinBox::up-arrow, QDateEdit::up-arrow, QTimeEdit::up-arrow {{
+        image: url({arrow_up}); width: 11px; height: 11px;
+    }}
+    QSpinBox::down-arrow, QDoubleSpinBox::down-arrow, QDateEdit::down-arrow, QTimeEdit::down-arrow {{
+        image: url({arrow_dn}); width: 11px; height: 11px;
+    }}
+
     QComboBox QAbstractItemView {{
         background-color: {t.overlay};
         color: {t.text};
