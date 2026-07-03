@@ -62,6 +62,7 @@ class ChatWindow(QWidget):
         self._busy = False
         self._warned = False
         self._searcher = None
+        self._bubbles: list[QLabel] = []
         from .. import config
 
         self._chat_model = config.load().summary.chat_model or None
@@ -160,6 +161,12 @@ class ChatWindow(QWidget):
         bar = self._scroll.verticalScrollBar()
         bar.setValue(bar.maximum())
 
+    def _bubble_max(self) -> int:
+        """Largura máxima das bolhas: acompanha a janela (~82% do viewport) em vez de um
+        valor fixo, p/ a conversa usar a largura toda e não ficar espremida num canto."""
+        w = self._scroll.viewport().width() if self._scroll is not None else self.width()
+        return max(300, int(w * 0.82))
+
     def _bubble(self, text: str, *, markdown: bool) -> QLabel:
         lbl = QLabel()
         lbl.setWordWrap(True)
@@ -168,34 +175,42 @@ class ChatWindow(QWidget):
         if markdown:
             lbl.setTextFormat(Qt.MarkdownText)   # render nativo (mata a mdview.py)
         lbl.setText(text)
+        lbl.setMaximumWidth(self._bubble_max())
+        self._bubbles.append(lbl)
         return lbl
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        mx = self._bubble_max()
+        for b in list(self._bubbles):
+            try:
+                b.setMaximumWidth(mx)
+            except RuntimeError:
+                self._bubbles.remove(b)   # bolha já destruída (após /clear)
 
     def _append_user(self, text: str) -> None:
         t = theme.active()
         lbl = self._bubble(text, markdown=False)
-        lbl.setMaximumWidth(380)
         lbl.setStyleSheet(
             f"background:{theme._rgba(t.accent, 0.20)}; border:1px solid {theme._rgba(t.accent, 0.42)};"
-            f" border-radius:13px; padding:8px 12px; color:{t.text};"
+            f" border-radius:13px; padding:10px 14px; color:{t.text}; font-size:{t.font_size + 2}pt;"
         )
         self._add_row(lbl, "right")
 
     def _append_assistant(self, md: str) -> None:
         t = theme.active()
         lbl = self._bubble(md, markdown=True)
-        lbl.setMaximumWidth(440)
         lbl.setStyleSheet(
             f"background:{theme._rgba(t.surface, 0.60)}; border:1px solid {theme._rgba(t.border, 0.55)};"
-            f" border-radius:13px; padding:8px 12px; color:{t.text};"
+            f" border-radius:13px; padding:10px 14px; color:{t.text}; font-size:{t.font_size + 2}pt;"
         )
         self._add_row(lbl, "left")
 
     def _append_system(self, text: str) -> None:
         t = theme.active()
         lbl = self._bubble(text, markdown=False)
-        lbl.setMaximumWidth(460)
         lbl.setAlignment(Qt.AlignCenter)
-        lbl.setStyleSheet(f"color:{t.muted}; font-size:9pt; font-style:italic; padding:4px;")
+        lbl.setStyleSheet(f"color:{t.muted}; font-size:{t.font_size + 1}pt; font-style:italic; padding:4px;")
         self._add_row(lbl, "center")
 
     # -------------------------------------------------------------- chat -------
@@ -267,6 +282,7 @@ class ChatWindow(QWidget):
             w = child.widget()
             if w is not None:
                 w.deleteLater()
+        self._bubbles.clear()
         self._append_system(_CLEAR_MSG)
 
     def _set_busy(self, busy: bool) -> None:
