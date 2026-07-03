@@ -54,12 +54,15 @@ def voice_label_state(folder) -> str:
 
     Uma voz conta como resolvida se foi reconhecida na hora (`auto`), rotulada à mão
     (`labeled`, que o `notes.relabel_speakers` grava no voices.json) ou já tem nome
-    próprio (rótulo que não começa por "Participante ")."""
+    próprio (rótulo que não começa por "Participante ").
+
+    O voices.json guarda SÓ as vozes do loopback (os OUTROS participantes, nunca o seu
+    mic) — por isso 1 voz já é um participante real (não "só você"): basta ela existir."""
     try:
         voices = json.loads((Path(folder) / "voices.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return "none"
-    if not isinstance(voices, dict) or len(voices) < 2:
+    if not isinstance(voices, dict) or not voices:
         return "none"
 
     def _resolved(label, info) -> bool:

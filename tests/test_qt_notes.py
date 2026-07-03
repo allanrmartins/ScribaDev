@@ -217,15 +217,17 @@ class VoiceLabelStateTests(unittest.TestCase):
             (d / "voices.json").write_text(json.dumps(voices), encoding="utf-8")
         return d
 
-    def test_none_sem_arquivo_ou_uma_voz(self):
+    def test_none_so_sem_arquivo_ou_vazio(self):
         from scriba.qt.speakers_ui import voice_label_state
 
         self.assertEqual(voice_label_state(self._folder(None)), "none")
-        self.assertEqual(voice_label_state(self._folder({"Participante 1": {}})), "none")
+        self.assertEqual(voice_label_state(self._folder({})), "none")
 
-    def test_pending_voz_anonima_nao_resolvida(self):
+    def test_pending_uma_ou_mais_vozes_anonimas(self):
         from scriba.qt.speakers_ui import voice_label_state
 
+        # 1 voz de loopback anônima já é participante a rotular (voices.json = só os outros)
+        self.assertEqual(voice_label_state(self._folder({"Participante 1": {}})), "pending")
         self.assertEqual(
             voice_label_state(self._folder({"Ana": {"auto": True}, "Participante 2": {}})),
             "pending")
@@ -233,6 +235,8 @@ class VoiceLabelStateTests(unittest.TestCase):
     def test_done_reconhecidas_ou_rotuladas(self):
         from scriba.qt.speakers_ui import voice_label_state
 
+        # caso REAL que motivou o fix: 1 voz de loopback auto-reconhecida (ex.: "Suzi")
+        self.assertEqual(voice_label_state(self._folder({"Suzi": {"auto": True}})), "done")
         self.assertEqual(  # todas auto-reconhecidas
             voice_label_state(self._folder({"Ana": {"auto": True}, "Bruno": {"auto": True}})),
             "done")
