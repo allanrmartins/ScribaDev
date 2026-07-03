@@ -17,7 +17,6 @@ Decisões (épico #44, 2026-07-02):
 
 from __future__ import annotations
 
-import base64
 from dataclasses import dataclass, fields
 
 from .. import util
@@ -257,14 +256,28 @@ def _rgba(hex_color: str, alpha: float) -> str:
     return f"rgba({r}, {g}, {b}, {alpha})"
 
 
-def _svg_arrow_uri(color: str, *, up: bool = False) -> str:
-    """data-uri (base64) de uma setinha triangular na cor do tema, para as setas de
-    QComboBox/QSpinBox/QDateEdit no QSS (as nativas ficam pequenas e fora do tema).
-    base64 evita as dores de escaping de `url(data:...)` com '#' e '<' no QSS."""
-    pts = "3,7.5 9,7.5 6,3" if up else "3,4.5 9,4.5 6,9"
-    svg = (f"<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12'>"
-           f"<polygon points='{pts}' fill='{color}'/></svg>")
-    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
+def _arrow_icon_path(color: str, *, up: bool = False) -> str:
+    """Path (forward slashes p/ o QSS) de um SVG de seta na cor do tema, gerado 1x num
+    cache gravável e reusado. Arquivo em vez de data-uri porque o Qt só carrega `url()`
+    do QSS a partir de ARQUIVO, não de `data:image/svg` — sem isto combos/spins ficam
+    sem seta (parecem campo de texto). Falha graciosa (seta some) se o cache não gravar."""
+    from pathlib import Path
+
+    d = Path(util.STATE_PATH).parent / "qt_icons"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    path = d / f"arrow_{'up' if up else 'dn'}_{color.lstrip('#')}.svg"
+    if not path.exists():
+        pts = "3,8 9,8 6,3.5" if up else "3,4 9,4 6,8.5"
+        try:
+            path.write_text(
+                f"<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12'>"
+                f"<polygon points='{pts}' fill='{color}'/></svg>", encoding="utf-8")
+        except OSError:
+            pass
+    return str(path).replace("\\", "/")
 
 
 def window_gradient(theme: Theme | None = None, *, alpha: float = 1.0) -> str:
@@ -284,8 +297,8 @@ def qss(theme: Theme | None = None) -> str:
     t = theme or active()
     ui = _ui_stack(t)
     field_radius = t.radius + 3  # campos mais macios/arredondados (não "terminal")
-    arrow_dn = _svg_arrow_uri(t.text)
-    arrow_up = _svg_arrow_uri(t.text, up=True)
+    arrow_dn = _arrow_icon_path(t.text)
+    arrow_up = _arrow_icon_path(t.text, up=True)
     return f"""
     QWidget {{
         background-color: {t.bg};
@@ -358,32 +371,32 @@ def qss(theme: Theme | None = None) -> str:
     QScrollBar::handle:horizontal:hover {{ background: {t.border_strong}; }}
     QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 
-    QComboBox::drop-down {{
+    /* seta do dropdown (combo) e do calendário (QDateEdit calendarPopup): a área é
+       clicável; o triângulo é desenhado pelo widgets._ArrowStyle na cor do tema. */
+    /* seta do dropdown (combo) e do calendário (QDateEdit calendarPopup). A seta vem
+       de um SVG em arquivo (theme._arrow_icon_path) porque o Qt não carrega data:svg. */
+    QComboBox::drop-down, QDateEdit::drop-down {{
         subcontrol-origin: padding; subcontrol-position: center right;
-        border: none; width: 24px;
+        border: none; width: 22px; background: transparent;
     }}
-    QComboBox::down-arrow {{ image: url({arrow_dn}); width: 12px; height: 12px; }}
+    QComboBox::down-arrow, QDateEdit::down-arrow {{ image: url({arrow_dn}); width: 12px; height: 12px; }}
 
-    QSpinBox::up-button, QDoubleSpinBox::up-button, QDateEdit::up-button, QTimeEdit::up-button {{
-        subcontrol-origin: border; subcontrol-position: top right; width: 20px;
+    QSpinBox::up-button, QDoubleSpinBox::up-button, QTimeEdit::up-button {{
+        subcontrol-origin: border; subcontrol-position: top right; width: 18px;
         border-left: 1px solid {t.border}; border-top-right-radius: {field_radius}px;
         background: {t.surface};
     }}
-    QSpinBox::down-button, QDoubleSpinBox::down-button, QDateEdit::down-button, QTimeEdit::down-button {{
-        subcontrol-origin: border; subcontrol-position: bottom right; width: 20px;
+    QSpinBox::down-button, QDoubleSpinBox::down-button, QTimeEdit::down-button {{
+        subcontrol-origin: border; subcontrol-position: bottom right; width: 18px;
         border-left: 1px solid {t.border}; border-bottom-right-radius: {field_radius}px;
         background: {t.surface};
     }}
-    QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover, QDateEdit::up-button:hover, QTimeEdit::up-button:hover,
-    QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover, QDateEdit::down-button:hover, QTimeEdit::down-button:hover {{
+    QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover, QTimeEdit::up-button:hover,
+    QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover, QTimeEdit::down-button:hover {{
         background: {t.border};
     }}
-    QSpinBox::up-arrow, QDoubleSpinBox::up-arrow, QDateEdit::up-arrow, QTimeEdit::up-arrow {{
-        image: url({arrow_up}); width: 11px; height: 11px;
-    }}
-    QSpinBox::down-arrow, QDoubleSpinBox::down-arrow, QDateEdit::down-arrow, QTimeEdit::down-arrow {{
-        image: url({arrow_dn}); width: 11px; height: 11px;
-    }}
+    QSpinBox::up-arrow, QDoubleSpinBox::up-arrow, QTimeEdit::up-arrow {{ image: url({arrow_up}); width: 10px; height: 10px; }}
+    QSpinBox::down-arrow, QDoubleSpinBox::down-arrow, QTimeEdit::down-arrow {{ image: url({arrow_dn}); width: 10px; height: 10px; }}
 
     QComboBox QAbstractItemView {{
         background-color: {t.overlay};
@@ -457,6 +470,23 @@ def qss(theme: Theme | None = None) -> str:
     QSplitter::handle {{ background: {t.border}; }}
     QSplitter::handle:horizontal {{ width: 4px; }}
     QSplitter::handle:vertical {{ height: 4px; }}
+
+    QCalendarWidget QWidget {{ alternate-background-color: {t.surface}; }}
+    QCalendarWidget #qt_calendar_navigationbar {{ background: {t.surface}; }}
+    QCalendarWidget QToolButton {{
+        color: {t.text}; background: transparent; border: none;
+        padding: 4px 10px; border-radius: {t.radius_sm}px;
+    }}
+    QCalendarWidget QToolButton:hover {{ background: {t.border}; }}
+    QCalendarWidget QToolButton::menu-indicator {{ image: none; }}
+    QCalendarWidget QMenu {{ background: {t.overlay}; color: {t.text}; }}
+    QCalendarWidget QSpinBox {{ background: {t.field}; color: {t.text}; border: 1px solid {t.border}; }}
+    QCalendarWidget QAbstractItemView:enabled {{
+        background: {t.field}; color: {t.text};
+        selection-background-color: {t.accent}; selection-color: {t.on_accent};
+        outline: none;
+    }}
+    QCalendarWidget QAbstractItemView:disabled {{ color: {t.faint}; }}
 
     QMenu {{
         background-color: {t.overlay};
