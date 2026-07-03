@@ -73,7 +73,8 @@ def _csv_merge(existing: str, additions: list[str]) -> str:
 
 
 class SettingsWindow(QWidget):
-    _about_ready = Signal(object)   # marshaling da checagem de update (thread -> UI)
+    _about_ready = Signal(object)     # marshaling da checagem de update (thread -> UI)
+    _devices_ready = Signal(object)   # marshaling da enumeração de dispositivos (thread -> UI)
 
     def __init__(self, app):
         super().__init__()
@@ -83,6 +84,8 @@ class SettingsWindow(QWidget):
         self._level_probe = None
         # registro: (widget, seção, atributo, kind, choices|None)
         self._fields: list[tuple] = []
+        self._device_combos: list[tuple] = []   # (combo, 'mics'|'loopbacks') p/ popular async
+        self._devices_loaded = False
 
         self.setWindowTitle("ScribaDev — Configurações")
         self.setMinimumSize(720, 480)
@@ -101,6 +104,7 @@ class SettingsWindow(QWidget):
         self._build_dirs_tab()
         self._build_about_tab()
         self._about_ready.connect(self._show_about_update)
+        self._devices_ready.connect(self._fill_devices)
 
         foot = QHBoxLayout()
         self._saved = QLabel(""); self._saved.setProperty("role", "ok")
@@ -179,6 +183,19 @@ class SettingsWindow(QWidget):
         self._row(form, label, c, hint)
         return c
 
+    def _device_choice(self, form, label, section, attr, key, tooltip=""):
+        """Combo EDITÁVEL de dispositivo de áudio: '(padrão do Windows)' [valor ''] + a
+        lista enumerada (populada em thread no 1º show). Editável = passthrough do valor
+        salvo mesmo se o aparelho não estiver conectado agora. `key`: 'mics'|'loopbacks'."""
+        c = QComboBox(); c.setEditable(True); c.setInsertPolicy(QComboBox.NoInsert)
+        c.addItem("(padrão do Windows)", "")
+        if tooltip:
+            widgets.add_tooltip(c, tooltip)
+        self._fields.append((c, section, attr, "device", None))
+        self._device_combos.append((c, key))
+        self._row(form, label, c, None)
+        return c
+
     def _row(self, form: QFormLayout, label: str, widget: QWidget, hint: str | None) -> None:
         if hint:
             wrap = QWidget()
@@ -196,10 +213,10 @@ class SettingsWindow(QWidget):
     def _build_recording_tab(self) -> None:
         f = self._tab("Gravação")
         au = self._group(f, "Áudio")
-        self._text(au, "Microfone", "audio", "mic_device", placeholder="padrão do Windows",
-                   tooltip="Vazio = microfone padrão do Windows. Liste os dispositivos com: scribadev devices")
-        self._text(au, "Áudio do sistema", "audio", "loopback_device", placeholder="saída padrão do Windows",
-                   tooltip="Vazio = dispositivo de saída padrão do Windows (loopback do sistema)")
+        self._device_choice(au, "Microfone", "audio", "mic_device", "mics",
+                             tooltip="Escolha o microfone na lista ou deixe no padrão do Windows.")
+        self._device_choice(au, "Áudio do sistema", "audio", "loopback_device", "loopbacks",
+                             tooltip="Escolha a saída a capturar (loopback) ou use o padrão do Windows.")
         self._check(au, "Manter o áudio após transcrever", "audio", "keep_audio")
         self._choice(au, "Formato do áudio", "audio", "archive_format", _ARCHIVE)
         self._int(au, "Apagar gravação após (dias)", "audio", "retention_days", 0, 3650,
@@ -343,6 +360,33 @@ class SettingsWindow(QWidget):
         d = QFileDialog.getExistingDirectory(self, "Escolher pasta", entry.text() or "")
         if d:
             entry.setText(d)
+
+    # -- seletores de dispositivo de áudio -----------------------------------
+
+    def _devices_worker(self) -> None:
+        try:
+            data = util.list_audio_devices()
+        except Exception:
+            data = None
+        self._devices_ready.emit(data)
+
+    def _fill_devices(self, data) -> None:
+        """Popula os combos de dispositivo com a lista enumerada, preservando o valor
+        atual (selecionado se aparecer na lista; senão mantido como texto = passthrough)."""
+        if not data:
+            return
+        for combo, key in self._device_combos:
+            current = combo.currentText()
+            names = data.get(key) or []
+            while combo.count() > 1:      # mantém só o "(padrão do Windows)" no topo
+                combo.removeItem(1)
+            for n in names:
+                combo.addItem(n, n)
+            idx = combo.findText(current)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            else:
+                combo.setEditText(current)
 
     # -- aba Sobre -----------------------------------------------------------
 
@@ -558,6 +602,11 @@ class SettingsWindow(QWidget):
             return widget.currentText().strip()
         if kind == "choice":
             return widget.currentData()
+        if kind == "device":
+            idx = widget.currentIndex()
+            if idx >= 0 and widget.itemText(idx) == widget.currentText():
+                return widget.currentData() or ""    # item selecionado ('(padrão)' -> '')
+            return widget.currentText().strip()       # texto digitado (passthrough)
         return None
 
     def _widget_set(self, widget, kind, choices, value) -> None:
@@ -577,6 +626,13 @@ class SettingsWindow(QWidget):
                 widget.addItem(str(value), value)
                 idx = widget.findData(value)
             widget.setCurrentIndex(idx)
+        elif kind == "device":
+            v = str(value or "")
+            idx = widget.findData(v)
+            if idx >= 0:
+                widget.setCurrentIndex(idx)             # '' -> '(padrão)'; ou aparelho listado
+            else:
+                widget.setEditText(v)                   # passthrough: aparelho não listado (ainda)
 
     def _load(self) -> None:
         cfg = self.app.cfg
@@ -630,6 +686,9 @@ class SettingsWindow(QWidget):
             self._titlebar_done = True
             widgets.enable_dark_titlebar(self)
         self._load()   # relê (o config pode ter mudado)
+        if not self._devices_loaded:   # enumera dispositivos 1x, em thread (subprocesso lento)
+            self._devices_loaded = True
+            threading.Thread(target=self._devices_worker, daemon=True, name="devices").start()
 
     def hide(self) -> None:  # noqa: A003
         self._stop_mic_test()

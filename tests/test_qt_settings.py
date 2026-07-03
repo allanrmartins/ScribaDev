@@ -111,6 +111,28 @@ class SettingsTests(unittest.TestCase):
         win._save()
         self.assertNotEqual(config_mod.load().whisper.model, "tiny")  # config boa preservada
 
+    def test_device_combo_round_trip(self):
+        from scriba import config as config_mod
+        from scriba.qt.settings_ui import SettingsWindow
+
+        win = SettingsWindow(self._app())
+        mic, kind = self._field(win, "audio", "mic_device")
+        self.assertEqual(kind, "device")
+        self.assertEqual(win._widget_get(mic, "device", None), "")   # '(padrão)' selecionado -> ''
+        win._fill_devices({"mics": ["FIFINE Microphone", "Headset"], "loopbacks": []})
+        mic.setCurrentIndex(mic.findText("FIFINE Microphone"))
+        win._save()
+        self.assertEqual(config_mod.load().audio.mic_device, "FIFINE Microphone")
+
+    def test_device_combo_passthrough_aparelho_desconectado(self):
+        from scriba.qt.settings_ui import SettingsWindow
+
+        win = SettingsWindow(self._app())
+        mic, _ = self._field(win, "audio", "mic_device")
+        # valor salvo que não está na lista enumerada: mostrado como texto e devolvido no get
+        win._widget_set(mic, "device", None, "Aparelho Desconectado")
+        self.assertEqual(mic.currentText(), "Aparelho Desconectado")
+        self.assertEqual(win._widget_get(mic, "device", None), "Aparelho Desconectado")
 
     def test_prompt_editor_carrega_e_salva(self):
         from scriba import util
