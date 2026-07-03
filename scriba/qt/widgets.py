@@ -540,6 +540,7 @@ def remember_geometry(win, key: str, *, default: tuple[int, int, int, int] | Non
     saved = geoms.get(key)
     rect = saved if _is_geom(saved) else (list(default) if default else None)
     if rect:
+        rect = _clamp_to_screen(rect)   # não abrir fora da tela se o monitor mudou (#61)
         try:
             win.setGeometry(int(rect[0]), int(rect[1]), int(rect[2]), int(rect[3]))
         except Exception:
@@ -569,6 +570,76 @@ def remember_geometry(win, key: str, *, default: tuple[int, int, int, int] | Non
     filt = _MoveResizeFilter(debounce)
     win.installEventFilter(filt)
     win._geom_filter = filt  # segura a referência (senão o GC leva o filtro)
+
+
+def _clamp_to_screen(rect):
+    """Encaixa [x, y, w, h] na área útil de ALGUM monitor: se a geometria salva caiu fora
+    da tela (monitor removido/reconfigurado entre sessões), recoloca dentro do work area do
+    monitor mais próximo em vez de a janela abrir invisível. Best-effort (devolve o rect
+    original em erro). Beneficia todas as janelas Qt que usam remember_geometry."""
+    try:
+        from PySide6.QtCore import QPoint
+        from PySide6.QtGui import QGuiApplication
+
+        x, y, w, h = (int(v) for v in rect)
+        screen = QGuiApplication.screenAt(QPoint(x + w // 2, y + h // 2)) or QGuiApplication.primaryScreen()
+        if screen is None:
+            return rect
+        a = screen.availableGeometry()
+        w = min(w, a.width())
+        h = min(h, a.height())
+        x = min(max(x, a.left()), a.right() - w + 1)
+        y = min(max(y, a.top()), a.bottom() - h + 1)
+        return [x, y, w, h]
+    except Exception:
+        return rect
+
+
+def remember_splitter(split, key: str, *, left_ratio: float = 0.28,
+                      left_min: int = 240, left_max: int = 360) -> None:
+    """Persiste a divisão de um QSplitter (state.json, `_geom_qt[key]` em base64) e a
+    restaura ao abrir. Sem estado salvo, aplica um default PROPORCIONAL à largura com
+    clamp no painel esquerdo (`left_min..left_max`) em vez de um tamanho fixo. Salva com
+    debounce a cada arraste. Silencioso em erro. Mesma infra (state.json) do
+    remember_geometry — não usa QSettings."""
+    from PySide6.QtCore import QByteArray
+
+    geoms = util.read_state().get("_geom_qt") or {}
+    saved = geoms.get(key)
+    restored = False
+    if isinstance(saved, str):
+        try:
+            restored = bool(split.restoreState(QByteArray.fromBase64(saved.encode("ascii"))))
+        except Exception:
+            restored = False
+    if not restored:
+        def _apply_default() -> None:
+            try:
+                total = split.width() or sum(split.sizes()) or 1040
+                left = int(max(left_min, min(left_max, total * left_ratio)))
+                split.setSizes([left, max(1, total - left)])
+            except RuntimeError:
+                pass
+        QTimer.singleShot(0, _apply_default)
+
+    debounce = QTimer(split)
+    debounce.setSingleShot(True)
+    debounce.setInterval(500)
+
+    def _save() -> None:
+        try:
+            b = bytes(split.saveState().toBase64()).decode("ascii")
+        except Exception:
+            return
+        cur = util.read_state().get("_geom_qt")
+        cur = cur if isinstance(cur, dict) else {}
+        if cur.get(key) != b:
+            cur[key] = b
+            util.update_state(_geom_qt=cur)
+
+    debounce.timeout.connect(_save)
+    split.splitterMoved.connect(lambda *_: debounce.start())
+    split._splitter_debounce = debounce   # segura a referência (senão o GC leva o timer)
 
 
 def _is_geom(v) -> bool:

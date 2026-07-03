@@ -159,7 +159,10 @@ class NotesWindow(QWidget):
         split.addWidget(self._build_right())
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
-        split.setSizes([300, 620])
+        # divisão persistida entre sessões + default proporcional com clamp (#61); o
+        # minimumWidth dos dois painéis (esquerdo aqui, direito no _build_right) garante
+        # que a command bar nunca seja espremida.
+        widgets.remember_splitter(split, "qt_notes_splitter")
 
         self._search_timer = QTimer(self); self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(350); self._search_timer.timeout.connect(self._refresh_list)
@@ -173,6 +176,7 @@ class NotesWindow(QWidget):
 
     def _build_left(self) -> QWidget:
         left = QWidget()
+        left.setMinimumWidth(240)   # proteção estrutural (#61): esquerda não some/estoura
         lay = QVBoxLayout(left); lay.setContentsMargins(0, 0, 0, 0)
         title = QLabel("Reuniões"); title.setStyleSheet("font-weight:bold;")
         lay.addWidget(title)
