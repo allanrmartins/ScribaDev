@@ -256,11 +256,10 @@ def _rgba(hex_color: str, alpha: float) -> str:
     return f"rgba({r}, {g}, {b}, {alpha})"
 
 
-def _arrow_icon_path(color: str, *, up: bool = False) -> str:
-    """Path (forward slashes p/ o QSS) de um SVG de seta na cor do tema, gerado 1x num
-    cache gravável e reusado. Arquivo em vez de data-uri porque o Qt só carrega `url()`
-    do QSS a partir de ARQUIVO, não de `data:image/svg` — sem isto combos/spins ficam
-    sem seta (parecem campo de texto). Falha graciosa (seta some) se o cache não gravar."""
+def _icon_path(name: str, svg: str) -> str:
+    """Grava (1x) um SVG num cache gravável e devolve o path (forward slashes p/ o QSS).
+    Arquivo em vez de data-uri porque o Qt só carrega `url()` do QSS de ARQUIVO, não de
+    `data:image/svg` — sem isto combos/spins/date ficam sem ícone. Falha graciosa."""
     from pathlib import Path
 
     d = Path(util.STATE_PATH).parent / "qt_icons"
@@ -268,16 +267,32 @@ def _arrow_icon_path(color: str, *, up: bool = False) -> str:
         d.mkdir(parents=True, exist_ok=True)
     except OSError:
         pass
-    path = d / f"arrow_{'up' if up else 'dn'}_{color.lstrip('#')}.svg"
+    path = d / name
     if not path.exists():
-        pts = "3,8 9,8 6,3.5" if up else "3,4 9,4 6,8.5"
         try:
-            path.write_text(
-                f"<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12'>"
-                f"<polygon points='{pts}' fill='{color}'/></svg>", encoding="utf-8")
+            path.write_text(svg, encoding="utf-8")
         except OSError:
             pass
     return str(path).replace("\\", "/")
+
+
+def _arrow_icon_path(color: str, *, up: bool = False) -> str:
+    """SVG de seta (▲/▼) na cor do tema — indicador de QComboBox e das setas de QSpinBox."""
+    pts = "3,8 9,8 6,3.5" if up else "3,4 9,4 6,8.5"
+    svg = (f"<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12'>"
+           f"<polygon points='{pts}' fill='{color}'/></svg>")
+    return _icon_path(f"arrow_{'up' if up else 'dn'}_{color.lstrip('#')}.svg", svg)
+
+
+def _calendar_icon_path(color: str) -> str:
+    """SVG de ícone de calendário na cor do tema — indicador dos QDateEdit (no lugar da seta)."""
+    svg = (f"<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>"
+           f"<rect x='2.2' y='3.4' width='11.6' height='10.4' rx='1.6' fill='none' stroke='{color}' stroke-width='1.3'/>"
+           f"<line x1='2.2' y1='6.6' x2='13.8' y2='6.6' stroke='{color}' stroke-width='1.3'/>"
+           f"<line x1='5.2' y1='1.9' x2='5.2' y2='4.2' stroke='{color}' stroke-width='1.4' stroke-linecap='round'/>"
+           f"<line x1='10.8' y1='1.9' x2='10.8' y2='4.2' stroke='{color}' stroke-width='1.4' stroke-linecap='round'/>"
+           f"</svg>")
+    return _icon_path(f"calendar_{color.lstrip('#')}.svg", svg)
 
 
 def window_gradient(theme: Theme | None = None, *, alpha: float = 1.0) -> str:
@@ -299,6 +314,7 @@ def qss(theme: Theme | None = None) -> str:
     field_radius = t.radius + 3  # campos mais macios/arredondados (não "terminal")
     arrow_dn = _arrow_icon_path(t.text)
     arrow_up = _arrow_icon_path(t.text, up=True)
+    cal_icon = _calendar_icon_path(t.text)
     return f"""
     QWidget {{
         background-color: {t.bg};
@@ -379,7 +395,8 @@ def qss(theme: Theme | None = None) -> str:
         subcontrol-origin: padding; subcontrol-position: center right;
         border: none; width: 22px; background: transparent;
     }}
-    QComboBox::down-arrow, QDateEdit::down-arrow {{ image: url({arrow_dn}); width: 12px; height: 12px; }}
+    QComboBox::down-arrow {{ image: url({arrow_dn}); width: 12px; height: 12px; }}
+    QDateEdit::down-arrow {{ image: url({cal_icon}); width: 15px; height: 15px; }}
 
     QSpinBox::up-button, QDoubleSpinBox::up-button, QTimeEdit::up-button {{
         subcontrol-origin: border; subcontrol-position: top right; width: 18px;
