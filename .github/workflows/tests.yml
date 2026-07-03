@@ -16,8 +16,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"   # piso do pyproject (requires-python >=3.12)
-      - name: Instalar deps do projeto + extra qt (migração #44; sem cuda/diarization)
-        run: pip install -e .[qt]
+      - name: Instalar deps do projeto (PySide6 já é core desde o corte #53; sem cuda/diarization)
+        run: pip install -e .
       - name: Rodar a suite de testes
         # QT_QPA_PLATFORM=offscreen: o smoke da UI Qt roda sem display no runner
         env:

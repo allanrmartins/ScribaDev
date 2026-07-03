@@ -1,11 +1,11 @@
 """Orquestração do ScribaDev: detector → gravador → pipeline → notificações/UI.
 
 Modelo de threads:
-- main thread: Tk root oculto (pílula) drenando uma fila de comandos de UI;
-- pystray: run_detached;
+- main thread: QApplication (Qt) drenando uma fila de comandos de UI via UiPump;
 - detector: thread vigiando o registro;
 - worker: thread processando pastas gravadas (transcrição + notas), em fila —
   uma call nova pode ser gravada enquanto a anterior ainda transcreve.
+A UI é PySide6 (scriba/qt/); qualquer thread agenda trabalho na GUI por self.ui(fn).
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ import queue
 import sys
 import threading
 import time
-import tkinter as tk
 
 from . import util
 from .config import load
@@ -88,7 +87,8 @@ class ScribaApp:
         self.rec_source = "auto"
         self.rec_lock = threading.Lock()
         self.call_active = False  # call do Teams em andamento (a pílula segue a call)
-        self.root: tk.Tk | None = None
+        self._app = None  # QApplication (criado em run())
+        self._pump = None  # UiPump que drena a ui_queue na thread da GUI
         self.pill = None
         self.tray = None
         self.settings = None
@@ -119,8 +119,14 @@ class ScribaApp:
                 log.exception("toast falhou")
 
     def ui(self, fn) -> None:
-        """Agenda um callable para rodar na thread do Tk."""
+        """Agenda um callable para rodar na thread da GUI (drenado pelo UiPump)."""
         self.ui_queue.put(fn)
+
+    def _after(self, ms: int, fn) -> None:
+        """Agenda `fn` na thread da GUI após `ms` (substitui o root.after do Tk)."""
+        from PySide6.QtCore import QTimer
+
+        QTimer.singleShot(ms, fn)
 
     def is_recording(self) -> bool:
         with self.rec_lock:
@@ -165,8 +171,8 @@ class ScribaApp:
         if self.tray and self.is_recording():
             self._tray_pulse = not getattr(self, "_tray_pulse", False)
             self.tray.set_recording(True, self.status_text(), dim=self._tray_pulse)
-            if self.root is not None and not self.stop_event.is_set():
-                self.root.after(700, self._tick_tray)  # ritmo de pulso (~como a pílula)
+            if self._app is not None and not self.stop_event.is_set():
+                self._after(700, self._tick_tray)  # ritmo de pulso (~como a pílula)
 
     # --------------------------------------------------------------- call --
 
@@ -300,7 +306,7 @@ class ScribaApp:
 
     def _ask_speakers_then_enqueue(self, folder) -> None:
         """(thread de UI) Abre a janela e enfileira a reunião quando ela resolver."""
-        from .speakers_ui import ask_num_speakers
+        from .qt.speakers_ui import ask_num_speakers
 
         def done(n: int | None) -> None:
             if n is not None:
@@ -311,7 +317,7 @@ class ScribaApp:
         try:
             last = util.read_state().get("last_num_speakers")
             ask_num_speakers(
-                self.root, done,
+                done,
                 last_value=last if isinstance(last, int) else None,
                 timeout_seconds=int(self.cfg.diarization.ask_speakers_timeout or 0),
             )
@@ -375,9 +381,9 @@ class ScribaApp:
 
     def _open_settings_ui(self) -> None:
         if self.settings is None:
-            from .settings_ui import SettingsWindow
+            from .qt.settings_ui import SettingsWindow
 
-            self.settings = SettingsWindow(self.root, self)
+            self.settings = SettingsWindow(self)
         self.settings.show()
 
     def show_notes(self) -> None:
@@ -386,9 +392,9 @@ class ScribaApp:
 
     def _open_notes_ui(self) -> None:
         if self.notes_win is None:
-            from .notes_ui import NotesWindow
+            from .qt.notes_ui import NotesWindow
 
-            self.notes_win = NotesWindow(self.root, self)
+            self.notes_win = NotesWindow(self)
         self.notes_win.show()
 
     def show_log(self) -> None:
@@ -397,9 +403,9 @@ class ScribaApp:
 
     def _open_log_ui(self) -> None:
         if self.log_win is None:
-            from .log_ui import LogWindow
+            from .qt.log_ui import LogWindow
 
-            self.log_win = LogWindow(self.root, self)
+            self.log_win = LogWindow(self)
         self.log_win.show()
 
     # -- exceções não tratadas (#22) -------------------------------------------
@@ -409,7 +415,7 @@ class ScribaApp:
         diálogo amigável (sem console, uma exceção sumia calada). Crash cedo demais
         (root ainda None) ou já encerrando → fica só no log."""
         log.error("exceção não tratada (%s)", where, exc_info=exc_info)
-        if self.root is None or self.stop_event.is_set():
+        if self._app is None or self.stop_event.is_set():
             return
         import traceback as _tb
 
@@ -421,7 +427,7 @@ class ScribaApp:
 
     def _show_crash(self, detail: str) -> None:
         try:
-            from .log_ui import show_crash_dialog
+            from .qt.log_ui import show_crash_dialog
 
             show_crash_dialog(self, detail)
         except Exception:
@@ -482,7 +488,8 @@ class ScribaApp:
         Auto-restart do update (#19)."""
         import subprocess
         from pathlib import Path
-        from tkinter import messagebox
+
+        from PySide6.QtWidgets import QMessageBox
 
         pyw = Path(sys.executable)
         if pyw.name.lower() == "python.exe":
@@ -503,14 +510,14 @@ class ScribaApp:
         # UMA única mensagem com o resultado final — nunca uma 2ª em cascata.
         try:
             if scheduled:
-                messagebox.showinfo(
-                    "ScribaDev atualizado",
+                QMessageBox.information(
+                    None, "ScribaDev atualizado",
                     "A atualização foi aplicada com sucesso.\n\n"
                     "O app vai fechar e reabrir sozinho em alguns segundos.",
                 )
             else:
-                messagebox.showwarning(
-                    "ScribaDev atualizado",
+                QMessageBox.warning(
+                    None, "ScribaDev atualizado",
                     "A atualização foi aplicada, mas não consegui reiniciar automaticamente.\n\n"
                     "Feche e abra o ScribaDev para usar a nova versão.",
                 )
@@ -534,9 +541,9 @@ class ScribaApp:
 
     def _open_wizard_ui(self) -> None:
         if self.wizard_win is None:
-            from .wizard_ui import WizardWindow
+            from .qt.wizard_ui import WizardWindow
 
-            self.wizard_win = WizardWindow(self.root, self)
+            self.wizard_win = WizardWindow(app=self)
         self.wizard_win.show()
 
     def _maybe_offer_wizard(self) -> None:
@@ -601,10 +608,9 @@ class ScribaApp:
 
     def _ensure_pill(self):
         if self.pill is None:
-            from .overlay import RecordingPill
+            from .qt.overlay import RecordingPill
 
             self.pill = RecordingPill(
-                self.root,
                 # ■ = intenção explícita de guardar: ignora a duração mínima
                 on_stop=lambda: threading.Thread(
                     target=self.stop_recording, kwargs={"keep": True}, daemon=True
@@ -624,7 +630,7 @@ class ScribaApp:
 
     def _show_pill(self) -> None:
         """Pílula em modo gravação (●/cronômetro/■/×)."""
-        if not self.cfg.ui.overlay or self.root is None:
+        if not self.cfg.ui.overlay or self._app is None:
             return
         pill = self._ensure_pill()
         pill.set_mode("recording")
@@ -634,7 +640,7 @@ class ScribaApp:
 
     def _show_pill_idle(self) -> None:
         """Pílula em modo espera (⏺ Gravar reunião) — call ativa sem gravação."""
-        if not self.cfg.ui.overlay or self.root is None:
+        if not self.cfg.ui.overlay or self._app is None:
             return
         pill = self._ensure_pill()
         pill.set_mode("idle")
@@ -654,7 +660,7 @@ class ScribaApp:
 
     def _pill_processing(self, status: str) -> None:
         """Mostra o estágio do processamento na pílula (fora de call/gravação ativa)."""
-        if not self.cfg.ui.overlay or self.root is None:
+        if not self.cfg.ui.overlay or self._app is None:
             return
         if self.is_recording() or self.call_active:
             return  # a pílula está servindo a uma call/gravação ativa
@@ -669,14 +675,14 @@ class ScribaApp:
         self._hide_pill()
 
     def _tick_pill(self) -> None:
-        if self.pill is None or self.root is None:
+        if self.pill is None or self._app is None:
             return
         with self.rec_lock:
             rec = self.rec
         if rec is None:
             return
         self.pill.set_elapsed(rec.duration_seconds())
-        self.root.after(500, self._tick_pill)
+        self._after(500, self._tick_pill)
 
     # -------------------------------------------------------------- worker --
 
@@ -856,8 +862,8 @@ class ScribaApp:
     def _purge_loop(self) -> None:
         """Roda a retenção (em thread, fora da UI) e reagenda a cada 6 h."""
         threading.Thread(target=self.purge_old, daemon=True, name="purge").start()
-        if self.root is not None and not self.stop_event.is_set():
-            self.root.after(6 * 3600 * 1000, self._purge_loop)
+        if self._app is not None and not self.stop_event.is_set():
+            self._after(6 * 3600 * 1000, self._purge_loop)
 
     def _reindex_search_index(self) -> None:
         """Boot (#12): reconstrói o índice de busca das reuniões se estiver vazio
@@ -890,39 +896,36 @@ class ScribaApp:
 
     def request_quit(self) -> None:
         self.stop_event.set()
-
-    def _drain_ui(self) -> None:
-        while True:
-            try:
-                fn = self.ui_queue.get_nowait()
-            except queue.Empty:
-                break
-            try:
-                fn()
-            except Exception:
-                log.exception("erro em callback de UI")
-        if self.stop_event.is_set():
-            self.root.quit()
-            return
-        self.root.after(100, self._drain_ui)
+        if self._app is not None:
+            self.ui(self._app.quit)   # encerra o loop Qt na thread da GUI
 
     def run(self) -> int:
-        # exceções não tratadas (em threads ou callbacks Tk) iam para o nada no modo
-        # sem console — agora ficam no log E abrem um diálogo amigável (#22)
+        # exceções não tratadas (em threads/slots) iam para o nada no modo sem console —
+        # agora ficam no log E abrem um diálogo amigável (#22)
         sys.excepthook = lambda *exc: self._on_unhandled(exc, "geral")
         threading.excepthook = lambda args: self._on_unhandled(
             (args.exc_type, args.exc_value, args.exc_traceback),
             f"thread {args.thread.name if args.thread else '?'}",
         )
-        self.root = tk.Tk()
-        self.root.withdraw()  # inicia só na bandeja; a janela abre pela bandeja/atalho
-        self.root.report_callback_exception = lambda *exc: self._on_unhandled(exc, "callback Tk")
 
-        from .main_window import MainWindow
+        from PySide6.QtWidgets import QApplication
 
-        self.main_win = MainWindow(self.root, self)
+        from .qt import theme
+        from .qt.pump import UiPump
 
-        from .tray import Tray
+        self._app = QApplication.instance() or QApplication(sys.argv)
+        # fechar uma janela (X) não encerra o app: ele segue na bandeja
+        self._app.setQuitOnLastWindowClosed(False)
+        theme.apply(self._app)
+        self._pump = UiPump()
+        self._pump.queue = self.ui_queue   # a pump drena a MESMA fila do self.ui(fn)
+        self._pump.start()
+
+        from .qt.main_window import MainWindow
+
+        self.main_win = MainWindow(self)   # nasce oculta; abre pela bandeja/atalho
+
+        from .qt.tray import Tray
 
         self.tray = Tray(self)
         self.tray.start()
@@ -942,16 +945,15 @@ class ScribaApp:
         threading.Thread(target=self._show_window_listener, daemon=True, name="activate").start()
         self._setup_hotkey()
         self.scan_pending()
-        self.root.after(8000, self._purge_loop)  # limpeza de gravações antigas (e a cada 6 h)
-        self.root.after(2500, self._maybe_offer_wizard)  # 1º uso: assistente de perfil
-        self.root.after(5000, self._reindex_search_index)  # índice de busca (#12), só se vazio
-        self.root.after(9000, self._check_updates_boot)    # aviso de nova versão (#19)
+        self._after(8000, self._purge_loop)  # limpeza de gravações antigas (e a cada 6 h)
+        self._after(2500, self._maybe_offer_wizard)  # 1º uso: assistente de perfil
+        self._after(5000, self._reindex_search_index)  # índice de busca (#12), só se vazio
+        self._after(9000, self._check_updates_boot)    # aviso de nova versão (#19)
 
         if not self.start_hidden:
             self.show_main()  # lançamento manual (atalho): abre a janela na frente
         log.info("ScribaDev iniciado — monitorando calls do Teams")
-        self.root.after(100, self._drain_ui)
-        self.root.mainloop()
+        self._app.exec()
 
         # saída: salva gravação em andamento; pendências ficam para o próximo start
         if self.is_recording():

@@ -33,10 +33,11 @@ class WizardWindow(QWidget):
     _prompt_ready = Signal(object)   # (prompt, hotwords) | None
     _jargon_ready = Signal(object)   # str | None
 
-    def __init__(self, app=None, on_applied=None):
+    def __init__(self, app=None, on_applied=None, standalone=False):
         super().__init__()
         self.app = app
         self.on_applied = on_applied
+        self._standalone = standalone   # `scriba wizard`: fechar encerra (não esconde)
         self._result: tuple[str, str] | None = None
         self._busy = False
         self._titlebar_done = False
@@ -232,6 +233,9 @@ class WizardWindow(QWidget):
         super().hide()
 
     def closeEvent(self, event) -> None:
+        if self._standalone:      # cli `scriba wizard`: fechar realmente encerra
+            super().closeEvent(event)
+            return
         event.ignore()
         self.hide()
 

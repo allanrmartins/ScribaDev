@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import mdview, util
+from .. import mdparse, util
 from . import theme, widgets
 
 log = logging.getLogger("scriba.qt.notes_ui")
@@ -66,8 +66,8 @@ def _strip_frontmatter(md: str) -> str:
 
 
 def _summary_and_transcript(md: str) -> tuple[str, str | None]:
-    """(resumo SEM a transcrição, transcrição|None) — via mdview.split_sections (puro)."""
-    pre, secs = mdview.split_sections(_strip_frontmatter(md))
+    """(resumo SEM a transcrição, transcrição|None) — via mdparse.split_sections (puro)."""
+    pre, secs = mdparse.split_sections(_strip_frontmatter(md))
     parts = [pre.strip()] if pre.strip() else []
     transcript = None
     for title, text in secs:

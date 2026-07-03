@@ -317,16 +317,16 @@ def _print(level: str, label: str, detail: str = "") -> None:
 
 def cmd_wizard() -> int:
     """`scriba wizard`: abre o assistente de perfil sozinho (sem a bandeja)."""
-    import tkinter as tk
+    from PySide6.QtWidgets import QApplication
 
-    from .wizard_ui import WizardWindow
+    from .qt import theme
+    from .qt.wizard_ui import WizardWindow
 
-    root = tk.Tk()
-    root.withdraw()
-    win = WizardWindow(root, app=None, on_applied=root.quit)
-    win.win.protocol("WM_DELETE_WINDOW", root.quit)  # fechar a janela encerra o comando
+    app = QApplication.instance() or QApplication([])
+    theme.apply(app)
+    win = WizardWindow(app=None, on_applied=app.quit, standalone=True)  # aplicar/fechar encerra
     win.show()
-    root.mainloop()
+    app.exec()
     print("assistente encerrado — o prompt aplicado (se houver) vale na próxima ata.")
     return 0
 

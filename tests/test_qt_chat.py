@@ -79,6 +79,31 @@ class ChatTests(unittest.TestCase):
         self.assertEqual(len(win._history), 0)
         self.assertEqual(self._rows(win), 1)          # sobra só a confirmação do /clear
 
+    def test_summary_payload_nunca_despeja_transcricao(self):
+        win = self._win(transcript="FALA SECRETA que nao deve vazar no prompt")
+        p = win._summary_payload("o que decidiu?")
+        self.assertIn("## Resumo", p)                        # o resumo entra
+        self.assertNotIn("FALA SECRETA", p)                  # a transcrição NUNCA
+        self.assertTrue(p.rstrip().endswith("Pergunta: o que decidiu?\nResposta:"))
+
+    def test_resposta_vazia_nao_conta_nem_avisa(self):
+        win = self._win()
+        for _ in range(8):
+            win._answered("q", None)                          # falha da IA: não entra no histórico
+        self.assertEqual(win._history, [])
+        self.assertFalse(win._warned)
+
+    def test_aviso_rearmado_apos_clear(self):
+        win = self._win()
+        for i in range(6):
+            win._answered(f"q{i}", f"a{i}")
+        self.assertTrue(win._warned)
+        win._clear_context()
+        self.assertFalse(win._warned)                        # /clear rearma o aviso
+        for i in range(6):
+            win._answered(f"r{i}", f"b{i}")
+        self.assertTrue(win._warned)                         # avisou de novo no 2º ciclo
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

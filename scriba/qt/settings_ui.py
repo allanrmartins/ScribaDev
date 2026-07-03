@@ -59,6 +59,19 @@ _CHAT_MODELS = {"Mesmo do resumo": "", "Haiku 4.5": "claude-haiku-4-5",
                 "Sonnet 4.6": "claude-sonnet-4-6", "Opus 4.8": "claude-opus-4-8"}
 
 
+def _csv_merge(existing: str, additions: list[str]) -> str:
+    """Acrescenta `additions` a uma lista CSV, sem duplicar (case-insensitive),
+    preservando a ordem e o formato 'a, b, c' que detector.*_from consome. Puro;
+    usado pelos presets da aba Detecção (#21 — UI dos presets fica p/ o #54)."""
+    items = [p.strip() for p in (existing or "").split(",") if p.strip()]
+    seen = {i.lower() for i in items}
+    for a in additions:
+        if a.lower() not in seen:
+            items.append(a)
+            seen.add(a.lower())
+    return ", ".join(items)
+
+
 class SettingsWindow(QWidget):
     _about_ready = Signal(object)   # marshaling da checagem de update (thread -> UI)
 

@@ -1,7 +1,5 @@
-"""Testes de scriba.settings_ui._csv_merge: presets da aba Detecção (#21).
-
-Só a função pura é testada aqui; a janela em si exige um root Tk com display.
-"""
+"""Testes de _csv_merge: presets da aba Detecção (#21). Só a função pura (o helper
+migrou para scriba.qt.settings_ui no corte para Qt, #53)."""
 
 import sys
 import unittest
@@ -9,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scriba.settings_ui import _csv_merge  # noqa: E402
+from scriba.qt.settings_ui import _csv_merge  # noqa: E402
 
 
 class CsvMergeTests(unittest.TestCase):
