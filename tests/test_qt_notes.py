@@ -15,6 +15,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 _HAS_PYSIDE = importlib.util.find_spec("PySide6") is not None
 
+_TOGGLE = "scriba:toggle-transcript"   # = notes_ui._TOGGLE_ANCHOR (link interno da transcrição)
+
 _NOTE_MD = (
     "---\ntitulo: Boleto não gera\ndata: 2026-07-02T15:30:00\ncliente: ACME\nduracao_minutos: 42\n---\n\n"
     "## Objetivo\nInvestigar o boleto em produção.\n\n"
@@ -112,6 +114,47 @@ class NotesWindowSmokeTests(unittest.TestCase):
         win._run_find()
         self.assertGreaterEqual(len(win._hits), 1)
         self.assertIn("/", win._find_count.text())                     # "N/M"
+
+    def test_transcricao_expande_por_link_no_documento(self):
+        from PySide6.QtCore import QUrl
+
+        win = self._win()          # _NOTE_MD tem "## Transcrição completa\nfala um..."
+        win._refresh_list()
+        win._tree.setCurrentItem(next(iter(win._items)))
+        win._show_selected()
+        # o checkbox "incluir transcrição" da find bar não existe mais
+        self.assertFalse(hasattr(win, "_find_transcript"))
+        # colapsado: link "Mostrar", sem o corpo da transcrição
+        txt = win._view.toPlainText()
+        self.assertIn("Mostrar transcrição completa", txt)
+        self.assertNotIn("fala um sobre boleto", txt)
+        self.assertFalse(win._transcript_shown)
+        # clicar no link expande no PRÓPRIO documento
+        win._on_anchor(QUrl(_TOGGLE))
+        self.assertTrue(win._transcript_shown)
+        txt2 = win._view.toPlainText()
+        self.assertIn("fala um sobre boleto", txt2)
+        self.assertIn("Ocultar", txt2)
+        # clicar de novo recolhe
+        win._on_anchor(QUrl(_TOGGLE))
+        self.assertFalse(win._transcript_shown)
+        self.assertNotIn("fala um sobre boleto", win._view.toPlainText())
+
+    def test_toggle_transcricao_nao_salta_para_hit(self):
+        from PySide6.QtCore import QUrl
+
+        win = self._win()
+        win._refresh_list()
+        win._tree.setCurrentItem(next(iter(win._items)))
+        win._show_selected()
+        win._find.setText("boleto")
+        win._run_find()                     # busca ativa (jump=True move p/ o 1º hit)
+        # a partir daqui, alternar a transcrição NÃO pode saltar para um hit
+        jumped = []
+        win._goto_hit = lambda: jumped.append(True)
+        win._on_anchor(QUrl(_TOGGLE))
+        self.assertEqual(jumped, [], "alternar a transcrição não deveria saltar para um hit")
+        self.assertGreaterEqual(len(win._hits), 1, "os hits deveriam ser recoloridos no novo conteúdo")
 
     def test_lista_vazia_mostra_mensagem(self):
         from scriba.qt.notes_ui import NotesWindow

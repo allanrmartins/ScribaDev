@@ -54,6 +54,7 @@ _FRONT_DATA = re.compile(r"^data:\s*(.+)$", re.M)
 _FRONT_CLIENT = re.compile(r"^cliente:[ \t]*(.+)$", re.M)
 _NAME_DT = re.compile(r"(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})")
 _TRANSCRIPT_TITLE = "transcrição completa"
+_TOGGLE_ANCHOR = "scriba:toggle-transcript"   # link interno p/ mostrar/ocultar a transcrição
 
 
 # -- helpers puros (sem UI) ---------------------------------------------------
@@ -287,14 +288,14 @@ class NotesWindow(QWidget):
         self._find_count = QLabel(""); self._find_count.setProperty("role", "muted")
         self._find_count.setFixedWidth(48)
         fl.addWidget(self._find_count)
-        self._find_transcript = widgets.AnimatedCheckBox("incluir transcrição")
-        self._find_transcript.toggled.connect(self._on_toggle_transcript)
-        fl.addWidget(self._find_transcript)
         lay.addWidget(self._find_bar)
 
-        # leitor de markdown
+        # leitor de markdown. A transcrição é expandida/recolhida por um LINK no próprio
+        # documento (anchorClicked), não por um checkbox na find bar — assim a rolagem
+        # é preservada e a busca não salta pro 1º hit (o antigo "a tela se realinha").
         self._view = QTextBrowser()
-        self._view.setOpenExternalLinks(True)
+        self._view.setOpenLinks(False)   # nós tratamos os cliques (link interno + externos)
+        self._view.anchorClicked.connect(self._on_anchor)
         lay.addWidget(self._view, 1)
 
         # painel de progresso (reunião em processamento)
@@ -566,22 +567,41 @@ class NotesWindow(QWidget):
         self._reset_find()
 
     def _render_view(self, summary_md: str) -> None:
-        """Mostra o resumo; se há transcrição, um rótulo no fim permite expandi-la
-        (colapsada por padrão, como na versão tk)."""
+        """Mostra o resumo; se há transcrição, um LINK no fim a expande/recolhe no próprio
+        documento. Colapsada por padrão. O toggle preserva a rolagem (_toggle_transcript_view)."""
         md = summary_md
         if self._transcript_md and not self._transcript_shown:
-            md += "\n\n---\n*Transcrição completa oculta — marque \"incluir transcrição\" para vê-la.*"
+            md += f"\n\n---\n\n[Mostrar transcrição completa]({_TOGGLE_ANCHOR})"
         elif self._transcript_md and self._transcript_shown:
-            md += f"\n\n## Transcrição completa\n\n{self._transcript_md}"
+            md += (f"\n\n---\n\n[Ocultar transcrição completa]({_TOGGLE_ANCHOR})"
+                   f"\n\n## Transcrição completa\n\n{self._transcript_md}")
         self._view.setMarkdown(md)
 
-    def _on_toggle_transcript(self, checked: bool) -> None:
-        self._transcript_shown = checked
-        sel = self._selected_md()
-        if sel is not None:
-            summary, self._transcript_md = _summary_and_transcript(sel)
-            self._render_view(summary)
-            self._run_find()
+    def _on_anchor(self, url) -> None:
+        """Clique num link do leitor: o link interno alterna a transcrição SEM navegar
+        (setOpenLinks(False)); links http/mailto reais abrem no app externo."""
+        if url.toString() == _TOGGLE_ANCHOR:
+            self._toggle_transcript_view()
+            return
+        if url.scheme() in ("http", "https", "mailto"):
+            from PySide6.QtGui import QDesktopServices
+
+            QDesktopServices.openUrl(url)
+
+    def _toggle_transcript_view(self) -> None:
+        """Mostra/oculta a transcrição preservando a posição de leitura: o resumo acima
+        não muda, então restaurar o valor da barra mantém o ponto; e NÃO salta para hit
+        de busca (só recolore). Fim do "a tela se realinha"."""
+        md = self._selected_md()
+        if md is None or not self._transcript_md:
+            return
+        bar = self._view.verticalScrollBar()
+        pos = bar.value()
+        self._transcript_shown = not self._transcript_shown
+        summary, self._transcript_md = _summary_and_transcript(md)
+        self._render_view(summary)
+        bar.setValue(min(pos, bar.maximum()))
+        self._run_find(jump=False)
 
     # -- presentes -----------------------------------------------------------
 
@@ -780,7 +800,7 @@ class NotesWindow(QWidget):
 
     # -- find-in-note --------------------------------------------------------
 
-    def _run_find(self) -> None:
+    def _run_find(self, jump: bool = True) -> None:
         query = self._find.text().strip()
         self._clear_hits()
         if not query:
@@ -805,7 +825,10 @@ class NotesWindow(QWidget):
         self._view.setExtraSelections(sels)
         if self._hits:
             self._hit_idx = 0
-            self._goto_hit()
+            if jump:
+                self._goto_hit()
+            else:   # recolore os hits sem mover o cursor/rolagem (toggle da transcrição)
+                self._find_count.setText(f"1/{len(self._hits)}")
         else:
             self._find_count.setText("0/0")
 
