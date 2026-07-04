@@ -365,5 +365,63 @@ class ActionStateTests(unittest.TestCase):
         self.assertEqual(notes.load_action_state(self.tmp / "nao_existe"), {})
 
 
+class OpenActionItemsTests(unittest.TestCase):
+    """notes.open_action_items: agrega os itens ABERTOS de várias reuniões p/ a capa (#56)."""
+
+    _MD = (
+        "# Reunião\n\n## Pendências e Ações\n"
+        "- **[BLOQUEANTE]** Aplicar nota 123 no QAS\n"
+        "- **[ABERTO]** Enviar estimativa\n"
+    )
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name)
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _meeting(self, name, md=None):
+        folder = self.tmp / name
+        folder.mkdir()
+        note = folder / f"{name}.md"
+        note.write_text(self._MD if md is None else md, encoding="utf-8")
+        return {"export_path": str(note), "folder": str(folder), "title": name, "client": "ACME"}
+
+    def test_agrega_itens_abertos_com_contexto(self):
+        m = self._meeting("reuniao_a")
+        items = notes.open_action_items([m])
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]["title"], "reuniao_a")
+        self.assertEqual(items[0]["client"], "ACME")
+        self.assertEqual(items[0]["note_path"], m["export_path"])
+        self.assertTrue(items[0]["text"].startswith("Aplicar"))
+
+    def test_descarta_resolvidos(self):
+        m = self._meeting("reuniao_b")
+        first = notes.open_action_items([m])[0]
+        notes.set_action_done(Path(m["folder"]), first["key"], True)   # resolve o 1º
+        items = notes.open_action_items([m])
+        self.assertEqual(len(items), 1)                                 # sobra só o aberto
+        self.assertNotEqual(items[0]["key"], first["key"])
+
+    def test_preserva_ordem_das_reunioes(self):
+        a, b = self._meeting("rec_a"), self._meeting("rec_b")
+        items = notes.open_action_items([a, b])
+        self.assertEqual([i["title"] for i in items], ["rec_a", "rec_a", "rec_b", "rec_b"])
+
+    def test_ignora_sem_export_ou_folder(self):
+        self.assertEqual(notes.open_action_items([{"export_path": "", "folder": "x"}]), [])
+        self.assertEqual(notes.open_action_items([{"export_path": "x", "folder": ""}]), [])
+
+    def test_ignora_md_inexistente(self):
+        bogus = {"export_path": str(self.tmp / "nao_existe.md"), "folder": str(self.tmp)}
+        self.assertEqual(notes.open_action_items([bogus]), [])
+
+    def test_reuniao_sem_pendencias(self):
+        m = self._meeting("vazia", md="# X\n\n## Resumo\ntexto\n")
+        self.assertEqual(notes.open_action_items([m]), [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

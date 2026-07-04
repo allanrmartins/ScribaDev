@@ -77,6 +77,7 @@ class Theme:
     font_family: str   # UI
     font_mono: str     # código / log
     font_size: int
+    font_size_small: int  # textos secundários (hints/legendas); tokeniza o antigo 8pt hardcode
 
     # métricas
     radius: int      # raio de canto de botões/containers
@@ -106,7 +107,7 @@ _VSCODE = Theme(
     highlight="#ffe14d", highlight_current="#ff8c1a", on_highlight="#1f1f1f",
     code_bg="#181818", code_err="#f14c4c",
     selection_bg="#264f78", selection_fg="#ffffff",
-    font_family=_UI, font_mono=_MONO, font_size=9,
+    font_family=_UI, font_mono=_MONO, font_size=9, font_size_small=8,
     radius=6, radius_sm=4,
 )
 
@@ -120,7 +121,7 @@ _SUBLIME = Theme(
     highlight="#fac761", highlight_current="#f9ae58", on_highlight="#2d3540",
     code_bg="#232a33", code_err="#ec5f67",
     selection_bg="#4e5a65", selection_fg="#ffffff",
-    font_family=_UI, font_mono=_MONO, font_size=9,
+    font_family=_UI, font_mono=_MONO, font_size=9, font_size_small=8,
     radius=6, radius_sm=4,
 )
 
@@ -134,7 +135,7 @@ _CLAUDE = Theme(
     highlight="#f2c94c", highlight_current="#f2994a", on_highlight="#262624",
     code_bg="#1f1e1c", code_err="#e5484d",
     selection_bg="#4a3b2f", selection_fg="#ffffff",
-    font_family=_UI, font_mono=_MONO, font_size=9,
+    font_family=_UI, font_mono=_MONO, font_size=9, font_size_small=8,
     radius=8, radius_sm=5,
 )
 
@@ -148,7 +149,7 @@ _LIGHT = Theme(
     highlight="#ffd23f", highlight_current="#ff8c1a", on_highlight="#1f1f1f",
     code_bg="#f3f3f3", code_err="#d13438",
     selection_bg="#cce4f7", selection_fg="#1f1f1f",
-    font_family=_UI, font_mono=_MONO, font_size=9,
+    font_family=_UI, font_mono=_MONO, font_size=9, font_size_small=8,
     radius=6, radius_sm=4,
 )
 
@@ -255,6 +256,79 @@ def _rgba(hex_color: str, alpha: float) -> str:
     return f"rgba({r}, {g}, {b}, {alpha})"
 
 
+def _icon_path(name: str, svg: str) -> str:
+    """Grava (1x) um SVG num cache gravável e devolve o path (forward slashes p/ o QSS).
+    Arquivo em vez de data-uri porque o Qt só carrega `url()` do QSS de ARQUIVO, não de
+    `data:image/svg` — sem isto combos/spins/date ficam sem ícone. Falha graciosa."""
+    from pathlib import Path
+
+    d = Path(util.STATE_PATH).parent / "qt_icons"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    path = d / name
+    if not path.exists():
+        try:
+            path.write_text(svg, encoding="utf-8")
+        except OSError:
+            pass
+    return str(path).replace("\\", "/")
+
+
+def _arrow_icon_path(color: str, *, up: bool = False) -> str:
+    """SVG de seta (▲/▼) na cor do tema — indicador de QComboBox e das setas de QSpinBox."""
+    pts = "3,8 9,8 6,3.5" if up else "3,4 9,4 6,8.5"
+    svg = (f"<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12'>"
+           f"<polygon points='{pts}' fill='{color}'/></svg>")
+    return _icon_path(f"arrow_{'up' if up else 'dn'}_{color.lstrip('#')}.svg", svg)
+
+
+def _calendar_icon_path(color: str) -> str:
+    """SVG de ícone de calendário na cor do tema — indicador dos QDateEdit (no lugar da seta)."""
+    svg = (f"<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>"
+           f"<rect x='2.2' y='3.4' width='11.6' height='10.4' rx='1.6' fill='none' stroke='{color}' stroke-width='1.3'/>"
+           f"<line x1='2.2' y1='6.6' x2='13.8' y2='6.6' stroke='{color}' stroke-width='1.3'/>"
+           f"<line x1='5.2' y1='1.9' x2='5.2' y2='4.2' stroke='{color}' stroke-width='1.4' stroke-linecap='round'/>"
+           f"<line x1='10.8' y1='1.9' x2='10.8' y2='4.2' stroke='{color}' stroke-width='1.4' stroke-linecap='round'/>"
+           f"</svg>")
+    return _icon_path(f"calendar_{color.lstrip('#')}.svg", svg)
+
+
+# --------------------------------------------------------- ícones Fluent ------
+# Ícones vendorizados de github.com/microsoft/fluentui-system-icons (MIT; texto da
+# licença em scriba/qt/icons/LICENSE). São SVGs de cor única (#212121 na origem);
+# recolorimos para o token do tema e gravamos no MESMO cache de _icon_path. É só
+# texto no repo: nenhuma dependência de runtime. Vocabulário em scriba/qt/icons/*.svg.
+
+_FLUENT_SRC_COLOR = "#212121"
+
+
+def icon(name: str, color: str | None = None) -> str:
+    """Path (em cache) de um ícone Fluent recolorido para `color` (default: texto do
+    tema). Serve tanto p/ `url()` do QSS quanto p/ QIcon (ver `qicon`). Devolve ''
+    quando o ícone não existe (falha graciosa, sem levantar)."""
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parent / "icons" / f"{name}.svg"
+    try:
+        svg = src.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    col = color or active().text
+    return _icon_path(f"fluent_{name}_{col.lstrip('#')}.svg", svg.replace(_FLUENT_SRC_COLOR, col))
+
+
+def qicon(name: str, color: str | None = None):
+    """QIcon do ícone Fluent recolorido (p/ QAbstractButton.setIcon / QTreeWidgetItem.
+    setIcon). QIcon vazio se o ícone não existir. Nota: setIcon é estático — na troca
+    de tema a quente o ícone só reflete a nova cor quando reconstruído/reaberto."""
+    from PySide6.QtGui import QIcon
+
+    p = icon(name, color)
+    return QIcon(p) if p else QIcon()
+
+
 def window_gradient(theme: Theme | None = None, *, alpha: float = 1.0) -> str:
     """Valor QSS de fundo com gradiente sutil (bg2 -> bg) para a raiz das janelas.
     `alpha` < 1 deixa o fundo translúcido (para o backdrop acrílico aparecer atrás;
@@ -272,6 +346,9 @@ def qss(theme: Theme | None = None) -> str:
     t = theme or active()
     ui = _ui_stack(t)
     field_radius = t.radius + 3  # campos mais macios/arredondados (não "terminal")
+    arrow_dn = _arrow_icon_path(t.text)
+    arrow_up = _arrow_icon_path(t.text, up=True)
+    cal_icon = _calendar_icon_path(t.text)
     return f"""
     QWidget {{
         background-color: {t.bg};
@@ -301,7 +378,28 @@ def qss(theme: Theme | None = None) -> str:
     QPushButton[kind="primary"]:hover {{ background-color: {t.accent_hover}; }}
     QPushButton[kind="primary"]:pressed {{ background-color: {t.accent_press}; }}
 
-    QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox {{
+    /* botão de ícone (find, command bar, expander) — leve, com hover discreto */
+    QToolButton {{
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: {t.radius}px;
+        padding: 4px 6px;
+        color: {t.text};
+    }}
+    QToolButton:hover {{ background-color: {t.surface}; border-color: {t.border}; }}
+    QToolButton:pressed {{ background-color: {t.field}; }}
+    QToolButton:checked {{ background-color: {t.field}; }}
+    QToolButton::menu-indicator {{ image: none; }}
+
+    /* expander (cabeçalho colapsável): a linha inteira é clicável, sem caixa */
+    QToolButton[expander="true"] {{
+        border: none; background: transparent;
+        color: {t.accent_hover}; font-weight: bold; font-size: 11pt;
+        padding: 2px 0;
+    }}
+    QToolButton[expander="true"]:hover {{ color: {t.accent}; background: transparent; }}
+
+    QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QComboBox, QDateEdit, QTimeEdit {{
         background-color: {t.field};
         color: {t.text};
         border: 1px solid {t.border};
@@ -310,8 +408,18 @@ def qss(theme: Theme | None = None) -> str:
         selection-background-color: {t.selection_bg};
         selection-color: {t.selection_fg};
     }}
-    QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QSpinBox:focus {{
+    /* hover: sinaliza que o campo é editável antes de receber foco (ex.: título da nota,
+       que sem isto parece um label). O foco (abaixo) vence quando ambos valem. */
+    QLineEdit:hover, QPlainTextEdit:hover, QTextEdit:hover, QComboBox:hover, QDateEdit:hover, QTimeEdit:hover {{
+        border-color: {t.border_strong};
+    }}
+    QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QSpinBox:focus,
+    QDoubleSpinBox:focus, QComboBox:focus, QDateEdit:focus, QTimeEdit:focus {{
         border: 1px solid {t.accent};
+    }}
+    QLineEdit:disabled, QDateEdit:disabled, QTimeEdit:disabled, QComboBox:disabled {{
+        color: {t.faint};
+        background-color: {t.bg};
     }}
 
     QLabel {{ background: transparent; }}
@@ -338,6 +446,124 @@ def qss(theme: Theme | None = None) -> str:
     }}
     QScrollBar::handle:horizontal:hover {{ background: {t.border_strong}; }}
     QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
+
+    /* seta do dropdown (combo) e do calendário (QDateEdit calendarPopup): a área é
+       clicável; o triângulo é desenhado pelo widgets._ArrowStyle na cor do tema. */
+    /* seta do dropdown (combo) e do calendário (QDateEdit calendarPopup). A seta vem
+       de um SVG em arquivo (theme._arrow_icon_path) porque o Qt não carrega data:svg. */
+    QComboBox::drop-down, QDateEdit::drop-down {{
+        subcontrol-origin: padding; subcontrol-position: center right;
+        border: none; width: 22px; background: transparent;
+    }}
+    QComboBox::down-arrow {{ image: url({arrow_dn}); width: 12px; height: 12px; }}
+    QDateEdit::down-arrow {{ image: url({cal_icon}); width: 15px; height: 15px; }}
+
+    QSpinBox::up-button, QDoubleSpinBox::up-button, QTimeEdit::up-button {{
+        subcontrol-origin: border; subcontrol-position: top right; width: 18px;
+        border-left: 1px solid {t.border}; border-top-right-radius: {field_radius}px;
+        background: {t.surface};
+    }}
+    QSpinBox::down-button, QDoubleSpinBox::down-button, QTimeEdit::down-button {{
+        subcontrol-origin: border; subcontrol-position: bottom right; width: 18px;
+        border-left: 1px solid {t.border}; border-bottom-right-radius: {field_radius}px;
+        background: {t.surface};
+    }}
+    QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover, QTimeEdit::up-button:hover,
+    QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover, QTimeEdit::down-button:hover {{
+        background: {t.border};
+    }}
+    QSpinBox::up-arrow, QDoubleSpinBox::up-arrow, QTimeEdit::up-arrow {{ image: url({arrow_up}); width: 10px; height: 10px; }}
+    QSpinBox::down-arrow, QDoubleSpinBox::down-arrow, QTimeEdit::down-arrow {{ image: url({arrow_dn}); width: 10px; height: 10px; }}
+
+    QComboBox QAbstractItemView {{
+        background-color: {t.overlay};
+        color: {t.text};
+        border: 1px solid {t.border_strong};
+        selection-background-color: {t.accent};
+        selection-color: {t.on_accent};
+        outline: none;
+    }}
+
+    QCheckBox {{ background: transparent; spacing: 7px; }}
+    QCheckBox::indicator {{
+        width: 16px; height: 16px;
+        border: 1px solid {t.border_strong};
+        border-radius: {t.radius_sm}px;
+        background: {t.field};
+    }}
+    QCheckBox::indicator:hover {{ border-color: {t.accent}; }}
+    QCheckBox::indicator:checked {{ background: {t.accent}; border-color: {t.accent}; }}
+    QCheckBox::indicator:disabled {{ border-color: {t.field}; }}
+
+    QGroupBox {{
+        background: transparent;
+        border: 1px solid {t.border};
+        border-radius: {t.radius}px;
+        margin-top: 14px;
+        padding: 10px 8px 6px 8px;
+    }}
+    QGroupBox::title {{
+        subcontrol-origin: margin;
+        left: 10px;
+        padding: 0 4px;
+        color: {t.muted};
+    }}
+
+    QTabWidget::pane {{ border: 1px solid {t.border}; border-radius: {t.radius}px; top: -1px; }}
+    QTabBar {{ background: transparent; }}
+    QTabBar::tab {{
+        background: {t.surface};
+        color: {t.muted};
+        border: 1px solid {t.border};
+        border-bottom: none;
+        border-top-left-radius: {t.radius_sm}px;
+        border-top-right-radius: {t.radius_sm}px;
+        padding: 6px 14px;
+        margin-right: 2px;
+    }}
+    QTabBar::tab:selected {{ background: {t.field}; color: {t.text}; }}
+    QTabBar::tab:hover {{ color: {t.text}; }}
+
+    QProgressBar {{
+        background: {t.field};
+        border: 1px solid {t.border};
+        border-radius: {t.radius_sm}px;
+        text-align: center;
+        color: {t.text};
+    }}
+    QProgressBar::chunk {{ background: {t.accent}; border-radius: {t.radius_sm}px; }}
+
+    QTreeWidget, QTreeView {{
+        background: {t.field};
+        color: {t.text};
+        border: 1px solid {t.border};
+        border-radius: {t.radius_sm}px;
+        outline: none;
+    }}
+    QTreeWidget::item {{ padding: 3px 2px; }}
+    QTreeWidget::item:selected, QTreeView::item:selected {{ background: {t.accent}; color: {t.on_accent}; }}
+    QTreeWidget::item:hover, QTreeView::item:hover {{ background: {t.surface}; }}
+
+    QSplitter::handle {{ background: {t.border}; }}
+    QSplitter::handle:horizontal {{ width: 4px; }}
+    QSplitter::handle:vertical {{ height: 4px; }}
+
+    QCalendarWidget QWidget {{ alternate-background-color: {t.surface}; }}
+    QCalendarWidget #qt_calendar_navigationbar {{ background: {t.surface}; }}
+    QCalendarWidget QToolButton {{
+        color: {t.text}; background: transparent; border: none;
+        padding: 4px 10px; border-radius: {t.radius_sm}px;
+    }}
+    QCalendarWidget QToolButton:hover {{ background: {t.border}; }}
+    QCalendarWidget QToolButton::menu-indicator {{ image: none; }}
+    QCalendarWidget QMenu {{ background: {t.overlay}; color: {t.text}; }}
+    QCalendarWidget QSpinBox {{ background: {t.field}; color: {t.text}; border: 1px solid {t.border}; }}
+    QCalendarWidget QAbstractItemView:enabled {{
+        background: {t.field}; color: {t.text};
+        selection-background-color: {t.accent}; selection-color: {t.on_accent};
+        outline: none;
+    }}
+    QCalendarWidget QAbstractItemView:disabled {{ color: {t.faint}; }}
 
     QMenu {{
         background-color: {t.overlay};

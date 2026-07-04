@@ -75,6 +75,21 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(s.search(["qualquer"]), [])
         s.close()
 
+    def test_usavel_de_outra_thread(self):
+        # regressão: no chat o searcher é criado numa thread-worker e reusado nas
+        # perguntas seguintes (cada uma roda em thread nova). Sem check_same_thread=False
+        # o sqlite lançava ProgrammingError e o chat respondia "não consegui responder".
+        import threading
+
+        box: dict = {}
+        maker = threading.Thread(target=lambda: box.__setitem__("s", TranscriptSearcher(TR, max_chars=200)))
+        maker.start(); maker.join()
+        res: dict = {}
+        user = threading.Thread(target=lambda: res.__setitem__("hits", box["s"].search(["orçamento"])))
+        user.start(); user.join()
+        self.assertTrue(any("orçamento" in h for h in res["hits"]))   # não lançou cross-thread
+        box["s"].close()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

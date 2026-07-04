@@ -16,7 +16,7 @@ import logging
 import time
 from typing import Callable
 
-from PySide6.QtCore import QRect, Qt, QTimer
+from PySide6.QtCore import QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QApplication, QWidget
 
@@ -121,6 +121,7 @@ class RecordingPill(QWidget):
         self._pressed: str | None = None
         self._hover: str | None = None
         self._tip: QWidget | None = None
+        self._svg_cache: dict = {}   # (nome, cor) -> QSvgRenderer, p/ os ícones dos controles (#67)
 
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -182,16 +183,32 @@ class RecordingPill(QWidget):
         p.setFont(theme.qfont(t, 11, bold=True))
         p.setPen(QColor(t.text if self._spk_committed else t.muted))
         p.drawText(_R_SPK_COUNT, Qt.AlignCenter, str(self._spk))
-        # ✂ nova call · ■ encerrar · × descartar
-        p.setFont(theme.qfont(t, 12))
-        p.setPen(QColor(t.text if self._hover == "split" else t.muted))
-        p.drawText(_R_SPLIT, Qt.AlignCenter, "✂")
-        p.setFont(theme.qfont(t, 13))
-        p.setPen(QColor(t.rec if self._hover == "stop" else t.text))
-        p.drawText(_R_STOP, Qt.AlignCenter, "■")
-        p.setFont(theme.qfont(t, 15, bold=True))
-        p.setPen(QColor(t.text if self._hover == "discard" else t.muted))
-        p.drawText(_R_DISCARD, Qt.AlignCenter, "✕")
+        # ícones Fluent (#67): nova call (cut) · encerrar (stop) · descartar (dismiss),
+        # renderizados via QSvgRenderer nas mesmas regiões clicáveis, cor por hover.
+        self._draw_icon(p, "cut", t.text if self._hover == "split" else t.muted, _R_SPLIT, 17)
+        self._draw_icon(p, "stop", t.rec if self._hover == "stop" else t.text, _R_STOP, 16)
+        self._draw_icon(p, "dismiss", t.text if self._hover == "discard" else t.muted, _R_DISCARD, 16)
+
+    def _svg(self, name: str, color: str):
+        """QSvgRenderer (cacheado por nome+cor) do ícone Fluent recolorido, ou None."""
+        key = (name, color)
+        r = self._svg_cache.get(key)
+        if r is None:
+            from PySide6.QtSvg import QSvgRenderer
+
+            path = theme.icon(name, color)
+            if not path:
+                return None
+            r = QSvgRenderer(path)
+            self._svg_cache[key] = r
+        return r
+
+    def _draw_icon(self, p: QPainter, name: str, color: str, region: QRect, size: int) -> None:
+        r = self._svg(name, color)
+        if r is None:
+            return
+        cx, cy = region.center().x(), region.center().y()
+        r.render(p, QRectF(cx - size / 2, cy - size / 2, size, size))
 
     def _paint_idle(self, p: QPainter, t) -> None:
         rec = QColor(t.rec)

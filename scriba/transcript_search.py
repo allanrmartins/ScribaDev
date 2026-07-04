@@ -57,7 +57,11 @@ class TranscriptSearcher:
 
     def __init__(self, transcript_md: str, max_chars: int = _CHUNK_CHARS):
         self._chunks = chunk_transcript(transcript_md, max_chars)
-        self._conn = sqlite3.connect(":memory:")
+        # check_same_thread=False: no chat o searcher é criado numa thread-worker e reusado
+        # nas perguntas seguintes (cada pergunta roda numa thread nova). O acesso é
+        # serializado (uma pergunta por vez), então não há concorrência real — só threads
+        # distintas em momentos distintos, que o sqlite bloquearia por padrão.
+        self._conn = sqlite3.connect(":memory:", check_same_thread=False)
         self._conn.execute("CREATE VIRTUAL TABLE t USING fts5(body)")
         if self._chunks:
             self._conn.executemany(

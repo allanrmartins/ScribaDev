@@ -62,6 +62,7 @@ class ChatWindow(QWidget):
         self._busy = False
         self._warned = False
         self._searcher = None
+        self._bubbles: list[QLabel] = []
         from .. import config
 
         self._chat_model = config.load().summary.chat_model or None
@@ -72,6 +73,7 @@ class ChatWindow(QWidget):
         self.setWindowTitle(("Perguntar à reunião — " + (title or "reunião"))[:90])
         self.setMinimumSize(560, 460)
         self.setWindowOpacity(0.98)
+        widgets.remember_geometry(self, "qt_chat", default=(240, 150, 640, 620))
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 10, 12, 10)
@@ -88,6 +90,12 @@ class ChatWindow(QWidget):
         self._conv_lay.addStretch(1)  # empurra as mensagens p/ cima; novas entram antes deste
         self._scroll.setWidget(self._conv)
         root.addWidget(self._scroll, 1)
+        # auto-scroll: rola p/ o fim quando o conteúdo cresce (rangeChanged pega a altura
+        # final da bolha, inclusive markdown), a menos que o usuário tenha subido p/ ler
+        self._autoscroll = True
+        _sb = self._scroll.verticalScrollBar()
+        _sb.rangeChanged.connect(lambda *_: self._autoscroll and self._scroll_to_bottom())
+        _sb.valueChanged.connect(self._update_autoscroll)
 
         # toggle "buscar na transcrição" (só se a nota tem transcrição)
         self._toggle = None
@@ -96,7 +104,7 @@ class ChatWindow(QWidget):
             self._toggle = widgets.ToggleSwitch(checked=False)
             hint = QLabel("buscar na transcrição (mais preciso; +1 chamada)")
             hint.setProperty("role", "muted")
-            hint.setStyleSheet("font-size:8pt;")
+            hint.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
             opt.addWidget(self._toggle)
             opt.addWidget(hint)
             opt.addStretch(1)
@@ -128,6 +136,7 @@ class ChatWindow(QWidget):
         self.activateWindow()
         widgets.enable_dark_titlebar(self)
         self._entry.setFocus()
+        QTimer.singleShot(0, self._refit_all)   # re-ajusta as bolhas com o viewport já dimensionado
 
     def closeEvent(self, event) -> None:
         self._stop_thinking()
@@ -153,11 +162,22 @@ class ChatWindow(QWidget):
             rl.addWidget(widget)
             rl.addStretch(1)
         self._conv_lay.insertWidget(self._conv_lay.count() - 1, row)  # antes do stretch final
-        QTimer.singleShot(0, self._scroll_to_bottom)
+        # o scroll de fato acontece no rangeChanged (quando o layout já cresceu de altura)
 
     def _scroll_to_bottom(self) -> None:
         bar = self._scroll.verticalScrollBar()
         bar.setValue(bar.maximum())
+
+    def _update_autoscroll(self, value: int) -> None:
+        # o usuário "assumiu" o scroll ao subir p/ longe do fim; volta a auto-rolar no fim
+        bar = self._scroll.verticalScrollBar()
+        self._autoscroll = value >= bar.maximum() - 8
+
+    def _bubble_max(self) -> int:
+        """Largura máxima das bolhas: acompanha a janela (~86% do viewport) em vez de um
+        valor fixo, p/ a conversa usar a largura toda e não ficar espremida num canto."""
+        w = self._scroll.viewport().width() if self._scroll is not None else self.width()
+        return max(320, int(w * 0.86))
 
     def _bubble(self, text: str, *, markdown: bool) -> QLabel:
         lbl = QLabel()
@@ -167,34 +187,59 @@ class ChatWindow(QWidget):
         if markdown:
             lbl.setTextFormat(Qt.MarkdownText)   # render nativo (mata a mdview.py)
         lbl.setText(text)
+        self._bubbles.append(lbl)
         return lbl
+
+    def _fit_bubble(self, lbl: QLabel) -> None:
+        """QLabel com wordWrap NÃO cresce sozinho até o limite (fica espremido num canto);
+        `setMaximumWidth` só limita, não força. Então medimos a largura natural (sem quebra)
+        e FIXAMOS em min(natural, ~86% da janela): bolha curta fica compacta, bolha longa
+        ocupa a largura da janela."""
+        mx = self._bubble_max()
+        lbl.setMinimumWidth(0)
+        lbl.setMaximumWidth(16777215)        # solta o fixedWidth anterior antes de re-medir
+        lbl.setWordWrap(False)
+        natural = lbl.sizeHint().width()
+        lbl.setWordWrap(True)
+        lbl.setFixedWidth(min(natural, mx))
+
+    def _refit_all(self) -> None:
+        for b in list(self._bubbles):
+            try:
+                self._fit_bubble(b)
+            except RuntimeError:
+                self._bubbles.remove(b)   # bolha já destruída (após /clear)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._refit_all)   # após o layout atualizar a largura do viewport
 
     def _append_user(self, text: str) -> None:
         t = theme.active()
         lbl = self._bubble(text, markdown=False)
-        lbl.setMaximumWidth(380)
         lbl.setStyleSheet(
             f"background:{theme._rgba(t.accent, 0.20)}; border:1px solid {theme._rgba(t.accent, 0.42)};"
-            f" border-radius:13px; padding:8px 12px; color:{t.text};"
+            f" border-radius:13px; padding:10px 14px; color:{t.text}; font-size:{t.font_size + 2}pt;"
         )
+        self._fit_bubble(lbl)
         self._add_row(lbl, "right")
 
     def _append_assistant(self, md: str) -> None:
         t = theme.active()
         lbl = self._bubble(md, markdown=True)
-        lbl.setMaximumWidth(440)
         lbl.setStyleSheet(
             f"background:{theme._rgba(t.surface, 0.60)}; border:1px solid {theme._rgba(t.border, 0.55)};"
-            f" border-radius:13px; padding:8px 12px; color:{t.text};"
+            f" border-radius:13px; padding:10px 14px; color:{t.text}; font-size:{t.font_size + 2}pt;"
         )
+        self._fit_bubble(lbl)
         self._add_row(lbl, "left")
 
     def _append_system(self, text: str) -> None:
         t = theme.active()
         lbl = self._bubble(text, markdown=False)
-        lbl.setMaximumWidth(460)
         lbl.setAlignment(Qt.AlignCenter)
-        lbl.setStyleSheet(f"color:{t.muted}; font-size:9pt; font-style:italic; padding:4px;")
+        lbl.setStyleSheet(f"color:{t.muted}; font-size:{t.font_size + 1}pt; font-style:italic; padding:4px;")
+        self._fit_bubble(lbl)
         self._add_row(lbl, "center")
 
     # -------------------------------------------------------------- chat -------
@@ -208,6 +253,7 @@ class ChatWindow(QWidget):
             self._clear_context()
             return
         self._entry.clear()
+        self._autoscroll = True   # ao enviar, sempre acompanha o fim da conversa
         self._append_user(q)
         self._set_busy(True)
         self._start_thinking()
@@ -225,6 +271,8 @@ class ChatWindow(QWidget):
                 out = ai.complete(_SYSTEM, self._summary_payload(q), timeout=_TIMEOUT,
                                   hidden_window=True, model=self._chat_model)
         except Exception:
+            searching = bool(self._transcript and self._toggle and self._toggle.isChecked())
+            log.exception("chat: falha ao responder (busca_transcrição=%s)", searching)
             out = None
         self._answered_sig.emit(q, out)
 
@@ -266,6 +314,7 @@ class ChatWindow(QWidget):
             w = child.widget()
             if w is not None:
                 w.deleteLater()
+        self._bubbles.clear()
         self._append_system(_CLEAR_MSG)
 
     def _set_busy(self, busy: bool) -> None:

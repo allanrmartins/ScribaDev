@@ -79,6 +79,47 @@ class ChatTests(unittest.TestCase):
         self.assertEqual(len(win._history), 0)
         self.assertEqual(self._rows(win), 1)          # sobra só a confirmação do /clear
 
+    def test_summary_payload_nunca_despeja_transcricao(self):
+        win = self._win(transcript="FALA SECRETA que nao deve vazar no prompt")
+        p = win._summary_payload("o que decidiu?")
+        self.assertIn("## Resumo", p)                        # o resumo entra
+        self.assertNotIn("FALA SECRETA", p)                  # a transcrição NUNCA
+        self.assertTrue(p.rstrip().endswith("Pergunta: o que decidiu?\nResposta:"))
+
+    def test_resposta_vazia_nao_conta_nem_avisa(self):
+        win = self._win()
+        for _ in range(8):
+            win._answered("q", None)                          # falha da IA: não entra no histórico
+        self.assertEqual(win._history, [])
+        self.assertFalse(win._warned)
+
+    def test_aviso_rearmado_apos_clear(self):
+        win = self._win()
+        for i in range(6):
+            win._answered(f"q{i}", f"a{i}")
+        self.assertTrue(win._warned)
+        win._clear_context()
+        self.assertFalse(win._warned)                        # /clear rearma o aviso
+        for i in range(6):
+            win._answered(f"r{i}", f"b{i}")
+        self.assertTrue(win._warned)                         # avisou de novo no 2º ciclo
+
+    def test_autoscroll_acompanha_o_fim_e_respeita_subida(self):
+        win = self._win()
+        win.resize(400, 240); win.show()
+        self.app.processEvents(); self.app.processEvents()
+        for _ in range(6):
+            win._append_assistant("resposta longa " + "abc " * 30)
+        self.app.processEvents(); self.app.processEvents()
+        bar = win._scroll.verticalScrollBar()
+        self.assertGreater(bar.maximum(), 0)                     # há conteúdo transbordando
+        self.assertGreaterEqual(bar.value(), bar.maximum() - 8)  # rolou sozinho p/ o fim
+        bar.setValue(0); self.app.processEvents()
+        self.assertFalse(win._autoscroll)                        # usuário subiu -> pausa
+        bar.setValue(bar.maximum()); self.app.processEvents()
+        self.assertTrue(win._autoscroll)                         # voltou ao fim -> religa
+        win.close()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

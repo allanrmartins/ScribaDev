@@ -62,6 +62,21 @@ class QtWidgetSmokeTests(unittest.TestCase):
         self.assertEqual(seen, [True])
         t.repaint()  # exercita o paintEvent (interpolação de cor + knob)
 
+    def test_animated_checkbox(self):
+        from scriba.qt.widgets import AnimatedCheckBox
+
+        c = AnimatedCheckBox("Ativar")
+        self.assertFalse(c.isChecked())
+        self.assertEqual(c.get_fill(), 0.0)     # desmarcado = indicador vazio
+        c.repaint()
+        c.setChecked(True)
+        self.assertTrue(c.isChecked())
+        c._anim.stop(); c.set_fill(1.0)          # fim da animação (tick verde cheio)
+        self.assertEqual(c.get_fill(), 1.0)
+        c.repaint()                              # exercita o paintEvent (tick + texto)
+        c.setChecked(False); c._anim.stop(); c.set_fill(0.0)
+        c.repaint()
+
     def test_stepper(self):
         from scriba.qt.widgets import Stepper
 
@@ -82,6 +97,36 @@ class QtWidgetSmokeTests(unittest.TestCase):
         e = make_entry("Buscar…")
         self.assertEqual(e.placeholderText(), "Buscar…")
         self.assertEqual(e.text(), "")  # placeholder não polui o valor
+
+    def test_date_filter_liga_desliga(self):
+        from PySide6.QtCore import QDate
+
+        from scriba.qt.widgets import DateFilter
+
+        seen = []
+        f = DateFilter("de")
+        f.changed.connect(lambda: seen.append(1))
+        self.assertEqual(f.br(), "")             # desmarcado (padrão) = sem filtro
+        self.assertFalse(f._edit.isEnabled())    # editor desabilitado enquanto desligado
+        f._chk.setChecked(True)
+        f._edit.setDate(QDate(2026, 7, 2))
+        self.assertEqual(f.br(), "02/07/2026")   # ligado = data em DD/MM/AAAA (formato BR)
+        self.assertTrue(seen)                    # emitiu changed
+        f.clear()
+        self.assertEqual(f.br(), "")             # clear desliga o filtro
+
+    def test_time_filter_liga_desliga(self):
+        from PySide6.QtCore import QTime
+
+        from scriba.qt.widgets import TimeFilter
+
+        f = TimeFilter("Hora ≥")
+        self.assertEqual(f.hhmm(), "")           # desligado = sem filtro
+        f._chk.setChecked(True)
+        f._edit.setTime(QTime(9, 30))
+        self.assertEqual(f.hhmm(), "09:30")
+        f.clear()
+        self.assertEqual(f.hhmm(), "")
 
     def test_troca_de_tema_repinta_widget(self):
         from scriba.qt import theme

@@ -14,7 +14,6 @@ import logging
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
-    QCheckBox,
     QHBoxLayout,
     QLabel,
     QTextEdit,
@@ -52,7 +51,11 @@ class LogWindow(QWidget):
         bar.addWidget(t_lbl); bar.addStretch(1)
         bar.addWidget(widgets.ModernButton("Copiar", self._copy))
         bar.addWidget(widgets.ModernButton("Abrir pasta", self._open_folder))
-        bar.addWidget(widgets.ModernButton("Exportar diagnóstico", self._export, kind="primary"))
+        # "Diagnóstico" (era "Exportar diagnóstico"): o rótulo longo estourava a barra no
+        # tamanho mínimo (#64 pegou o corte); o tooltip mantém o sentido completo.
+        _exp = widgets.ModernButton("Diagnóstico", self._export, kind="primary")
+        widgets.add_tooltip(_exp, "Exportar diagnóstico (.zip) para suporte")
+        bar.addWidget(_exp)
         root.addLayout(bar)
 
         row1 = QHBoxLayout()
@@ -60,30 +63,34 @@ class LogWindow(QWidget):
         self._find.textChanged.connect(lambda: self._find_timer.start())
         self._find.returnPressed.connect(self._next_hit)
         row1.addWidget(self._find, 1)
-        row1.addWidget(widgets.ModernButton("▲", self._prev_hit))
-        row1.addWidget(widgets.ModernButton("▼", self._next_hit))
+        _prev = widgets.ModernButton("", self._prev_hit)
+        _prev.setIcon(theme.qicon("chevron-up"))
+        widgets.add_tooltip(_prev, "Ocorrência anterior")
+        _next = widgets.ModernButton("", self._next_hit)
+        _next.setIcon(theme.qicon("chevron-down"))
+        widgets.add_tooltip(_next, "Próxima ocorrência")
+        row1.addWidget(_prev)
+        row1.addWidget(_next)
         self._count = QLabel(""); self._count.setProperty("role", "muted"); self._count.setFixedWidth(56)
         row1.addWidget(self._count)
-        self._auto = QCheckBox("auto-atualizar"); self._auto.setChecked(True)
+        self._auto = widgets.AnimatedCheckBox("auto-atualizar"); self._auto.setChecked(True)
         row1.addWidget(self._auto)
         root.addLayout(row1)
 
         row2 = QHBoxLayout()
         self._level_btn = widgets.ModernButton("Nível: Tudo", self._cycle_level)
         row2.addWidget(self._level_btn)
-        d = QLabel("Dia:"); d.setProperty("role", "muted"); row2.addWidget(d)
-        self._date = widgets.make_entry("DD/MM/AAAA"); self._date.setFixedWidth(120)
-        self._date.textChanged.connect(lambda: self._render_timer.start())
+        self._date = widgets.DateFilter("Dia")
+        self._date.changed.connect(lambda: self._render_timer.start())
         row2.addWidget(self._date)
-        h = QLabel("Hora ≥"); h.setProperty("role", "muted"); row2.addWidget(h)
-        self._time = widgets.make_entry("HH:MM"); self._time.setFixedWidth(72)
-        self._time.textChanged.connect(lambda: self._render_timer.start())
+        self._time = widgets.TimeFilter("Hora ≥")
+        self._time.changed.connect(lambda: self._render_timer.start())
         row2.addWidget(self._time)
         row2.addStretch(1)
         root.addLayout(row2)
 
         self._status = QLabel(""); self._status.setProperty("role", "muted")
-        self._status.setStyleSheet("font-size:8pt;")
+        self._status.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
         root.addWidget(self._status)
 
         self._view = QTextEdit(); self._view.setReadOnly(True)
@@ -110,10 +117,8 @@ class LogWindow(QWidget):
         self._render()
 
     def _render(self) -> None:
-        date_br = self._date.text().strip()
-        date_br = date_br if len(date_br) == 10 else ""
-        time_from = self._time.text().strip()
-        time_from = time_from if len(time_from) == 5 and util.time_hhmm_ok(time_from) else ""
+        date_br = self._date.br()
+        time_from = self._time.hhmm()
         level_min = _LEVELS_CYCLE[self._level_idx][1]
         shown = diagnostics.filter_entries(self._entries, level_min, date_br, time_from)
 

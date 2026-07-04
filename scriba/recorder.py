@@ -464,7 +464,7 @@ def record_for(seconds: int, show_ui: bool = True) -> int:
 
     outcome = "ok"
     if show_ui and cfg.ui.overlay:
-        from .overlay import run_countdown
+        from .qt.overlay import run_countdown
 
         print(f"{seconds}s... (use a pílula para encerrar ou descartar)")
         try:

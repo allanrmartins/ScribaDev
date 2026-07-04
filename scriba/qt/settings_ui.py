@@ -21,7 +21,6 @@ import threading
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -59,8 +58,22 @@ _CHAT_MODELS = {"Mesmo do resumo": "", "Haiku 4.5": "claude-haiku-4-5",
                 "Sonnet 4.6": "claude-sonnet-4-6", "Opus 4.8": "claude-opus-4-8"}
 
 
+def _csv_merge(existing: str, additions: list[str]) -> str:
+    """Acrescenta `additions` a uma lista CSV, sem duplicar (case-insensitive),
+    preservando a ordem e o formato 'a, b, c' que detector.*_from consome. Puro;
+    usado pelos presets da aba Detecção (#21 — UI dos presets fica p/ o #54)."""
+    items = [p.strip() for p in (existing or "").split(",") if p.strip()]
+    seen = {i.lower() for i in items}
+    for a in additions:
+        if a.lower() not in seen:
+            items.append(a)
+            seen.add(a.lower())
+    return ", ".join(items)
+
+
 class SettingsWindow(QWidget):
-    _about_ready = Signal(object)   # marshaling da checagem de update (thread -> UI)
+    _about_ready = Signal(object)     # marshaling da checagem de update (thread -> UI)
+    _devices_ready = Signal(object)   # marshaling da enumeração de dispositivos (thread -> UI)
 
     def __init__(self, app):
         super().__init__()
@@ -70,10 +83,13 @@ class SettingsWindow(QWidget):
         self._level_probe = None
         # registro: (widget, seção, atributo, kind, choices|None)
         self._fields: list[tuple] = []
+        self._device_combos: list[tuple] = []   # (combo, 'mics'|'loopbacks') p/ popular async
+        self._devices_loaded = False
 
         self.setWindowTitle("ScribaDev — Configurações")
         self.setMinimumSize(720, 480)
         self.setWindowOpacity(0.98)
+        widgets.remember_geometry(self, "qt_settings", default=(180, 120, 880, 680))
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 10, 14, 10)
@@ -87,6 +103,7 @@ class SettingsWindow(QWidget):
         self._build_dirs_tab()
         self._build_about_tab()
         self._about_ready.connect(self._show_about_update)
+        self._devices_ready.connect(self._fill_devices)
 
         foot = QHBoxLayout()
         self._saved = QLabel(""); self._saved.setProperty("role", "ok")
@@ -119,34 +136,52 @@ class SettingsWindow(QWidget):
         form.addRow(box)
         return gl
 
-    def _text(self, form, label, section, attr, secret=False, hint=None):
+    def _text(self, form, label, section, attr, secret=False, placeholder="", tooltip="", hint=None):
         e = QLineEdit()
         if secret:
             e.setEchoMode(QLineEdit.Password)
+        if placeholder:
+            e.setPlaceholderText(placeholder)
+        if tooltip:
+            widgets.add_tooltip(e, tooltip)
         self._fields.append((e, section, attr, "text", None))
         self._row(form, label, e, hint)
         return e
 
+    def _bigtext(self, form, label, section, attr, placeholder="", tooltip="", rows=3):
+        """Campo de VÁRIAS linhas (QPlainTextEdit, com word-wrap) p/ valores longos como
+        hotwords. O config guarda uma string única: o get normaliza o whitespace (quebras
+        e espaços viram espaço simples), então digitar em linhas não muda o formato salvo."""
+        e = QPlainTextEdit()
+        e.setPlaceholderText(placeholder)
+        if tooltip:
+            widgets.add_tooltip(e, tooltip)
+        e.setFixedHeight(e.fontMetrics().lineSpacing() * rows + 16)
+        self._fields.append((e, section, attr, "bigtext", None))
+        self._row(form, label, e, None)
+        return e
+
     def _check(self, form, label, section, attr, hint=None):
-        c = QCheckBox()
+        c = widgets.AnimatedCheckBox()
         self._fields.append((c, section, attr, "bool", None))
         self._row(form, label, c, hint)
         return c
 
     def _int(self, form, label, section, attr, lo=0, hi=100000, hint=None):
-        s = QSpinBox(); s.setRange(lo, hi)
+        s = QSpinBox(); s.setRange(lo, hi); widgets.no_wheel_steal(s)
         self._fields.append((s, section, attr, "int", None))
         self._row(form, label, s, hint)
         return s
 
     def _float(self, form, label, section, attr, lo=0.0, hi=100000.0, step=0.5, hint=None):
         s = QDoubleSpinBox(); s.setRange(lo, hi); s.setSingleStep(step); s.setDecimals(2)
+        widgets.no_wheel_steal(s)
         self._fields.append((s, section, attr, "float", None))
         self._row(form, label, s, hint)
         return s
 
     def _choice(self, form, label, section, attr, choices: dict, editable=False, hint=None):
-        c = QComboBox(); c.setEditable(editable)
+        c = QComboBox(); c.setEditable(editable); widgets.no_wheel_steal(c)
         for lbl, val in choices.items():
             c.addItem(lbl, val)
         self._fields.append((c, section, attr, "choice", choices))
@@ -154,11 +189,25 @@ class SettingsWindow(QWidget):
         return c
 
     def _list_choice(self, form, label, section, attr, values: tuple, hint=None):
-        """Combo editável cujo TEXTO é o valor (modelos Whisper: preset + passthrough)."""
-        c = QComboBox(); c.setEditable(True)
+        """Dropdown NÃO editável cujo TEXTO é o valor (modelos Whisper). Abre ao clicar; um
+        valor salvo fora da lista é preservado como item no _widget_set (só exibição)."""
+        c = QComboBox(); widgets.no_wheel_steal(c)
         c.addItems(list(values))
         self._fields.append((c, section, attr, "editable_text", None))
         self._row(form, label, c, hint)
+        return c
+
+    def _device_choice(self, form, label, section, attr, key, tooltip=""):
+        """Combo EDITÁVEL de dispositivo de áudio: '(padrão do Windows)' [valor ''] + a
+        lista enumerada (populada em thread no 1º show). Editável = passthrough do valor
+        salvo mesmo se o aparelho não estiver conectado agora. `key`: 'mics'|'loopbacks'."""
+        c = QComboBox(); widgets.no_wheel_steal(c)
+        c.addItem("(padrão do Windows)", "")
+        if tooltip:
+            widgets.add_tooltip(c, tooltip)
+        self._fields.append((c, section, attr, "device", None))
+        self._device_combos.append((c, key))
+        self._row(form, label, c, None)
         return c
 
     def _row(self, form: QFormLayout, label: str, widget: QWidget, hint: str | None) -> None:
@@ -167,7 +216,7 @@ class SettingsWindow(QWidget):
             v = QVBoxLayout(wrap); v.setContentsMargins(0, 0, 0, 0); v.setSpacing(1)
             v.addWidget(widget)
             h = QLabel(hint); h.setProperty("role", "muted"); h.setWordWrap(True)
-            h.setStyleSheet("font-size:8pt;")
+            h.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
             v.addWidget(h)
             form.addRow(label, wrap)
         else:
@@ -178,8 +227,10 @@ class SettingsWindow(QWidget):
     def _build_recording_tab(self) -> None:
         f = self._tab("Gravação")
         au = self._group(f, "Áudio")
-        self._text(au, "Microfone", "audio", "mic_device", hint="vazio = padrão do Windows (veja: scribadev devices)")
-        self._text(au, "Áudio do sistema", "audio", "loopback_device", hint="vazio = saída padrão do Windows")
+        self._device_choice(au, "Microfone", "audio", "mic_device", "mics",
+                             tooltip="Escolha o microfone na lista ou deixe no padrão do Windows.")
+        self._device_choice(au, "Áudio do sistema", "audio", "loopback_device", "loopbacks",
+                             tooltip="Escolha a saída a capturar (loopback) ou use o padrão do Windows.")
         self._check(au, "Manter o áudio após transcrever", "audio", "keep_audio")
         self._choice(au, "Formato do áudio", "audio", "archive_format", _ARCHIVE)
         self._int(au, "Apagar gravação após (dias)", "audio", "retention_days", 0, 3650,
@@ -188,7 +239,7 @@ class SettingsWindow(QWidget):
         self._mic_btn = widgets.ModernButton("Testar microfone", self._toggle_mic_test)
         mr.addWidget(self._mic_btn)
         self._mic_status = QLabel(""); self._mic_status.setProperty("role", "muted")
-        self._mic_status.setStyleSheet("font-size:8pt;")
+        self._mic_status.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
         mr.addWidget(self._mic_status); mr.addStretch(1)
         au.addRow(mic)
         self._mic_bar = QProgressBar(); self._mic_bar.setRange(0, 100); self._mic_bar.setTextVisible(False)
@@ -199,7 +250,8 @@ class SettingsWindow(QWidget):
         dz = self._group(f, "Diarização (separar vozes)")
         self._check(dz, "Ativar diarização", "diarization", "enabled")
         self._text(dz, "Token Hugging Face", "diarization", "hf_token", secret=True,
-                   hint="hf.co/settings/tokens (grátis); cifrado com DPAPI ao salvar")
+                   placeholder="hf_… (cole seu token)",
+                   tooltip="Gere em hf.co/settings/tokens (grátis). Cifrado com DPAPI ao salvar.")
         self._int(dz, "Máx. de vozes", "diarization", "max_speakers", 0, 50, hint="0 = automático")
         self._int(dz, "Mín. de vozes", "diarization", "min_speakers", 0, 50, hint="0 = automático")
         self._check(dz, "Perguntar nº de participantes ao fim", "diarization", "ask_speakers")
@@ -210,8 +262,10 @@ class SettingsWindow(QWidget):
 
         ui = self._group(f, "Interface e atalhos")
         self._check(ui, "Pílula flutuante durante a gravação", "ui", "overlay")
-        self._text(ui, "Atalho gravar/parar", "ui", "hotkey", hint="ex.: ctrl+alt+r (vazio desativa)")
-        self._text(ui, "Atalho nova call (dividir)", "ui", "hotkey_split", hint="vazio desativa")
+        self._text(ui, "Atalho gravar/parar", "ui", "hotkey", placeholder="ex.: ctrl+alt+r",
+                   tooltip="Atalho global de gravar/parar. Vazio desativa.")
+        self._text(ui, "Atalho nova call (dividir)", "ui", "hotkey_split", placeholder="ex.: ctrl+alt+n",
+                   tooltip="Divide a call atual em duas. Vazio desativa.")
 
     def _build_transcription_tab(self) -> None:
         f = self._tab("Transcrição")
@@ -219,8 +273,12 @@ class SettingsWindow(QWidget):
         self._list_choice(f, "Modelo", "whisper", "model", _WHISPER_MODELS)
         self._choice(f, "Dispositivo", "whisper", "device", _WHISPER_DEVICES)
         self._choice(f, "Idioma", "whisper", "language", _WHISPER_LANGS)
-        self._text(f, "Vocabulário (hotwords)", "whisper", "hotwords",
-                   hint="termos da sua área que guiam a transcrição")
+        self._bigtext(f, "Vocabulário (hotwords)", "whisper", "hotwords", rows=4,
+                      placeholder="Termos, siglas e nomes próprios que aparecem nas suas reuniões e "
+                                  "guiam a transcrição.  Ex.: SAP ABAP BAPI CDS Fiori OData, nomes "
+                                  "de clientes, produtos e projetos, jargão da sua área.",
+                      tooltip="Quanto mais específico do seu dia a dia, melhor a transcrição acerta "
+                              "os termos difíceis. Pode escrever em várias linhas.")
         av = self._group(f, "Avançado")
         self._int(av, "Batch size", "whisper", "batch_size", 0, 64, hint="0 desliga o lote")
         self._int(av, "Beam size", "whisper", "beam_size", 0, 10)
@@ -228,29 +286,33 @@ class SettingsWindow(QWidget):
         self._int(av, "VAD silêncio mín. (ms)", "whisper", "vad_min_silence_ms", 0, 5000, hint="0 = padrão")
         self._float(av, "VAD limiar (0..1)", "whisper", "vad_threshold", 0.0, 1.0, 0.05, hint="0 = padrão")
         cl = self._group(f, "Nuvem (só com motor = Nuvem)")
-        self._text(cl, "Endpoint", "whisper", "cloud_base_url", hint="vazio = Groq")
-        self._text(cl, "Chave da API", "whisper", "cloud_api_key", secret=True)
-        self._text(cl, "Modelo (nuvem)", "whisper", "cloud_model")
+        self._text(cl, "Endpoint", "whisper", "cloud_base_url", placeholder="vazio = Groq",
+                   tooltip="URL do serviço compatível com OpenAI. Vazio usa a Groq.")
+        self._text(cl, "Chave da API", "whisper", "cloud_api_key", secret=True,
+                   placeholder="cole a chave da API", tooltip="Cifrada com DPAPI ao salvar.")
+        self._text(cl, "Modelo (nuvem)", "whisper", "cloud_model", placeholder="ex.: whisper-large-v3")
 
     def _build_ia_tab(self) -> None:
         f = self._tab("IA")
         self._check(f, "Gerar resumo (IA)", "summary", "enabled")
         self._choice(f, "Provedor", "summary", "provider", _PROVIDERS)
-        self._choice(f, "Modelo (Claude)", "summary", "model", _SUMMARY_MODELS, editable=True)
-        self._choice(f, "Modelo do chat", "summary", "chat_model", _CHAT_MODELS, editable=True)
+        self._choice(f, "Modelo (Claude)", "summary", "model", _SUMMARY_MODELS)
+        self._choice(f, "Modelo do chat", "summary", "chat_model", _CHAT_MODELS)
         self._int(f, "Timeout (s)", "summary", "timeout_seconds", 30, 3600)
         ol = self._group(f, "Ollama")
-        self._text(ol, "Modelo", "summary", "ollama_model")
-        self._text(ol, "Endpoint", "summary", "ollama_base_url", hint="vazio = http://localhost:11434")
+        self._text(ol, "Modelo", "summary", "ollama_model", placeholder="ex.: llama3.1, qwen2.5")
+        self._text(ol, "Endpoint", "summary", "ollama_base_url", placeholder="vazio = http://localhost:11434")
         op = self._group(f, "OpenAI-compatível")
-        self._text(op, "Modelo", "summary", "openai_model")
-        self._text(op, "Endpoint", "summary", "openai_base_url", hint="inclua /v1")
-        self._text(op, "Chave da API", "summary", "openai_api_key", secret=True)
+        self._text(op, "Modelo", "summary", "openai_model", placeholder="ex.: gpt-4o-mini")
+        self._text(op, "Endpoint", "summary", "openai_base_url", placeholder="inclua /v1 no final",
+                   tooltip="URL base do provedor compatível com OpenAI, terminando em /v1.")
+        self._text(op, "Chave da API", "summary", "openai_api_key", secret=True,
+                   placeholder="cole a chave da API", tooltip="Cifrada com DPAPI ao salvar.")
 
         pr = self._group(f, "Prompt do resumo (prompt.md)")
         actions = QWidget(); ar = QHBoxLayout(actions); ar.setContentsMargins(0, 0, 0, 0)
         note = QLabel("Instruções que moldam o resumo das suas reuniões.")
-        note.setProperty("role", "muted"); note.setStyleSheet("font-size:8pt;")
+        note.setProperty("role", "muted"); note.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
         ar.addWidget(note); ar.addStretch(1)
         ar.addWidget(widgets.ModernButton("Assistente de perfil…", self._open_wizard))
         ar.addWidget(widgets.ModernButton("Restaurar padrão", self._restore_prompt))
@@ -283,10 +345,11 @@ class SettingsWindow(QWidget):
     def _build_detection_tab(self) -> None:
         f = self._tab("Detecção")
         self._check(f, "Gravar sozinho ao detectar a call", "detection", "auto_record")
-        self._text(f, "Apps (desktop)", "detection", "apps", hint="ex.: teams, zoom")
-        self._text(f, "Navegadores", "detection", "browsers", hint="vazio desliga a detecção no navegador")
+        self._text(f, "Apps (desktop)", "detection", "apps", placeholder="ex.: teams, zoom")
+        self._text(f, "Navegadores", "detection", "browsers", placeholder="ex.: chrome, msedge, firefox",
+                   tooltip="Vazio desliga a detecção de calls no navegador.")
         self._text(f, "Títulos de reunião", "detection", "browser_titles",
-                   hint="vazio = qualquer site usando o mic")
+                   placeholder="vazio = qualquer site usando o mic")
         self._float(f, "Poll (s)", "detection", "poll_seconds", 0.5, 60)
         self._float(f, "Tolerância / grace (s)", "detection", "grace_seconds", 0, 120)
         self._float(f, "Gap p/ dividir call (s)", "detection", "split_gap_seconds", 0, 60, hint="0 = nunca")
@@ -295,21 +358,52 @@ class SettingsWindow(QWidget):
 
     def _build_dirs_tab(self) -> None:
         f = self._tab("Pastas")
-        self._dir_row(f, "Notas (.md)", "output", "export_dir", "vazio = Documentos\\ScribaDev")
-        self._dir_row(f, "Gravações", "output", "recordings_dir", "vazio = C:\\temp\\scribadev\\gravacoes")
+        self._dir_row(f, "Notas (.md)", "output", "export_dir", placeholder="Documentos\\ScribaDev (padrão)")
+        self._dir_row(f, "Gravações", "output", "recordings_dir", placeholder="C:\\temp\\scribadev\\gravacoes (padrão)")
 
-    def _dir_row(self, form, label, section, attr, hint) -> None:
+    def _dir_row(self, form, label, section, attr, placeholder="", tooltip="") -> None:
         e = QLineEdit()
+        if placeholder:
+            e.setPlaceholderText(placeholder)
+        if tooltip:
+            widgets.add_tooltip(e, tooltip)
         self._fields.append((e, section, attr, "text", None))
         row = QWidget(); h = QHBoxLayout(row); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(e, 1)
         h.addWidget(widgets.ModernButton("…", lambda: self._pick_dir(e)))
-        self._row(form, label, row, hint)
+        self._row(form, label, row, None)
 
     def _pick_dir(self, entry: QLineEdit) -> None:
         d = QFileDialog.getExistingDirectory(self, "Escolher pasta", entry.text() or "")
         if d:
             entry.setText(d)
+
+    # -- seletores de dispositivo de áudio -----------------------------------
+
+    def _devices_worker(self) -> None:
+        try:
+            data = util.list_audio_devices()
+        except Exception:
+            data = None
+        self._devices_ready.emit(data)
+
+    def _fill_devices(self, data) -> None:
+        """Popula os combos de dispositivo com a lista enumerada, preservando o valor
+        atual (selecionado se aparecer na lista; senão mantido como texto = passthrough)."""
+        if not data:
+            return
+        for combo, key in self._device_combos:
+            current = combo.currentData()   # valor atual (data); "" = padrão
+            names = data.get(key) or []
+            while combo.count() > 1:        # mantém só o "(padrão do Windows)" no topo
+                combo.removeItem(1)
+            for n in names:
+                combo.addItem(n, n)
+            idx = combo.findData(current)
+            if idx < 0 and current:         # valor salvo não enumerado: preserva como item
+                combo.addItem(current, current)
+                idx = combo.findData(current)
+            combo.setCurrentIndex(max(0, idx))
 
     # -- aba Sobre -----------------------------------------------------------
 
@@ -523,8 +617,12 @@ class SettingsWindow(QWidget):
             return widget.value()
         if kind == "editable_text":
             return widget.currentText().strip()
+        if kind == "bigtext":
+            return " ".join(widget.toPlainText().split())   # normaliza p/ string única
         if kind == "choice":
             return widget.currentData()
+        if kind == "device":
+            return widget.currentData() or ""         # item selecionado ('(padrão)' -> '')
         return None
 
     def _widget_set(self, widget, kind, choices, value) -> None:
@@ -537,13 +635,25 @@ class SettingsWindow(QWidget):
         elif kind == "float":
             widget.setValue(float(value or 0))
         elif kind == "editable_text":
-            widget.setCurrentText(str(value or ""))   # passthrough: mostra valor fora da lista
+            v = str(value or "")
+            if v and widget.findText(v) < 0:
+                widget.addItem(v)                     # passthrough de EXIBIÇÃO (não editável)
+            widget.setCurrentText(v)
+        elif kind == "bigtext":
+            widget.setPlainText(str(value or ""))
         elif kind == "choice":
             idx = widget.findData(value)
             if idx < 0:                                 # passthrough: valor fora do mapa
                 widget.addItem(str(value), value)
                 idx = widget.findData(value)
             widget.setCurrentIndex(idx)
+        elif kind == "device":
+            v = str(value or "")
+            idx = widget.findData(v)
+            if idx < 0:                                 # aparelho salvo não enumerado: exibe como item
+                widget.addItem(v, v)
+                idx = widget.findData(v)
+            widget.setCurrentIndex(idx)                 # '' -> '(padrão)'; ou aparelho
 
     def _load(self) -> None:
         cfg = self.app.cfg
@@ -597,6 +707,9 @@ class SettingsWindow(QWidget):
             self._titlebar_done = True
             widgets.enable_dark_titlebar(self)
         self._load()   # relê (o config pode ter mudado)
+        if not self._devices_loaded:   # enumera dispositivos 1x, em thread (subprocesso lento)
+            self._devices_loaded = True
+            threading.Thread(target=self._devices_worker, daemon=True, name="devices").start()
 
     def hide(self) -> None:  # noqa: A003
         self._stop_mic_test()

@@ -25,23 +25,25 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
-    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QScrollArea,
     QSplitter,
     QTextBrowser,
     QTextEdit,
+    QToolButton,
+    QToolTip,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from .. import mdview, util
+from .. import mdparse, util
 from . import theme, widgets
 
 log = logging.getLogger("scriba.qt.notes_ui")
@@ -52,6 +54,7 @@ _FRONT_DATA = re.compile(r"^data:\s*(.+)$", re.M)
 _FRONT_CLIENT = re.compile(r"^cliente:[ \t]*(.+)$", re.M)
 _NAME_DT = re.compile(r"(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})")
 _TRANSCRIPT_TITLE = "transcrição completa"
+_TOGGLE_ANCHOR = "scriba:toggle-transcript"   # link interno p/ mostrar/ocultar a transcrição
 
 
 # -- helpers puros (sem UI) ---------------------------------------------------
@@ -66,8 +69,8 @@ def _strip_frontmatter(md: str) -> str:
 
 
 def _summary_and_transcript(md: str) -> tuple[str, str | None]:
-    """(resumo SEM a transcrição, transcrição|None) — via mdview.split_sections (puro)."""
-    pre, secs = mdview.split_sections(_strip_frontmatter(md))
+    """(resumo SEM a transcrição, transcrição|None) — via mdparse.split_sections (puro)."""
+    pre, secs = mdparse.split_sections(_strip_frontmatter(md))
     parts = [pre.strip()] if pre.strip() else []
     transcript = None
     for title, text in secs:
@@ -139,10 +142,15 @@ class NotesWindow(QWidget):
         self._transcript_shown = False
         self._hits: list[QTextCursor] = []
         self._hit_idx = -1
+        self._chat = None            # única janela de chat ativa por vez (#48)
+        self._chat_key: Path | None = None   # nota da conversa aberta
+        self._chat_title = ""        # título p/ o aviso "fechar a conversa atual"
+        self._header_orig: tuple[str, str] | None = None   # (título, cliente) salvos, p/ dirty-tracking
 
         self.setWindowTitle("ScribaDev — Notas")
         self.setMinimumSize(880, 560)
         self.setWindowOpacity(0.98)
+        widgets.remember_geometry(self, "qt_notes", default=(140, 110, 1040, 680))
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 12, 14, 12)
@@ -152,7 +160,10 @@ class NotesWindow(QWidget):
         split.addWidget(self._build_right())
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
-        split.setSizes([300, 620])
+        # divisão persistida entre sessões + default proporcional com clamp (#61); o
+        # minimumWidth dos dois painéis (esquerdo aqui, direito no _build_right) garante
+        # que a command bar nunca seja espremida.
+        widgets.remember_splitter(split, "qt_notes_splitter")
 
         self._search_timer = QTimer(self); self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(350); self._search_timer.timeout.connect(self._refresh_list)
@@ -161,11 +172,13 @@ class NotesWindow(QWidget):
         self._find_timer.setInterval(200); self._find_timer.timeout.connect(self._run_find)
         self._refresh_sig.connect(self._refresh_list)
         self._apply_theme()
+        self._setup_shortcuts()
 
     # -- construção da UI ----------------------------------------------------
 
     def _build_left(self) -> QWidget:
         left = QWidget()
+        left.setMinimumWidth(240)   # proteção estrutural (#61): esquerda não some/estoura
         lay = QVBoxLayout(left); lay.setContentsMargins(0, 0, 0, 0)
         title = QLabel("Reuniões"); title.setStyleSheet("font-weight:bold;")
         lay.addWidget(title)
@@ -174,59 +187,133 @@ class NotesWindow(QWidget):
         self._search.textChanged.connect(lambda: self._search_timer.start())
         lay.addWidget(self._search)
 
+        # filtros estruturados: COLAPSADOS por padrão (só a busca fica sempre visível),
+        # com badge de quantos estão ativos no cabeçalho. Libera espaço vertical p/ a árvore.
+        self._filters = widgets.Collapsible("Filtros")
         self._f_participant = widgets.make_entry("participante")
         self._f_client = widgets.make_entry("cliente")
-        self._f_since = widgets.make_entry("de (DD/MM/AAAA)")
-        self._f_until = widgets.make_entry("até (DD/MM/AAAA)")
-        for f in (self._f_participant, self._f_client, self._f_since, self._f_until):
+        self._f_since = widgets.DateFilter("de")
+        self._f_until = widgets.DateFilter("até")
+        fbody = QWidget()
+        fl = QVBoxLayout(fbody); fl.setContentsMargins(0, 4, 0, 2); fl.setSpacing(6)
+        for f in (self._f_participant, self._f_client):
             f.textChanged.connect(lambda: self._search_timer.start())
-            lay.addWidget(f)
+            f.textChanged.connect(lambda: self._update_filter_badge())
+            fl.addWidget(f)
+        for f in (self._f_since, self._f_until):
+            f.changed.connect(lambda: self._search_timer.start())
+            f.changed.connect(lambda: self._update_filter_badge())
+            fl.addWidget(f)
+        self._filters.set_content(fbody)
+        lay.addWidget(self._filters)
 
         self._tree = QTreeWidget()
         self._tree.setHeaderHidden(True)
         self._tree.setSelectionMode(QTreeWidget.ExtendedSelection)
         self._tree.itemSelectionChanged.connect(self._show_selected)
+        self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._tree.customContextMenuRequested.connect(self._tree_context_menu)
         lay.addWidget(self._tree, 1)
 
+        # rodapé só-ícone: 3 botões de texto não cabiam no painel estreito (#64 pegou o
+        # corte). Ícones + tooltip, no mesmo idioma da command bar.
         actions = QHBoxLayout()
-        actions.addWidget(widgets.ModernButton("Atualizar", self._refresh_list))
-        actions.addWidget(widgets.ModernButton("Abrir pasta", self._open_notes_dir))
-        actions.addWidget(widgets.ModernButton("Pendências", self._open_action_items))
+        actions.addWidget(widgets.icon_button("refresh", "Atualizar a lista (F5)", self._refresh_list))
+        actions.addWidget(widgets.icon_button("folder", "Abrir a pasta das notas", self._open_notes_dir))
+        actions.addWidget(widgets.icon_button("task-list", "Minhas pendências", self._open_action_items))
         actions.addStretch(1)
         lay.addLayout(actions)
         return left
 
+    def _active_filter_count(self) -> int:
+        """Quantos filtros ESTRUTURADOS estão ativos (a busca FTS, sempre visível, não
+        conta) — vira o badge do cabeçalho "Filtros"."""
+        n = 0
+        if self._f_participant.text().strip():
+            n += 1
+        if self._f_client.text().strip():
+            n += 1
+        if self._f_since.br():
+            n += 1
+        if self._f_until.br():
+            n += 1
+        return n
+
+    def _update_filter_badge(self) -> None:
+        n = self._active_filter_count()
+        self._filters.set_header(f"Filtros ({n})" if n else "Filtros")
+
     def _build_right(self) -> QWidget:
         right = QWidget()
+        # proteção estrutural (fatia mínima do #61): garante que a command bar caiba
+        # sem cortar o botão primário, mesmo no minimumSize da janela.
+        right.setMinimumWidth(500)
         lay = QVBoxLayout(right); lay.setContentsMargins(12, 0, 0, 0)
 
         header = QHBoxLayout()
         self._title = widgets.make_entry("título da reunião")
-        header.addWidget(self._title, 1)
+        self._title.textChanged.connect(lambda: self._update_save_state())
+        self._title.returnPressed.connect(self._save_header)
+        header.addWidget(self._title, 3)
         cli = QLabel("Cliente:"); cli.setProperty("role", "muted")
         header.addWidget(cli)
         self._client = widgets.make_entry("empresa")
-        self._client.setFixedWidth(150)
-        header.addWidget(self._client)
+        self._client.setMinimumWidth(140)   # sem fixedWidth: nomes de cliente longos não truncam
+        self._client.textChanged.connect(lambda: self._update_save_state())
+        self._client.returnPressed.connect(self._save_header)
+        header.addWidget(self._client, 1)
         self._save_btn = widgets.ModernButton("Salvar", self._save_header)
+        self._save_btn.setEnabled(False)   # dirty-only: só habilita quando título/cliente mudam
         header.addWidget(self._save_btn)
         lay.addLayout(header)
 
-        acts = QHBoxLayout()
-        self._prompt_btn = widgets.ModernButton("Gerar Prompt de Contexto", self._copy_prompt, kind="primary")
-        self._tr_btn = widgets.ModernButton("Copiar transcrição", self._copy_transcript)
-        self._chat_btn = widgets.ModernButton("Perguntar à reunião", self._open_chat)
-        self._voice_btn = widgets.ModernButton("Rotular vozes…", self._open_speaker_labeler)
-        self._voice_btn.setVisible(False)   # só quando a gravação tem vozes (voices.json)
-        self._delete_btn = widgets.ModernButton("Excluir nota…", self._ask_delete)
-        for b in (self._prompt_btn, self._tr_btn, self._chat_btn, self._voice_btn):
+        # command bar (Fluent/Win11): a ação de IA "Perguntar à reunião" é o DESTAQUE
+        # (primário colorido, texto + ícone à esquerda) — é o que conversa com a IA, não
+        # pode ficar escondido atrás de um tooltip. As demais são só-ícone + tooltip; a
+        # destrutiva vai pro overflow "…". Cabe no minimumSize sem cortar nada.
+        acts = QHBoxLayout(); acts.setSpacing(6)
+        self._chat_btn = widgets.ModernButton("Perguntar à reunião", self._open_chat, kind="primary")
+        self._chat_btn.setIcon(theme.qicon("chat", color=theme.active().on_accent))
+        acts.addWidget(self._chat_btn)
+        self._prompt_btn = widgets.icon_button("sparkle", "Gerar Prompt de Contexto", self._copy_prompt)
+        self._tr_btn = widgets.icon_button("copy", "Copiar transcrição", self._copy_transcript)
+        # "Rotular vozes" tem POSIÇÃO ESTÁVEL: nunca some (não desloca os vizinhos);
+        # fica desabilitado quando a gravação não tem vozes (ver _update_voice_button).
+        self._voice_btn = widgets.icon_button("people", "Rotular vozes…", self._open_speaker_labeler)
+        for b in (self._prompt_btn, self._tr_btn, self._voice_btn):
             acts.addWidget(b)
         acts.addStretch(1)
-        acts.addWidget(self._delete_btn)
+        self._overflow_btn = QToolButton()
+        self._overflow_btn.setIcon(theme.qicon("more-horizontal"))
+        self._overflow_btn.setPopupMode(QToolButton.InstantPopup)
+        self._overflow_btn.setCursor(Qt.PointingHandCursor)
+        widgets.add_tooltip(self._overflow_btn, "Mais ações")
+        menu = QMenu(self._overflow_btn)
+        self._delete_action = menu.addAction(theme.qicon("delete", color=theme.active().rec), "Excluir nota…")
+        self._delete_action.triggered.connect(self._ask_delete)
+        self._overflow_btn.setMenu(menu)
+        acts.addWidget(self._overflow_btn)
         lay.addLayout(acts)
 
+        # faixa de PENDÊNCIA (logo abaixo da command bar): nasce quando a reunião tem
+        # vozes ainda não rotuladas e some ao rotular. Rotular participantes é uma ação
+        # que fica pendente ao usuário — a faixa dá importância a ela. Clicável (abre o
+        # mesmo diálogo do ícone de vozes). Numa faixa própria (não na fileira) porque o
+        # texto não caberia junto do botão de IA sem cortá-lo no minimumSize.
+        th = theme.active()
+        _wr = tuple(int(th.warn.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+        self._voice_hint = QLabel("Participantes ainda não rotulados - clique aqui para identificar quem falou")
+        self._voice_hint.setCursor(Qt.PointingHandCursor)
+        self._voice_hint.mousePressEvent = lambda _e: self._open_speaker_labeler()
+        self._voice_hint.setStyleSheet(
+            f"color:{th.warn}; font-weight:bold; font-size:{th.font_size_small}pt;"
+            f" background:rgba({_wr[0]},{_wr[1]},{_wr[2]},0.14);"
+            f" border:1px solid {th.warn}; border-radius:{th.radius_sm}px; padding:4px 10px;")
+        self._voice_hint.setVisible(False)
+        lay.addWidget(self._voice_hint)
+
         # Presentes (colapsável)
-        self._presentes = _Collapsible("Presentes")
+        self._presentes = widgets.Collapsible("Presentes")
         lay.addWidget(self._presentes)
 
         # find bar (visível só com nota aberta)
@@ -236,19 +323,21 @@ class NotesWindow(QWidget):
         self._find.textChanged.connect(lambda: self._find_timer.start())
         self._find.returnPressed.connect(self._next_hit)
         fl.addWidget(self._find, 1)
-        fl.addWidget(widgets.ModernButton("▲", self._prev_hit))
-        fl.addWidget(widgets.ModernButton("▼", self._next_hit))
+        self._find_prev = widgets.icon_button("chevron-up", "Ocorrência anterior", self._prev_hit)
+        self._find_next = widgets.icon_button("chevron-down", "Próxima ocorrência", self._next_hit)
+        fl.addWidget(self._find_prev)
+        fl.addWidget(self._find_next)
         self._find_count = QLabel(""); self._find_count.setProperty("role", "muted")
         self._find_count.setFixedWidth(48)
         fl.addWidget(self._find_count)
-        self._find_transcript = QCheckBox("incluir transcrição")
-        self._find_transcript.toggled.connect(self._on_toggle_transcript)
-        fl.addWidget(self._find_transcript)
         lay.addWidget(self._find_bar)
 
-        # leitor de markdown
+        # leitor de markdown. A transcrição é expandida/recolhida por um LINK no próprio
+        # documento (anchorClicked), não por um checkbox na find bar — assim a rolagem
+        # é preservada e a busca não salta pro 1º hit (o antigo "a tela se realinha").
         self._view = QTextBrowser()
-        self._view.setOpenExternalLinks(True)
+        self._view.setOpenLinks(False)   # nós tratamos os cliques (link interno + externos)
+        self._view.anchorClicked.connect(self._on_anchor)
         lay.addWidget(self._view, 1)
 
         # painel de progresso (reunião em processamento)
@@ -266,6 +355,62 @@ class NotesWindow(QWidget):
         t = theme.active()
         self._view.setStyleSheet(f"QTextBrowser {{ background:{t.field}; border:1px solid {t.border};"
                                  f" border-radius:{t.radius + 2}px; padding:8px; }}")
+
+    # -- atalhos e menu de contexto (#63) ------------------------------------
+
+    def _setup_shortcuts(self) -> None:
+        """Atalhos de teclado (ferramenta de uso diário). Del é escopado à ÁRVORE e Esc à
+        busca — assim não disparam enquanto você edita texto num campo do formulário."""
+        from PySide6.QtGui import QKeySequence, QShortcut
+
+        def _sc(seq, target, slot, context=Qt.WindowShortcut) -> None:
+            s = QShortcut(seq, target)
+            s.setContext(context)
+            s.activated.connect(slot)
+
+        _sc(QKeySequence.Find, self, self._focus_find)                       # Ctrl+F: busca na nota
+        _sc(QKeySequence(Qt.Key_F5), self, self._refresh_list)               # F5: atualiza a lista
+        _sc(QKeySequence(Qt.Key_Delete), self._tree, self._ask_delete,       # Del: exclui (só na árvore)
+            Qt.WidgetWithChildrenShortcut)
+        _sc(QKeySequence(Qt.Key_Escape), self._find, self._reset_find,       # Esc: limpa a busca
+            Qt.WidgetShortcut)
+
+    def _focus_find(self) -> None:
+        if self._find_bar.isVisible():
+            self._find.setFocus()
+            self._find.selectAll()
+
+    def _tree_context_menu(self, pos) -> None:
+        item = self._tree.itemAt(pos)
+        if item is None or item not in self._items or self._items[item][2] is not None:
+            return   # sem item, ou reunião em processamento/falha (nota ainda não existe)
+        if item not in self._tree.selectedItems():
+            self._tree.setCurrentItem(item)   # não quebra uma multi-seleção existente
+        menu = self._build_tree_menu(self._items[item][0])
+        menu.exec(self._tree.viewport().mapToGlobal(pos))
+
+    def _build_tree_menu(self, path: Path):
+        """Menu de contexto de uma nota (separado do _tree_context_menu p/ ser testável
+        sem o exec() modal)."""
+        t = theme.active()
+        menu = QMenu(self._tree)
+        menu.addAction(theme.qicon("folder"), "Abrir pasta da gravação",
+                       lambda: self._open_recording_folder(path))
+        from .speakers_ui import voice_label_state
+
+        try:
+            has_voices = voice_label_state(self._recording_folder_for(path)) != "none"
+        except Exception:
+            has_voices = False
+        if has_voices:
+            menu.addAction(theme.qicon("people"), "Rotular vozes…", self._open_speaker_labeler)
+        menu.addSeparator()
+        menu.addAction(theme.qicon("delete", color=t.rec), "Excluir nota…", self._ask_delete)
+        return menu
+
+    def _open_recording_folder(self, note_path: Path) -> None:
+        folder = self._recording_folder_for(note_path)
+        util.open_path(folder if folder.is_dir() else self._notes_dir())
 
     # -- lista ---------------------------------------------------------------
 
@@ -354,8 +499,8 @@ class NotesWindow(QWidget):
         q = self._search.text().strip()
         participant = self._f_participant.text().strip()
         client = self._f_client.text().strip()
-        since = self._f_since.text().strip()
-        until = self._f_until.text().strip()
+        since = self._f_since.br()
+        until = self._f_until.br()
         searching = bool(q or participant or client or since or until)
         entries: list[tuple[datetime, str, tuple]] = []
         pending: list = []
@@ -382,8 +527,8 @@ class NotesWindow(QWidget):
             msg = ("Nenhuma reunião encontrada para a busca/filtros." if searching
                    else "Nenhuma nota ainda — elas aparecem aqui depois da primeira reunião.")
             self._show_note_pane()
-            self._delete_btn.setVisible(False)
-            self._voice_btn.setVisible(False)
+            self._set_note_actions(False)
+            self._clear_header()
             self._find_bar.setVisible(False)
             self._presentes.setVisible(False)
             self._view.setMarkdown(msg)
@@ -411,8 +556,11 @@ class NotesWindow(QWidget):
                 key = path
             else:
                 folder, status, title = payload
-                icon = "⚠" if status in ("failed", "no_audio") else "⏳"
-                item = QTreeWidgetItem(day_node, [f"{dt:%H:%M}  {icon} {util.stage_label(status)}"])
+                failed = status in ("failed", "no_audio")
+                item = QTreeWidgetItem(day_node, [f"{dt:%H:%M}  {util.stage_label(status)}"])
+                t = theme.active()
+                item.setIcon(0, theme.qicon("warning" if failed else "hourglass",
+                                            color=t.warn if failed else t.muted))
                 self._items[item] = (folder, title, status)
                 key = folder
             first_item = first_item or item
@@ -445,10 +593,8 @@ class NotesWindow(QWidget):
 
     def _render_progress(self, folder: Path, status: str) -> None:
         self._show_progress_pane()
-        self._delete_btn.setVisible(False)
-        self._voice_btn.setVisible(False)
-        self._title.setText("")
-        self._client.setText("")
+        self._set_note_actions(False)
+        self._clear_header()
         self._current_key = folder
         self._prog_stage.setText(util.stage_label(status))
         if status in ("failed", "no_audio"):
@@ -500,9 +646,12 @@ class NotesWindow(QWidget):
             self._render_progress(path, status)
             return
         self._show_note_pane()
-        self._title.setText(title or "")
-        self._client.setText(_client_of(path))
-        self._delete_btn.setVisible(True)
+        title_text, client_text = title or "", _client_of(path)
+        self._header_orig = (title_text, client_text)   # baseline do dirty-tracking do Salvar
+        self._title.setText(title_text)
+        self._client.setText(client_text)
+        self._update_save_state()   # começa limpo (Salvar desabilitado)
+        self._set_note_actions(True)
         self._update_voice_button(path)
         self._find_bar.setVisible(True)
         try:
@@ -519,22 +668,41 @@ class NotesWindow(QWidget):
         self._reset_find()
 
     def _render_view(self, summary_md: str) -> None:
-        """Mostra o resumo; se há transcrição, um rótulo no fim permite expandi-la
-        (colapsada por padrão, como na versão tk)."""
+        """Mostra o resumo; se há transcrição, um LINK no fim a expande/recolhe no próprio
+        documento. Colapsada por padrão. O toggle preserva a rolagem (_toggle_transcript_view)."""
         md = summary_md
         if self._transcript_md and not self._transcript_shown:
-            md += "\n\n---\n*Transcrição completa oculta — marque \"incluir transcrição\" para vê-la.*"
+            md += f"\n\n---\n\n[Mostrar transcrição completa]({_TOGGLE_ANCHOR})"
         elif self._transcript_md and self._transcript_shown:
-            md += f"\n\n## Transcrição completa\n\n{self._transcript_md}"
+            md += (f"\n\n---\n\n[Ocultar transcrição completa]({_TOGGLE_ANCHOR})"
+                   f"\n\n## Transcrição completa\n\n{self._transcript_md}")
         self._view.setMarkdown(md)
 
-    def _on_toggle_transcript(self, checked: bool) -> None:
-        self._transcript_shown = checked
-        sel = self._selected_md()
-        if sel is not None:
-            summary, self._transcript_md = _summary_and_transcript(sel)
-            self._render_view(summary)
-            self._run_find()
+    def _on_anchor(self, url) -> None:
+        """Clique num link do leitor: o link interno alterna a transcrição SEM navegar
+        (setOpenLinks(False)); links http/mailto reais abrem no app externo."""
+        if url.toString() == _TOGGLE_ANCHOR:
+            self._toggle_transcript_view()
+            return
+        if url.scheme() in ("http", "https", "mailto"):
+            from PySide6.QtGui import QDesktopServices
+
+            QDesktopServices.openUrl(url)
+
+    def _toggle_transcript_view(self) -> None:
+        """Mostra/oculta a transcrição preservando a posição de leitura: o resumo acima
+        não muda, então restaurar o valor da barra mantém o ponto; e NÃO salta para hit
+        de busca (só recolore). Fim do "a tela se realinha"."""
+        md = self._selected_md()
+        if md is None or not self._transcript_md:
+            return
+        bar = self._view.verticalScrollBar()
+        pos = bar.value()
+        self._transcript_shown = not self._transcript_shown
+        summary, self._transcript_md = _summary_and_transcript(md)
+        self._render_view(summary)
+        bar.setValue(min(pos, bar.maximum()))
+        self._run_find(jump=False)
 
     # -- presentes -----------------------------------------------------------
 
@@ -552,12 +720,25 @@ class NotesWindow(QWidget):
             name = QLabel(f"• {label}"); name.setStyleSheet("font-weight:bold;")
             bl.addWidget(name)
             d = QLabel(desc); d.setProperty("role", "muted"); d.setWordWrap(True)
-            d.setStyleSheet("font-size:8pt;")
+            d.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
             bl.addWidget(d)
         self._presentes.set_content(body)
         self._presentes.setVisible(True)
 
     # -- ações ---------------------------------------------------------------
+
+    def _set_note_actions(self, on: bool) -> None:
+        """Liga/desliga as ações que exigem uma nota real selecionada (secundárias +
+        overflow/excluir). Mantém a fileira com posição ESTÁVEL: os botões não somem,
+        só ficam desabilitados. 'Rotular vozes' é refinado à parte (_update_voice_button),
+        pois também depende de a gravação ter vozes."""
+        for w in (self._prompt_btn, self._tr_btn, self._chat_btn):
+            w.setEnabled(on)
+        self._delete_action.setEnabled(on)
+        self._overflow_btn.setEnabled(on)
+        if not on:
+            self._voice_btn.setEnabled(False)
+            self._voice_hint.setVisible(False)
 
     def _copy_prompt(self) -> None:
         md = self._selected_md()
@@ -566,7 +747,7 @@ class NotesWindow(QWidget):
         from .. import context_prompt
 
         _clip(context_prompt.build_context_prompt(md))
-        widgets.flash_button(self._prompt_btn, "✓ Copiado", "Gerar Prompt de Contexto")
+        widgets.flash_icon(self._prompt_btn, "checkmark", theme.active().ok)
 
     def _copy_transcript(self) -> None:
         md = self._selected_md()
@@ -574,25 +755,83 @@ class NotesWindow(QWidget):
             return
         _summary, tr = _summary_and_transcript(md)
         if not tr:
-            widgets.flash_button(self._tr_btn, "Sem transcrição", "Copiar transcrição")
+            QToolTip.showText(self._tr_btn.mapToGlobal(self._tr_btn.rect().bottomLeft()),
+                              "Sem transcrição", self._tr_btn)
+            widgets.flash_icon(self._tr_btn, "dismiss", theme.active().warn)
             return
         _clip(tr)
-        widgets.flash_button(self._tr_btn, "✓ Copiado", "Copiar transcrição")
+        widgets.flash_icon(self._tr_btn, "checkmark", theme.active().ok)
 
     def _open_chat(self) -> None:
+        sel = self._selected()
+        if not sel or sel[2] is not None:   # sem nota real selecionada
+            return
+        note_path = sel[0]
         md = self._selected_md()
         if md is None:
-            widgets.flash_button(self._chat_btn, "Selecione uma nota", "Perguntar à reunião")
             return
+        # SÓ UMA conversa por vez (#48) — não confundir perguntas de reuniões diferentes.
+        if self._chat_alive():
+            if self._chat_key == note_path:
+                self._chat.raise_(); self._chat.activateWindow()   # mesma reunião: traz à frente
+                return
+            if not self._confirm_close_chat(self._chat_title or "outra reunião"):
+                self._chat.raise_(); self._chat.activateWindow()   # cancelou: mantém a atual
+                return
+            self._chat.close()   # confirmou: fecha a anterior antes de abrir a nova
         from .chat_ui import ChatWindow
 
+        title = sel[1] or self._title.text().strip() or "reunião"
         summary, transcript = _summary_and_transcript(md)
-        self._chat = ChatWindow(summary, transcript, self._title.text().strip() or "reunião")
+        self._chat = ChatWindow(summary, transcript, title)
+        self._chat_key = note_path
+        self._chat_title = title
         self._chat.show()
+
+    def _chat_alive(self) -> bool:
+        """Há uma janela de chat aberta (viva e visível)? Fechada pelo usuário (X) conta
+        como não-aberta: o objeto persiste, mas fica invisível."""
+        if self._chat is None:
+            return False
+        try:
+            return bool(self._chat.isVisible())
+        except RuntimeError:   # objeto C++ já destruído
+            self._chat = None
+            return False
+
+    def _confirm_close_chat(self, other_title: str) -> bool:
+        """Confirma fechar a conversa atual antes de abrir outra. Método à parte para o
+        teste conseguir sobrepor (o QMessageBox é modal e bloquearia)."""
+        box = QMessageBox(self)
+        box.setWindowTitle("Fechar a conversa atual?")
+        box.setIcon(QMessageBox.Question)
+        box.setText(f'Já existe uma conversa aberta sobre "{other_title[:60]}".')
+        box.setInformativeText("Só é possível uma conversa por vez. Abrir esta vai fechar a atual. Continuar?")
+        box.setStandardButtons(QMessageBox.Cancel | QMessageBox.Ok)
+        box.setDefaultButton(QMessageBox.Cancel)
+        box.button(QMessageBox.Ok).setText("Fechar e abrir a nova")
+        box.button(QMessageBox.Cancel).setText("Cancelar")
+        return box.exec() == QMessageBox.Ok
+
+    def _update_save_state(self) -> None:
+        """Salvar só fica ativo quando título/cliente DIVERGEM do que está salvo (dirty).
+        Autosave foi rejeitado de propósito: salvar renomeia arquivo e pasta."""
+        if self._header_orig is None:
+            self._save_btn.setEnabled(False)
+            return
+        cur = (self._title.text().strip(), self._client.text().strip())
+        self._save_btn.setEnabled(cur != self._header_orig)
+
+    def _clear_header(self) -> None:
+        """Zera o cabeçalho (sem nota / em processamento) e desabilita o Salvar."""
+        self._header_orig = None
+        self._title.clear()
+        self._client.clear()
+        self._save_btn.setEnabled(False)
 
     def _save_header(self) -> None:
         sel = self._selected()
-        if not sel or sel[2] is not None:
+        if not sel or sel[2] is not None or not self._save_btn.isEnabled():
             return
         path = sel[0]
         new_title = self._title.text().strip()
@@ -602,6 +841,8 @@ class NotesWindow(QWidget):
         if new_title:
             set_note_title(path, new_title)
         set_note_client(path, new_client)
+        self._header_orig = (new_title, new_client)   # salvo agora -> volta a limpo
+        self._update_save_state()
         self._refresh_list()
         widgets.flash_button(self._save_btn, "✓ Salvo", "Salvar")
 
@@ -619,7 +860,7 @@ class NotesWindow(QWidget):
         box.setIcon(QMessageBox.Warning)
         box.setText(text)
         box.setInformativeText("A nota sai da lista e do índice de busca. Esta ação não pode ser desfeita.")
-        also = QCheckBox("Excluir também o áudio/gravação (sem volta)")
+        also = widgets.AnimatedCheckBox("Excluir também o áudio/gravação (sem volta)")
         box.setCheckBox(also)
         box.setStandardButtons(QMessageBox.Cancel | QMessageBox.Yes)
         box.setDefaultButton(QMessageBox.Cancel)
@@ -678,7 +919,7 @@ class NotesWindow(QWidget):
 
     # -- find-in-note --------------------------------------------------------
 
-    def _run_find(self) -> None:
+    def _run_find(self, jump: bool = True) -> None:
         query = self._find.text().strip()
         self._clear_hits()
         if not query:
@@ -703,7 +944,10 @@ class NotesWindow(QWidget):
         self._view.setExtraSelections(sels)
         if self._hits:
             self._hit_idx = 0
-            self._goto_hit()
+            if jump:
+                self._goto_hit()
+            else:   # recolore os hits sem mover o cursor/rolagem (toggle da transcrição)
+                self._find_count.setText(f"1/{len(self._hits)}")
         else:
             self._find_count.setText("0/0")
 
@@ -738,13 +982,24 @@ class NotesWindow(QWidget):
     # -- rotular vozes (#1; diálogo do #51) ----------------------------------
 
     def _update_voice_button(self, note_path: Path) -> None:
-        from .speakers_ui import has_labelable_voices
+        from .speakers_ui import voice_label_state
 
         try:
-            has = has_labelable_voices(self._recording_folder_for(note_path))
+            state = voice_label_state(self._recording_folder_for(note_path))
         except Exception:
-            has = False
-        self._voice_btn.setVisible(has)
+            state = "none"
+        t = theme.active()
+        self._voice_btn.setEnabled(state != "none")
+        if state == "done":
+            # já rotulado: ícone VERDE, sem hint; segue clicável para revisar/alterar
+            self._voice_btn.setIcon(theme.qicon("people", color=t.ok))
+            widgets.add_tooltip(self._voice_btn, "Participantes rotulados — clique para revisar")
+        else:
+            self._voice_btn.setIcon(theme.qicon("people"))
+            widgets.add_tooltip(self._voice_btn,
+                                "Rotular participantes" if state == "pending"
+                                else "Esta gravação não tem vozes rotuláveis")
+        self._voice_hint.setVisible(state == "pending")
 
     def _open_speaker_labeler(self) -> None:
         sel = self._selected()
@@ -769,8 +1024,14 @@ class NotesWindow(QWidget):
         return {str(v): notes.guess_voice_name(str(v), presentes.get(str(v), "")) for v in voices}
 
     def _after_relabel(self) -> None:
+        # mantém a MESMA nota aberta e re-renderiza: agora com os nomes na transcrição
+        # e o ícone de vozes VERDE (a pendência foi resolvida).
+        sel = self._selected()
+        keep = sel[0] if sel else None
         self._current_key = None   # força re-render (agora com os nomes)
         self._refresh_list()
+        if keep is not None:
+            self._select_in_tree(keep)
 
     # -- "Minhas pendências" (#22) -------------------------------------------
 
@@ -798,6 +1059,11 @@ class NotesWindow(QWidget):
     def _open_action_items(self) -> None:
         self._actions_win = _ActionItemsWindow(self._collect_action_groups(), self._reveal_note)
         self._actions_win.show()
+
+    def reveal_note(self, note_path) -> None:
+        """Navega até a reunião de caminho `note_path` na árvore (público; usado
+        pela capa ao clicar numa reunião recente). Aceita str ou Path."""
+        self._reveal_note(Path(note_path))
 
     def _reveal_note(self, note_path: Path) -> None:
         if self._select_in_tree(note_path):
@@ -864,7 +1130,7 @@ class _ActionItemsWindow(QWidget):
         head.addWidget(title)
         self._count = QLabel(""); self._count.setProperty("role", "muted")
         head.addWidget(self._count); head.addStretch(1)
-        self._show_done = QCheckBox("mostrar resolvidas")
+        self._show_done = widgets.AnimatedCheckBox("mostrar resolvidas")
         self._show_done.toggled.connect(self._render)
         head.addWidget(self._show_done)
         root.addLayout(head)
@@ -906,7 +1172,7 @@ class _ActionItemsWindow(QWidget):
         from .. import notes
 
         text = (f"[{item['label']}] " if item.get("label") else "") + (item.get("text") or item.get("raw") or "")
-        cb = QCheckBox(text)
+        cb = widgets.AnimatedCheckBox(text)
         cb.setChecked(done)
         if done:
             cb.setStyleSheet(f"color:{theme.active().muted}; text-decoration:line-through;")
@@ -923,44 +1189,6 @@ class _ActionItemsWindow(QWidget):
         self.raise_()
         self.activateWindow()
         widgets.enable_dark_titlebar(self)
-
-
-class _Collapsible(QWidget):
-    """Cabeçalho clicável (▸/▾) + conteúdo colapsável."""
-
-    def __init__(self, title: str):
-        super().__init__()
-        self._open = False
-        lay = QVBoxLayout(self); lay.setContentsMargins(0, 0, 0, 6); lay.setSpacing(2)
-        self._hdr = QLabel()
-        self._hdr.setCursor(Qt.PointingHandCursor)
-        self._hdr.setStyleSheet(f"color:{theme.active().accent_hover}; font-weight:bold; font-size:11pt;")
-        self._hdr.mousePressEvent = lambda _e: self._toggle()
-        lay.addWidget(self._hdr)
-        self._content: QWidget | None = None
-        self._lay = lay
-        self._title = title
-        self._render_hdr()
-
-    def set_header(self, title: str) -> None:
-        self._title = title
-        self._render_hdr()
-
-    def set_content(self, w: QWidget) -> None:
-        if self._content is not None:
-            self._content.deleteLater()
-        self._content = w
-        self._lay.addWidget(w)
-        w.setVisible(self._open)
-
-    def _render_hdr(self) -> None:
-        self._hdr.setText(f"{'▾' if self._open else '▸'} {self._title}")
-
-    def _toggle(self) -> None:
-        self._open = not self._open
-        self._render_hdr()
-        if self._content is not None:
-            self._content.setVisible(self._open)
 
 
 def _clip(text: str) -> None:

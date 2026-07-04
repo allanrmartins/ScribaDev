@@ -13,22 +13,33 @@ from typing import Callable
 
 from PySide6.QtCore import (
     Property,
+    QDate,
     QEasingCurve,
     QEvent,
     QObject,
+    QPointF,
     QPropertyAnimation,
+    QRectF,
     QSize,
     Qt,
+    QTime,
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QAbstractScrollArea,
+    QApplication,
+    QCheckBox,
+    QDateEdit,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QTimeEdit,
+    QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -153,6 +164,43 @@ def flash_button(btn, text: str, revert_to: str, *, ms: int = 1500) -> None:
         pass  # botão já destruído
 
 
+# == botão de ícone (command bar / find) ======================================
+
+def icon_button(name: str, tooltip: str, command: Callable[[], None] | None = None,
+                *, color: str | None = None, size: int = 18, parent=None) -> QToolButton:
+    """QToolButton compacto, só-ícone (Fluent via `theme.qicon`) + tooltip. Para command
+    bars e barras de busca, onde o texto ocuparia espaço demais e estouraria a linha.
+    O visual (hover/raio) vem do QSS `QToolButton` do tema; `color` default = texto."""
+    b = QToolButton(parent)
+    b.setIcon(theme.qicon(name, color))
+    b.setIconSize(QSize(size, size))
+    b.setCursor(Qt.PointingHandCursor)
+    if tooltip:
+        b.setToolTip(tooltip)
+    if command is not None:
+        b.clicked.connect(lambda: command())
+    return b
+
+
+def flash_icon(btn, name: str, color: str, *, ms: int = 1500) -> None:
+    """Feedback efêmero num botão de ícone: troca o ícone por `name` (cor `color`) e
+    restaura o original após `ms`. Par do `flash_button` para botões só-ícone (a mesma
+    regra: nenhuma ação termina sem resposta visível)."""
+    try:
+        old = btn.icon()
+    except RuntimeError:
+        return
+    btn.setIcon(theme.qicon(name, color))
+
+    def _restore() -> None:
+        try:
+            btn.setIcon(old)
+        except RuntimeError:
+            pass  # botão já destruído
+
+    QTimer.singleShot(ms, _restore)
+
+
 # == interruptor estilo Win11 =================================================
 
 class ToggleSwitch(QAbstractButton):
@@ -220,6 +268,87 @@ class ToggleSwitch(QAbstractButton):
         p.drawEllipse(cx - r, self.H / 2 - r, 2 * r, 2 * r)
 
 
+# == checkbox com tick verde + animação =======================================
+
+def _lerp_color(a: QColor, b: QColor, t: float) -> QColor:
+    return QColor(round(a.red() + (b.red() - a.red()) * t),
+                  round(a.green() + (b.green() - a.green()) * t),
+                  round(a.blue() + (b.blue() - a.blue()) * t))
+
+
+class AnimatedCheckBox(QCheckBox):
+    """Checkbox com tick VERDE e animação ao marcar/desmarcar. Mantém a API do QCheckBox
+    (setChecked/isChecked/toggled/text); só o indicador é desenhado à mão (paintEvent),
+    com uma Property `fill` (0..1) animada — o tick surge/some e a borda vira verde. O
+    QSS não anima, por isso o indicador é custom (mesmo caminho do ToggleSwitch)."""
+
+    _BOX = 18   # lado do indicador
+    _GAP = 9    # espaço indicador -> texto
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self._fill = 1.0 if self.isChecked() else 0.0
+        self._anim = QPropertyAnimation(self, b"fill", self)
+        self._anim.setDuration(170)
+        self._anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.toggled.connect(self._animate)
+
+    def _animate(self, on: bool) -> None:
+        self._anim.stop()
+        self._anim.setStartValue(self._fill)
+        self._anim.setEndValue(1.0 if on else 0.0)
+        self._anim.start()
+
+    def get_fill(self) -> float:
+        return self._fill
+
+    def set_fill(self, v: float) -> None:
+        self._fill = v
+        self.update()
+
+    fill = Property(float, get_fill, set_fill)
+
+    def sizeHint(self) -> QSize:
+        base = super().sizeHint()
+        return QSize(base.width(), max(base.height(), self._BOX + 6))
+
+    def hitButton(self, pos) -> bool:
+        return self.rect().contains(pos)   # clicar em qualquer lugar (box ou texto) alterna
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        t = theme.active()
+        f = max(0.0, min(1.0, self._fill))
+        box = self._BOX
+        rect = QRectF(1.0, (self.height() - box) / 2, box, box)
+
+        border = _lerp_color(QColor(t.border_strong), QColor(t.ok), f)
+        p.setPen(QPen(border, 1.6))
+        p.setBrush(QColor(t.field))
+        p.drawRoundedRect(rect, t.radius_sm, t.radius_sm)
+
+        if f > 0.02:   # tick verde (✓) surgindo com f
+            p.setOpacity(f)
+            tick = QPen(QColor(t.ok), 2.2)
+            tick.setCapStyle(Qt.RoundCap)
+            tick.setJoinStyle(Qt.RoundJoin)
+            p.setPen(tick)
+            cx, cy = rect.center().x(), rect.center().y()
+            p1 = QPointF(cx - 0.30 * box, cy + 0.02 * box)
+            p2 = QPointF(cx - 0.06 * box, cy + 0.22 * box)
+            p3 = QPointF(cx + 0.30 * box, cy - 0.22 * box)
+            p.drawLine(p1, p2)
+            p.drawLine(p2, p3)
+            p.setOpacity(1.0)
+
+        if self.text():
+            p.setPen(QColor(t.text if self.isEnabled() else t.faint))
+            tx = box + self._GAP
+            p.drawText(QRectF(tx, 0, self.width() - tx, self.height()),
+                       int(Qt.AlignVCenter | Qt.AlignLeft), self.text())
+
+
 # == campo com placeholder ====================================================
 
 def make_entry(placeholder: str = "", parent=None) -> QLineEdit:
@@ -229,6 +358,117 @@ def make_entry(placeholder: str = "", parent=None) -> QLineEdit:
     if placeholder:
         e.setPlaceholderText(placeholder)
     return e
+
+
+# == scroll: campos não "roubam" a roda do mouse ==============================
+
+class _WheelGuard(QObject):
+    """Faz a roda do mouse rolar a PÁGINA (o QScrollArea ancestral) em vez de mudar o
+    valor de um combo/spin/date sob o cursor que NÃO está com foco. Sem isso, rolar por
+    cima de um campo num formulário longo altera o campo sem querer (queixa recorrente)."""
+
+    def eventFilter(self, obj, event) -> bool:
+        if event.type() == QEvent.Wheel and not obj.hasFocus():
+            area = obj.parent()
+            while area is not None and not isinstance(area, QAbstractScrollArea):
+                area = area.parent()
+            if area is not None:
+                QApplication.sendEvent(area.viewport(), event)   # rola o formulário
+            return True   # o campo não processa a roda
+        return False
+
+
+_wheel_guard = _WheelGuard()  # singleton stateless; a ref de módulo o mantém vivo
+
+
+def no_wheel_steal(widget) -> None:
+    """Impede `widget` (combo/spin/date) de capturar a roda a menos que esteja focado;
+    a roda passa a rolar o formulário. Também remove o foco-por-roda (WheelFocus)."""
+    widget.setFocusPolicy(Qt.StrongFocus)
+    widget.installEventFilter(_wheel_guard)
+
+
+# == filtros de data / hora opcionais =========================================
+
+class DateFilter(QWidget):
+    """Filtro de data OPCIONAL: um check "ativar" + QDateEdit com calendário popup.
+
+    Desmarcado (padrão) = sem filtro; o QDateEdit fica desabilitado. Substitui os
+    antigos QLineEdit "DD/MM/AAAA" (texto puro, sem validação, que falhavam em
+    silêncio). Expõe `br()` -> 'DD/MM/AAAA' quando ligado e '' quando desligado, de
+    modo que a lógica de filtro a jusante (que já trabalha com strings BR) não muda.
+    Emite `changed()` em qualquer alteração (liga/desliga ou nova data).
+    """
+
+    changed = Signal()
+
+    def __init__(self, label: str = "", parent=None):
+        super().__init__(parent)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        self._chk = AnimatedCheckBox(label)
+        self._chk.toggled.connect(self._on_toggle)
+        self._edit = QDateEdit(QDate.currentDate())
+        self._edit.setCalendarPopup(True)
+        self._edit.setDisplayFormat("dd/MM/yyyy")
+        self._edit.setEnabled(False)
+        no_wheel_steal(self._edit)
+        self._edit.dateChanged.connect(lambda _=None: self.changed.emit())
+        lay.addWidget(self._chk)
+        lay.addWidget(self._edit, 1)
+
+    def _on_toggle(self, on: bool) -> None:
+        self._edit.setEnabled(on)
+        self.changed.emit()
+
+    def br(self) -> str:
+        """Data escolhida como 'DD/MM/AAAA', ou '' quando o filtro está desligado."""
+        if not self._chk.isChecked():
+            return ""
+        return self._edit.date().toString("dd/MM/yyyy")
+
+    def clear(self) -> None:
+        """Desliga o filtro (paridade de chamada com QLineEdit.clear())."""
+        self._chk.setChecked(False)
+
+
+class TimeFilter(QWidget):
+    """Filtro de hora mínima OPCIONAL: check "ativar" + QTimeEdit (HH:MM).
+
+    Mesma ideia do DateFilter: desmarcado = sem filtro; `hhmm()` -> 'HH:MM' quando
+    ligado, '' quando desligado. Emite `changed()`.
+    """
+
+    changed = Signal()
+
+    def __init__(self, label: str = "", parent=None):
+        super().__init__(parent)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        self._chk = AnimatedCheckBox(label)
+        self._chk.toggled.connect(self._on_toggle)
+        self._edit = QTimeEdit(QTime(0, 0))
+        self._edit.setDisplayFormat("HH:mm")
+        self._edit.setEnabled(False)
+        no_wheel_steal(self._edit)
+        self._edit.timeChanged.connect(lambda _=None: self.changed.emit())
+        lay.addWidget(self._chk)
+        lay.addWidget(self._edit, 1)
+
+    def _on_toggle(self, on: bool) -> None:
+        self._edit.setEnabled(on)
+        self.changed.emit()
+
+    def hhmm(self) -> str:
+        """Hora escolhida como 'HH:MM', ou '' quando o filtro está desligado."""
+        if not self._chk.isChecked():
+            return ""
+        return self._edit.time().toString("HH:mm")
+
+    def clear(self) -> None:
+        self._chk.setChecked(False)
 
 
 # == stepper −/+ ==============================================================
@@ -301,6 +541,7 @@ def remember_geometry(win, key: str, *, default: tuple[int, int, int, int] | Non
     saved = geoms.get(key)
     rect = saved if _is_geom(saved) else (list(default) if default else None)
     if rect:
+        rect = _clamp_to_screen(rect)   # não abrir fora da tela se o monitor mudou (#61)
         try:
             win.setGeometry(int(rect[0]), int(rect[1]), int(rect[2]), int(rect[3]))
         except Exception:
@@ -332,6 +573,76 @@ def remember_geometry(win, key: str, *, default: tuple[int, int, int, int] | Non
     win._geom_filter = filt  # segura a referência (senão o GC leva o filtro)
 
 
+def _clamp_to_screen(rect):
+    """Encaixa [x, y, w, h] na área útil de ALGUM monitor: se a geometria salva caiu fora
+    da tela (monitor removido/reconfigurado entre sessões), recoloca dentro do work area do
+    monitor mais próximo em vez de a janela abrir invisível. Best-effort (devolve o rect
+    original em erro). Beneficia todas as janelas Qt que usam remember_geometry."""
+    try:
+        from PySide6.QtCore import QPoint
+        from PySide6.QtGui import QGuiApplication
+
+        x, y, w, h = (int(v) for v in rect)
+        screen = QGuiApplication.screenAt(QPoint(x + w // 2, y + h // 2)) or QGuiApplication.primaryScreen()
+        if screen is None:
+            return rect
+        a = screen.availableGeometry()
+        w = min(w, a.width())
+        h = min(h, a.height())
+        x = min(max(x, a.left()), a.right() - w + 1)
+        y = min(max(y, a.top()), a.bottom() - h + 1)
+        return [x, y, w, h]
+    except Exception:
+        return rect
+
+
+def remember_splitter(split, key: str, *, left_ratio: float = 0.28,
+                      left_min: int = 240, left_max: int = 360) -> None:
+    """Persiste a divisão de um QSplitter (state.json, `_geom_qt[key]` em base64) e a
+    restaura ao abrir. Sem estado salvo, aplica um default PROPORCIONAL à largura com
+    clamp no painel esquerdo (`left_min..left_max`) em vez de um tamanho fixo. Salva com
+    debounce a cada arraste. Silencioso em erro. Mesma infra (state.json) do
+    remember_geometry — não usa QSettings."""
+    from PySide6.QtCore import QByteArray
+
+    geoms = util.read_state().get("_geom_qt") or {}
+    saved = geoms.get(key)
+    restored = False
+    if isinstance(saved, str):
+        try:
+            restored = bool(split.restoreState(QByteArray.fromBase64(saved.encode("ascii"))))
+        except Exception:
+            restored = False
+    if not restored:
+        def _apply_default() -> None:
+            try:
+                total = split.width() or sum(split.sizes()) or 1040
+                left = int(max(left_min, min(left_max, total * left_ratio)))
+                split.setSizes([left, max(1, total - left)])
+            except RuntimeError:
+                pass
+        QTimer.singleShot(0, _apply_default)
+
+    debounce = QTimer(split)
+    debounce.setSingleShot(True)
+    debounce.setInterval(500)
+
+    def _save() -> None:
+        try:
+            b = bytes(split.saveState().toBase64()).decode("ascii")
+        except Exception:
+            return
+        cur = util.read_state().get("_geom_qt")
+        cur = cur if isinstance(cur, dict) else {}
+        if cur.get(key) != b:
+            cur[key] = b
+            util.update_state(_geom_qt=cur)
+
+    debounce.timeout.connect(_save)
+    split.splitterMoved.connect(lambda *_: debounce.start())
+    split._splitter_debounce = debounce   # segura a referência (senão o GC leva o timer)
+
+
 def _is_geom(v) -> bool:
     return isinstance(v, (list, tuple)) and len(v) == 4 and all(isinstance(n, int) for n in v)
 
@@ -347,3 +658,50 @@ class _MoveResizeFilter(QObject):
         if event.type() in (QEvent.Move, QEvent.Resize):
             self._debounce.start()
         return False  # nunca consome o evento
+
+
+# == seção colapsável (expander) ==============================================
+
+class Collapsible(QWidget):
+    """Cabeçalho clicável (chevron Fluent) + conteúdo colapsável. Expander da
+    fundação: a linha INTEIRA é o alvo de clique (QToolButton `expander`, QSS em
+    theme.py), com hover; o chevron gira (direita->baixo) ao abrir. Reusável:
+    filtros de Notas (#65), "Presentes", e "Serviços" na capa (#56)."""
+
+    def __init__(self, title: str):
+        super().__init__()
+        self._open = False
+        lay = QVBoxLayout(self); lay.setContentsMargins(0, 0, 0, 6); lay.setSpacing(2)
+        self._hdr = QToolButton()
+        self._hdr.setProperty("expander", True)
+        self._hdr.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self._hdr.setCursor(Qt.PointingHandCursor)
+        self._hdr.setIconSize(QSize(14, 14))
+        self._hdr.clicked.connect(self._toggle)
+        lay.addWidget(self._hdr, 0, Qt.AlignLeft)
+        self._content: QWidget | None = None
+        self._lay = lay
+        self._title = title
+        self._render_hdr()
+
+    def set_header(self, title: str) -> None:
+        self._title = title
+        self._render_hdr()
+
+    def set_content(self, w: QWidget) -> None:
+        if self._content is not None:
+            self._content.deleteLater()
+        self._content = w
+        self._lay.addWidget(w)
+        w.setVisible(self._open)
+
+    def _render_hdr(self) -> None:
+        self._hdr.setText(f"  {self._title}")
+        self._hdr.setIcon(theme.qicon("chevron-down" if self._open else "chevron-right",
+                                      color=theme.active().accent_hover))
+
+    def _toggle(self) -> None:
+        self._open = not self._open
+        self._render_hdr()
+        if self._content is not None:
+            self._content.setVisible(self._open)

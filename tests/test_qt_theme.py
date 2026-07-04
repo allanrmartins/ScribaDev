@@ -141,6 +141,44 @@ class SwitchTests(unittest.TestCase):
         self.assertEqual(theme.active().name, theme.os_default_theme())
 
 
+# -- ícones Fluent vendorizados (#59) -----------------------------------------
+
+# Vocabulário que a fundação promete (scriba/qt/icons/*.svg). Se um nome sumir do
+# repo ou parar de recolorir, isto quebra antes de a tela ficar sem ícone.
+_ICON_VOCAB = [
+    "copy", "chat", "people", "delete", "more-horizontal", "chevron-up",
+    "chevron-down", "chevron-right", "search", "folder", "refresh", "checkmark",
+    "warning", "hourglass", "settings", "arrow-upload", "stop", "record", "cut",
+    "dismiss", "play", "edit", "sparkle", "task-list",
+]
+
+
+class IconTests(unittest.TestCase):
+    def test_vocabulario_resolve_e_recolore(self):
+        for name in _ICON_VOCAB:
+            with self.subTest(icon=name):
+                p = theme.icon(name, "#abcdef")
+                self.assertTrue(p and Path(p).exists(), f"ícone {name} não gerou arquivo")
+                txt = Path(p).read_text(encoding="utf-8")
+                self.assertIn("#abcdef", txt, "a cor do tema não entrou no SVG")
+                self.assertNotIn("#212121", txt, "sobrou a cor-fonte do Fluent")
+
+    def test_icone_inexistente_falha_graciosa(self):
+        self.assertEqual(theme.icon("nao-existe-xyz"), "")
+
+    def test_svgs_e_licenca_vendorizados(self):
+        d = Path(theme.__file__).resolve().parent / "icons"
+        self.assertTrue((d / "LICENSE").exists(), "faltou a licença MIT do Fluent")
+        for name in _ICON_VOCAB:
+            with self.subTest(icon=name):
+                self.assertTrue((d / f"{name}.svg").exists(), f"SVG {name} não vendorizado")
+
+    @unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")
+    def test_qicon_nao_vazio(self):
+        self.assertFalse(theme.qicon("chevron-down").isNull())
+        self.assertTrue(theme.qicon("nao-existe-xyz").isNull())
+
+
 class OsDefaultTests(unittest.TestCase):
     def test_os_default_e_um_tema_registrado(self):
         self.assertIn(theme.os_default_theme(), [t.name for t in theme.themes()])
