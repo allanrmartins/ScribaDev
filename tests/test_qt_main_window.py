@@ -18,13 +18,15 @@ class _FakeApp:
         self._rec = recording
         self.call_active = call_active
         self.update_news = None
+        self.cfg = None            # sem app real: _collect_home não toca o índice
+        self.notes_opened = "unset"
 
     def is_recording(self): return self._rec
     def current_call_app(self): return "Teams"
     def recording_duration(self): return 72.0
     def call_duration(self): return 30.0
     def show_settings(self): pass
-    def show_notes(self): pass
+    def show_notes(self, note_path=None): self.notes_opened = note_path
     def show_log(self): pass
     def start_recording(self, *a): pass
     def stop_recording(self, **k): pass
@@ -92,6 +94,48 @@ class MainWindowTests(unittest.TestCase):
         self.assertTrue(win.isVisible())
         win.close()  # dispara closeEvent -> ignore + hide
         self.assertFalse(win.isVisible())
+
+    # -- capa útil (#56): recentes, stats, pendências, empty-state, clique -------
+
+    _DADOS = {
+        "total": 14, "seconds": 34920, "clients": 4,
+        "recent": [
+            {"meeting_title": "Reunião A", "client": "Cli A", "started_at": "2026-07-04T09:15:00",
+             "duration_s": 1920, "participants": [{}, {}], "export_path": "/notas/a.md"},
+            {"meeting_title": "Reunião B", "client": "Cli B", "started_at": "2026-07-03T14:00:00",
+             "duration_s": 3900, "participants": [{}], "export_path": "/notas/b.md"},
+        ],
+        "pending": [
+            {"text": "Fazer X", "title": "Reunião A", "client": "Cli A", "note_path": "/notas/a.md"},
+        ],
+    }
+
+    def test_render_home_popula_stats_recentes_pendencias(self):
+        win = self._win()
+        win._render_home(self._DADOS)
+        self.assertIn("14", win._stat_meetings._val.text())
+        self.assertIn("9h42", win._stat_hours._val.text())   # 34920s = 9h42
+        self.assertIn("4", win._stat_clients._val.text())
+        self.assertEqual(win._recent_lay.count(), 2)          # duas reuniões recentes
+        self.assertEqual(win._pending_lay.count(), 1)         # uma pendência
+        self.assertEqual(win._pending_badge.text(), "1")
+
+    def test_render_home_empty_state(self):
+        win = self._win()
+        win._render_home({"total": 0, "seconds": 0, "clients": 0, "recent": [], "pending": []})
+        self.assertEqual(win._recent_lay.count(), 1)          # card de empty-state
+        self.assertEqual(win._pending_badge.text(), "0")
+        self.assertEqual(win._pending_lay.count(), 1)         # rótulo "Nada pendente"
+
+    def test_clique_em_recente_abre_a_nota(self):
+        win = self._win()
+        win._open_recent("/notas/a.md")
+        self.assertEqual(win.app.notes_opened, "/notas/a.md")
+
+    def test_clique_sem_export_abre_notas_sem_selecao(self):
+        win = self._win()
+        win._open_recent("")
+        self.assertIsNone(win.app.notes_opened)
 
 
 if __name__ == "__main__":

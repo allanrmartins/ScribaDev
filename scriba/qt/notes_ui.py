@@ -22,7 +22,7 @@ import threading
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QFrame,
@@ -189,7 +189,7 @@ class NotesWindow(QWidget):
 
         # filtros estruturados: COLAPSADOS por padrão (só a busca fica sempre visível),
         # com badge de quantos estão ativos no cabeçalho. Libera espaço vertical p/ a árvore.
-        self._filters = _Collapsible("Filtros")
+        self._filters = widgets.Collapsible("Filtros")
         self._f_participant = widgets.make_entry("participante")
         self._f_client = widgets.make_entry("cliente")
         self._f_since = widgets.DateFilter("de")
@@ -313,7 +313,7 @@ class NotesWindow(QWidget):
         lay.addWidget(self._voice_hint)
 
         # Presentes (colapsável)
-        self._presentes = _Collapsible("Presentes")
+        self._presentes = widgets.Collapsible("Presentes")
         lay.addWidget(self._presentes)
 
         # find bar (visível só com nota aberta)
@@ -1060,6 +1060,11 @@ class NotesWindow(QWidget):
         self._actions_win = _ActionItemsWindow(self._collect_action_groups(), self._reveal_note)
         self._actions_win.show()
 
+    def reveal_note(self, note_path) -> None:
+        """Navega até a reunião de caminho `note_path` na árvore (público; usado
+        pela capa ao clicar numa reunião recente). Aceita str ou Path."""
+        self._reveal_note(Path(note_path))
+
     def _reveal_note(self, note_path: Path) -> None:
         if self._select_in_tree(note_path):
             return
@@ -1184,50 +1189,6 @@ class _ActionItemsWindow(QWidget):
         self.raise_()
         self.activateWindow()
         widgets.enable_dark_titlebar(self)
-
-
-class _Collapsible(QWidget):
-    """Cabeçalho clicável (chevron Fluent) + conteúdo colapsável. Expander da fundação:
-    a linha INTEIRA é o alvo de clique (QToolButton `expander`), com hover; o chevron
-    gira (direita->baixo) ao abrir. Reusável (ex.: filtros colapsáveis, #65)."""
-
-    def __init__(self, title: str):
-        super().__init__()
-        self._open = False
-        lay = QVBoxLayout(self); lay.setContentsMargins(0, 0, 0, 6); lay.setSpacing(2)
-        self._hdr = QToolButton()
-        self._hdr.setProperty("expander", True)
-        self._hdr.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self._hdr.setCursor(Qt.PointingHandCursor)
-        self._hdr.setIconSize(QSize(14, 14))
-        self._hdr.clicked.connect(self._toggle)
-        lay.addWidget(self._hdr, 0, Qt.AlignLeft)
-        self._content: QWidget | None = None
-        self._lay = lay
-        self._title = title
-        self._render_hdr()
-
-    def set_header(self, title: str) -> None:
-        self._title = title
-        self._render_hdr()
-
-    def set_content(self, w: QWidget) -> None:
-        if self._content is not None:
-            self._content.deleteLater()
-        self._content = w
-        self._lay.addWidget(w)
-        w.setVisible(self._open)
-
-    def _render_hdr(self) -> None:
-        self._hdr.setText(f"  {self._title}")
-        self._hdr.setIcon(theme.qicon("chevron-down" if self._open else "chevron-right",
-                                      color=theme.active().accent_hover))
-
-    def _toggle(self) -> None:
-        self._open = not self._open
-        self._render_hdr()
-        if self._content is not None:
-            self._content.setVisible(self._open)
 
 
 def _clip(text: str) -> None:

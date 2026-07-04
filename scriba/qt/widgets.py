@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTimeEdit,
     QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -657,3 +658,50 @@ class _MoveResizeFilter(QObject):
         if event.type() in (QEvent.Move, QEvent.Resize):
             self._debounce.start()
         return False  # nunca consome o evento
+
+
+# == seção colapsável (expander) ==============================================
+
+class Collapsible(QWidget):
+    """Cabeçalho clicável (chevron Fluent) + conteúdo colapsável. Expander da
+    fundação: a linha INTEIRA é o alvo de clique (QToolButton `expander`, QSS em
+    theme.py), com hover; o chevron gira (direita->baixo) ao abrir. Reusável:
+    filtros de Notas (#65), "Presentes", e "Serviços" na capa (#56)."""
+
+    def __init__(self, title: str):
+        super().__init__()
+        self._open = False
+        lay = QVBoxLayout(self); lay.setContentsMargins(0, 0, 0, 6); lay.setSpacing(2)
+        self._hdr = QToolButton()
+        self._hdr.setProperty("expander", True)
+        self._hdr.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self._hdr.setCursor(Qt.PointingHandCursor)
+        self._hdr.setIconSize(QSize(14, 14))
+        self._hdr.clicked.connect(self._toggle)
+        lay.addWidget(self._hdr, 0, Qt.AlignLeft)
+        self._content: QWidget | None = None
+        self._lay = lay
+        self._title = title
+        self._render_hdr()
+
+    def set_header(self, title: str) -> None:
+        self._title = title
+        self._render_hdr()
+
+    def set_content(self, w: QWidget) -> None:
+        if self._content is not None:
+            self._content.deleteLater()
+        self._content = w
+        self._lay.addWidget(w)
+        w.setVisible(self._open)
+
+    def _render_hdr(self) -> None:
+        self._hdr.setText(f"  {self._title}")
+        self._hdr.setIcon(theme.qicon("chevron-down" if self._open else "chevron-right",
+                                      color=theme.active().accent_hover))
+
+    def _toggle(self) -> None:
+        self._open = not self._open
+        self._render_hdr()
+        if self._content is not None:
+            self._content.setVisible(self._open)

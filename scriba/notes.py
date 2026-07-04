@@ -842,6 +842,42 @@ def set_action_done(folder: Path, key: str, done: bool) -> None:
         logging.getLogger("scriba.notes").warning("falha ao salvar .actions.json em %s: %s", folder, e)
 
 
+def open_action_items(meetings: list[dict]) -> list[dict]:
+    """Itens de ação AINDA ABERTOS agregados de várias reuniões, para a capa.
+
+    `meetings` é uma lista de reuniões como `meetings_index.search` devolve (cada
+    dict com pelo menos `export_path` e `folder`). Para cada uma, lê o .md
+    exportado, extrai os itens (`parse_action_items`) e descarta os já resolvidos
+    no `.actions.json` da pasta (`load_action_state`). Cada item volta enriquecido
+    com o contexto da reunião (`title`, `client`, `note_path`) para a UI abrir a
+    nota certa. Preserva a ordem de entrada (as reuniões já vêm da mais recente
+    para a mais antiga)."""
+    out: list[dict] = []
+    for m in meetings:
+        exp = (m.get("export_path") or "").strip()
+        folder = (m.get("folder") or "").strip()
+        if not exp or not folder:
+            continue
+        try:
+            md = Path(exp).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        items = parse_action_items(md)
+        if not items:
+            continue
+        state = load_action_state(Path(folder))
+        for it in items:
+            if state.get(it["key"]):
+                continue
+            out.append({
+                **it,
+                "title": (m.get("title") or m.get("meeting_title") or "").strip(),
+                "client": (m.get("client") or "").strip(),
+                "note_path": exp,
+            })
+    return out
+
+
 def set_note_title(md_path: Path, new_title: str) -> None:
     """Atualiza o título de uma nota: linha `titulo:` do frontmatter + primeiro H1."""
     new_title = new_title.strip()

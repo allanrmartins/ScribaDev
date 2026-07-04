@@ -387,16 +387,20 @@ class ScribaApp:
             self.settings = SettingsWindow(self)
         self.settings.show()
 
-    def show_notes(self) -> None:
-        """Abre a janela de Notas (chamável de qualquer thread)."""
-        self.ui(self._open_notes_ui)
+    def show_notes(self, note_path=None) -> None:
+        """Abre a janela de Notas (chamável de qualquer thread). Se `note_path`
+        for dado (caminho do .md de uma reunião), navega até ela na árvore assim
+        que a janela abre - usado pela capa ao clicar numa reunião recente."""
+        self.ui(lambda: self._open_notes_ui(note_path))
 
-    def _open_notes_ui(self) -> None:
+    def _open_notes_ui(self, note_path=None) -> None:
         if self.notes_win is None:
             from .qt.notes_ui import NotesWindow
 
             self.notes_win = NotesWindow(self)
         self.notes_win.show()
+        if note_path is not None:
+            self.notes_win.reveal_note(note_path)
 
     def show_log(self) -> None:
         """Abre a janela de Log/diagnóstico (chamável de qualquer thread)."""
