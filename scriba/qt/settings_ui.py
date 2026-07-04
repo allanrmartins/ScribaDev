@@ -87,7 +87,7 @@ class SettingsWindow(QWidget):
         self._devices_loaded = False
 
         self.setWindowTitle("ScribaDev — Configurações")
-        self.setMinimumSize(720, 480)
+        self.setMinimumSize(760, 480)
         self.setWindowOpacity(0.98)
         widgets.remember_geometry(self, "qt_settings", default=(180, 120, 880, 680))
 
@@ -95,12 +95,15 @@ class SettingsWindow(QWidget):
         root.setContentsMargins(14, 10, 14, 10)
 
         self._tabs = QTabWidget()
+        self._tabs.setUsesScrollButtons(False)   # 7 abas: elide em telas estreitas, sem setas ◄►
+        self._tabs.setElideMode(Qt.ElideRight)
         root.addWidget(self._tabs, 1)
         self._build_recording_tab()
         self._build_transcription_tab()
         self._build_ia_tab()
         self._build_detection_tab()
         self._build_dirs_tab()
+        self._build_appearance_tab()
         self._build_about_tab()
         self._about_ready.connect(self._show_about_update)
         self._devices_ready.connect(self._fill_devices)
@@ -406,6 +409,26 @@ class SettingsWindow(QWidget):
             combo.setCurrentIndex(max(0, idx))
 
     # -- aba Sobre -----------------------------------------------------------
+
+    def _build_appearance_tab(self) -> None:
+        f = self._tab("Aparência")
+        combo = QComboBox(); widgets.no_wheel_steal(combo)
+        combo.addItem("Automático (segue o Windows)", None)
+        for th in theme.themes():
+            combo.addItem(th.label, th.name)
+        choice = theme.current_choice()
+        idx = combo.findData(choice) if choice else 0
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        combo.currentIndexChanged.connect(self._apply_theme_choice)
+        self._theme_combo = combo
+        self._row(f, "Tema", combo,
+                  "Muda na hora. Em Automático, segue o modo claro/escuro do Windows.")
+
+    def _apply_theme_choice(self, _idx: int = 0) -> None:
+        """Aplica o tema escolhido no combo, a quente (state.json, não config.toml)."""
+        from PySide6.QtWidgets import QApplication
+
+        theme.apply_choice(self._theme_combo.currentData(), app=QApplication.instance())
 
     def _build_about_tab(self) -> None:
         from .. import updates

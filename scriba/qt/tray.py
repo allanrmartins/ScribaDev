@@ -22,6 +22,7 @@ from PySide6.QtGui import QActionGroup, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QMenu, QMessageBox, QSystemTrayIcon
 
 from .. import autostart, util
+from . import theme
 
 log = logging.getLogger("scriba.qt.tray")
 
@@ -67,6 +68,8 @@ class Tray:
         m.addAction("Notas", lambda: self.app.show_notes())
         m.addAction("Log", lambda: self.app.show_log())
         m.addAction("Configurações", lambda: self.app.show_settings())
+        self._theme_menu = self._build_theme_menu()
+        m.addMenu(self._theme_menu)
 
         # ações só-em-gravação (visibilidade alternada em _sync)
         self._act_record = m.addAction("Gravar agora", lambda: self._bg(self.app.start_recording, "manual"))
@@ -105,6 +108,31 @@ class Tray:
             self._spk_acts[n] = act
         return menu
 
+    # -- submenu de tema (Automático + 4 temas, radio) -----------------------
+
+    def _build_theme_menu(self) -> QMenu:
+        menu = QMenu("Tema")
+        self._theme_group = QActionGroup(menu)
+        self._theme_group.setExclusive(True)
+        self._theme_acts = []   # [(QAction, slug|None)]
+
+        def add(label: str, name) -> None:
+            act = menu.addAction(label)
+            act.setCheckable(True)
+            act.triggered.connect(lambda _checked=False, n=name: self._switch_theme(n))
+            self._theme_group.addAction(act)
+            self._theme_acts.append((act, name))
+
+        add("Automático (segue o Windows)", None)
+        for th in theme.themes():
+            add(th.label, th.name)
+        return menu
+
+    def _switch_theme(self, name) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        theme.apply_choice(name, app=QApplication.instance())
+
     # -- sincronização (estado atual do app) ---------------------------------
 
     def _sync(self) -> None:
@@ -118,6 +146,9 @@ class Tray:
             for n, act in self._spk_acts.items():
                 act.setChecked(cur == n)
         self._act_autostart.setChecked(autostart.is_enabled())
+        choice = theme.current_choice()
+        for act, name in self._theme_acts:
+            act.setChecked(name == choice)
 
     def _on_activated(self, reason) -> None:
         if reason == QSystemTrayIcon.DoubleClick:

@@ -120,17 +120,17 @@ Pronto. Entre numa call do Teams (ou num Meet no navegador) e a pílula aparece 
 
 A pílula só some quando a call termina. Com `auto_record` desligado (Configurações), nada é gravado sem você clicar no ⏺. Ao sair da call: toast "Transcrevendo…", e em seguida "Notas prontas" com botão para abrir o `.md`.
 
-**Duplo clique no ícone da bandeja** abre a **janela principal**: status de todos os serviços (detecção, áudio, Whisper/GPU, Claude, diarização, autostart), a **ligação em andamento com duração ao vivo** e o botão **⏺ Gravar**. Minimizar mantém o app na barra de tarefas; fechar (X) tira da barra mas o monitoramento continua na bandeja.
+**Duplo clique no ícone da bandeja** abre a **janela principal** — a antessala das suas notas: as **reuniões recentes** (clique para abrir a nota), um resumo em números (**quantas reuniões, tempo total gravado, clientes**), as **pendências abertas** de todas as atas com contador, a **ligação em andamento com duração ao vivo** com o botão **⏺ Gravar**, e o botão **Notas** em destaque. O diagnóstico dos serviços (detecção, áudio, Whisper/GPU, Claude, diarização, autostart) fica numa seção **Serviços** recolhível. Minimizar mantém o app na barra de tarefas; fechar (X) tira da barra mas o monitoramento continua na bandeja.
 
-O botão **Notas** abre a **janela de Notas**: leitor embutido das atas (markdown renderizado, agrupado por dia, com **título e cliente identificados pela IA e editáveis** — quando o cliente não dá para inferir da conversa, o campo fica vazio para você digitar), **busca por conteúdo** que destaca as ocorrências, e uma **barra de progresso ao vivo** para reuniões ainda transcrevendo/resumindo. A nota é dividida em **blocos colapsáveis** (clique no título da seção): a transcrição completa começa fechada e as tabelas (ex.: **Objetos SAP citados**) viram **tabelas de verdade**, cada uma com seu próprio **⧉ copiar (Excel)** ao lado — TSV colável direto em células. Cópias independentes: **"Copiar p/ Claude"** (só o contexto da atividade, sem a transcrição já resumida) e **"Copiar transcrição"**.
+O botão **Notas** abre a **janela de Notas** — o coração do app: à esquerda, as reuniões **agrupadas por dia** com **busca por conteúdo** (destaca as ocorrências) e **filtros colapsáveis** (data, cliente, participante); à direita, o leitor da ata em markdown, com **título e cliente identificados pela IA e editáveis** (quando o cliente não dá para inferir da conversa, o campo fica vazio para você digitar) e uma **barra de progresso ao vivo** para reuniões ainda transcrevendo/resumindo. Uma **barra de ações** oferece gerar o prompt de contexto, copiar, **perguntar à reunião** (um chat que busca na transcrição), rotular vozes e excluir. As tabelas (ex.: **Objetos SAP citados**) viram **tabelas de verdade** com **⧉ copiar (Excel)** ao lado — TSV colável direto em células; a **transcrição completa** fica atrás de um link no fim do documento (mostra/oculta sem "pular" a leitura). Ainda: **atalhos de teclado** e **menu de contexto** na lista de reuniões.
 
-O botão **⚙** abre as **Configurações**, com abas **Gravação / Pastas / Resumo** — configurações agrupadas por categoria, incluindo **atalho de teclado global** para gravar/parar (capture a combinação com o botão "Gravar atalho"); na aba **Resumo**, um editor do `prompt.md`: o markdown com as instruções que geram a ata (seções, regras, vocabulário) — personalize à vontade e restaure o padrão quando quiser.
+O botão **⚙** abre as **Configurações**, com abas **Gravação / Transcrição / IA / Detecção / Pastas / Aparência / Sobre** — agrupadas por categoria, incluindo **atalho de teclado global** para gravar/parar (capture a combinação com o botão "Gravar atalho"). Na aba **IA**, um editor do `prompt.md`: o markdown com as instruções que geram a ata (seções, regras, vocabulário) — personalize à vontade e restaure o padrão quando quiser. Na aba **Aparência**, escolha o **tema**: *Automático* (segue o modo claro/escuro do Windows) ou um dos quatro — **VS Code**, **Sublime**, **Claude** e **Claro** — com troca na hora. A aba **Sobre** mostra a saúde dos componentes (GPU, diarização, ffmpeg) e as atualizações.
 
 <p align="center">
   <img src="docs/configuracoes.png" alt="ScribaDev — Configurações, aba Resumo com o editor do prompt.md" width="640">
 </p>
 
-Na primeira execução, o **Assistente de perfil** abre sozinho: você descreve profissão, área, stack e jargão, e o ScribaDev **escreve as instruções da ata sob medida para o seu trabalho** — geradas por IA (e validadas contra o formato que o leitor de notas espera) ou por um modelo pronto que funciona offline — e ainda preenche as **hotwords** que guiam a transcrição com o seu vocabulário. Tudo com prévia antes de aplicar (o prompt anterior fica em `prompt.md.bak`); reacesse quando quiser pelo link **Assistente de perfil…** da aba Resumo ou por `scribadev wizard`.
+Na primeira execução, o **Assistente de perfil** abre sozinho: você descreve profissão, área, stack e jargão, e o ScribaDev **escreve as instruções da ata sob medida para o seu trabalho** — geradas por IA (e validadas contra o formato que o leitor de notas espera) ou por um modelo pronto que funciona offline — e ainda preenche as **hotwords** que guiam a transcrição com o seu vocabulário. Tudo com prévia antes de aplicar (o prompt anterior fica em `prompt.md.bak`); reacesse quando quiser pelo link **Assistente de perfil…** da aba **IA** ou por `scribadev wizard`.
 
 <p align="center">
   <img src="docs/wizard.png" alt="ScribaDev — Assistente de perfil (wizard de prompt por profissão)" width="640">
@@ -155,7 +155,7 @@ Na primeira execução, o **Assistente de perfil** abre sozinho: você descreve 
 | `scribadev shortcut` | (re)cria os atalhos na Área de Trabalho e no menu Iniciar |
 | `scribadev purge` | apaga gravações já transcritas além do prazo de retenção (`--days N` sobrepõe, `--dry-run` só lista) |
 
-Menu da bandeja: **Gravar agora/Parar** (cobre reuniões presenciais ou apps fora da detecção), **Abrir pasta de reuniões/notas**, **Processar pendentes** (retoma o que ficou pela metade se o PC desligou no meio) e **Sair**.
+Menu da bandeja: **Gravar agora/Parar** (cobre reuniões presenciais ou apps fora da detecção), **Tema** (troca rápida entre os temas), **Abrir pasta de reuniões/notas**, **Processar pendentes** (retoma o que ficou pela metade se o PC desligou no meio) e **Sair**.
 
 ## O que sai no `notas.md`
 
@@ -281,7 +281,7 @@ O ScribaDev grava **localmente** o áudio que entra e sai da sua máquina, sem a
 
 ## Desenvolvimento
 
-Fork **pessoal** (repo privado), sem modelo de contribuição externa. O código segue pequeno e modular — cada responsabilidade em seu arquivo: `detector`, `recorder`, `transcriber`, `diarize`, `merge`, `notes`, `overlay`, `main_window`, `notes_ui`, `settings_ui`, `tray`, `main`. Antes de mexer: `scribadev doctor` (diagnóstico do ambiente) e `python -m unittest discover -s tests` (suíte unittest da stdlib, sem pytest).
+Fork **pessoal** (repo privado), sem modelo de contribuição externa. O código segue pequeno e modular: o **backend** (`detector`, `recorder`, `transcriber`, `diarize`, `merge`, `notes`, `meetings_index`, `main`) e a **UI em PySide6 (Qt)** em `scriba/qt/` (`theme`, `widgets`, `main_window`, `notes_ui`, `settings_ui`, `chat_ui`, `overlay`, `tray`, `log_ui`, `speakers_ui`, `wizard_ui`). Antes de mexer: `scribadev doctor` (diagnóstico do ambiente) e `python -m unittest discover -s tests` (suíte unittest da stdlib, sem pytest).
 
 ## Licença
 

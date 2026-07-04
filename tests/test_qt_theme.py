@@ -140,6 +140,24 @@ class SwitchTests(unittest.TestCase):
         self.assertNotIn("ui_theme", util.read_state())
         self.assertEqual(theme.active().name, theme.os_default_theme())
 
+    def test_current_choice_reflete_escolha_explicita(self):
+        self.assertIsNone(theme.current_choice())      # state temporário vazio = automático
+        theme.set_active("sublime")
+        self.assertEqual(theme.current_choice(), "sublime")
+        theme.clear_choice()
+        self.assertIsNone(theme.current_choice())
+
+    def test_apply_choice_slug_persiste_e_ativa(self):
+        theme.apply_choice("light")                    # sem QApplication: só cacheia + persiste
+        self.assertEqual(theme.current_choice(), "light")
+        self.assertEqual(theme.active().name, "light")
+
+    def test_apply_choice_none_volta_ao_automatico(self):
+        theme.set_active("claude")
+        theme.apply_choice(None)                        # None = automático (segue o SO)
+        self.assertIsNone(theme.current_choice())
+        self.assertEqual(theme.active().name, theme.os_default_theme())
+
 
 # -- ícones Fluent vendorizados (#59) -----------------------------------------
 

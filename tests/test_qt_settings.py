@@ -67,6 +67,17 @@ class SettingsTests(unittest.TestCase):
         arch, _ = self._field(win, "audio", "archive_format")
         self.assertEqual(arch.currentData(), "opus")
 
+    def test_aba_aparencia_tem_seletor_de_tema(self):
+        from scriba.qt import theme
+        from scriba.qt.settings_ui import SettingsWindow
+
+        win = SettingsWindow(self._app())
+        combo = win._theme_combo
+        self.assertEqual(combo.count(), 1 + len(theme.themes()))   # Automático + os 4 temas
+        self.assertIsNone(combo.itemData(0))                        # 1º item = Automático (None)
+        slugs = [combo.itemData(i) for i in range(1, combo.count())]
+        self.assertEqual(slugs, [t.name for t in theme.themes()])
+
     def test_round_trip_persiste_mudancas(self):
         from scriba import config as config_mod
         from scriba.qt.settings_ui import SettingsWindow

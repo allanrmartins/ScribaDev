@@ -231,6 +231,28 @@ def clear_choice() -> None:
         util.atomic_write_text(util.STATE_PATH, __import__("json").dumps(st))
 
 
+def current_choice() -> str | None:
+    """Slug do tema escolhido EXPLICITAMENTE pelo usuário, ou None se está no modo
+    automático (segue o Windows). Para a UI de seleção marcar o item vigente."""
+    return util.read_state().get(_STATE_KEY)
+
+
+def apply_choice(name: str | None, *, app=None) -> None:
+    """Aplica a escolha de tema vinda da UI e reestiliza a quente: `name` = slug de um
+    tema (persiste via set_active), ou None para o modo automático (clear_choice +
+    reaplica o padrão do SO). Reuso pela aba Aparência e pelo menu da bandeja."""
+    if name is not None:
+        set_active(name, app=app)
+        return
+    clear_choice()
+    if app is None:
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+    if app is not None:
+        apply(app)
+
+
 # ----------------------------------------------------------- tipografia -------
 
 def qfont(theme: Theme | None = None, size: int | None = None, *, bold: bool = False,
