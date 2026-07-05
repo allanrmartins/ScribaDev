@@ -61,6 +61,13 @@ def _elide(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
+def _started_within(m: dict, cutoff_iso: str) -> bool:
+    """True se a reunião começou em `cutoff_iso` ou depois (dentro do recorte da capa, #79).
+    Data ausente/corrompida → False (vai p/ o backlog: degradação segura, nunca infla ativas)."""
+    started = (m.get("started_at") or "").strip()
+    return bool(started) and started >= cutoff_iso
+
+
 def _dot(diameter: int = 10) -> QLabel:
     d = QLabel()
     d.setFixedSize(diameter, diameter)
@@ -450,7 +457,8 @@ class MainWindow(QWidget):
             return
         from .. import meetings_index, notes
 
-        data = {"total": 0, "recent": [], "seconds": 0.0, "clients": 0, "pending": []}
+        data = {"total": 0, "recent": [], "seconds": 0.0, "clients": 0,
+                "pending": [], "pending_stale": 0, "pending_days": 0}
         try:
             data["total"] = meetings_index.count()
         except Exception as e:
@@ -464,8 +472,31 @@ class MainWindow(QWidget):
         data["seconds"] = sum((m.get("duration_s") or 0) for m in done)
         data["clients"] = len({(m.get("client") or "").strip()
                                for m in done if (m.get("client") or "").strip()})
+        # Recorte temporal (#79): só pendências de reuniões dos últimos N dias contam como
+        # ATIVAS na capa; o resto é backlog ("M antigas"). Idade pela DATA DA REUNIÃO
+        # (started_at). days == 0 = sem recorte (conta tudo, como antes).
+        days = 0
         try:
-            data["pending"] = notes.open_action_items(done)
+            days = int(self.app.cfg.ui.pending_window_days)
+        except Exception as e:
+            log.debug("pending_window_days indisponível: %s", e)
+        data["pending_days"] = days
+        try:
+            if days > 0:
+                from datetime import datetime, timedelta
+                cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+                recent = [m for m in done if _started_within(m, cutoff)]
+                data["pending"] = notes.open_action_items(recent)
+                # backlog completo vem do índice (não da lista truncada em 500); guarda
+                # contra índice defasado com max(0, ...).
+                try:
+                    total_open = meetings_index.action_counts().get("open", 0)
+                except Exception as e:
+                    log.debug("action_counts falhou: %s", e)
+                    total_open = len(data["pending"])
+                data["pending_stale"] = max(0, total_open - len(data["pending"]))
+            else:
+                data["pending"] = notes.open_action_items(done)
         except Exception as e:
             log.debug("open_action_items falhou: %s", e)
         self.app.ui(lambda: self._render_home(data))
@@ -485,12 +516,17 @@ class MainWindow(QWidget):
         else:
             for m in recent:
                 self._recent_lay.addWidget(self._recent_item(m))
-        # -- pendências
+        # -- pendências (só as ATIVAS contam no badge; o backlog vira "M antigas", #79)
         _clear_layout(self._pending_lay)
         pend = data["pending"]
         n = len(pend)
+        stale = data.get("pending_stale", 0)
+        days = data.get("pending_days", 0)
         self._pending_badge.setText(str(n))
         self._pending_badge.setVisible(n > 0)
+        self._pending_badge.setToolTip(
+            (f"{n} ativa(s) — reuniões dos últimos {days} dias" if days > 0
+             else f"{n} pendência(s) — sem recorte") if n else "")
         self._pending_open.setVisible(n > 0)
         if not pend:
             empty = QLabel("Nada pendente por aqui. ✓")
@@ -505,6 +541,15 @@ class MainWindow(QWidget):
                 more.setProperty("role", "muted")
                 more.setStyleSheet(f"color:{t.muted}; font-size:{t.font_size_small}pt;")
                 self._pending_lay.addWidget(more)
+        # Badge secundário muted: backlog fora do recorte, linka p/ o hub. Só ocupa
+        # espaço quando há backlog (sem layout shift).
+        if stale > 0:
+            old = QLabel(f'<a href="#">{stale} antiga(s) — ver todas</a>')
+            old.setProperty("role", "muted")
+            old.setStyleSheet(f"color:{t.muted}; font-size:{t.font_size_small}pt;")
+            old.setToolTip("Pendências de reuniões fora do recorte. Abrir o hub para revisar/arquivar.")
+            old.linkActivated.connect(lambda _=None: self._open_pending_hub())
+            self._pending_lay.addWidget(old)
 
     def _recent_item(self, m: dict) -> QWidget:
         t = theme.active()
@@ -584,6 +629,15 @@ class MainWindow(QWidget):
             self.app.show_notes(note_path)
         else:
             self.app.show_notes()
+
+    def _open_pending_hub(self, note_path: str = None) -> None:
+        """Abre o hub de pendências (#82). Tolerante enquanto o hub não existe: cai
+        na tela de Notas. #82 troca o alvo para o hub de primeira classe."""
+        hub = getattr(self.app, "show_action_hub", None)
+        if callable(hub):
+            hub(note_path)
+        else:
+            self.app.show_notes(note_path) if note_path else self.app.show_notes()
 
     def _render_empty_state(self, total: int) -> None:
         t = theme.active()

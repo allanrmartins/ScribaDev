@@ -137,6 +137,33 @@ class MainWindowTests(unittest.TestCase):
         win._open_recent("")
         self.assertIsNone(win.app.notes_opened)
 
+    # -- recorte de 30 dias (#79): ativas vs backlog "M antigas" ----------------
+    def test_started_within_recorte_por_data(self):
+        from scriba.qt.main_window import _started_within
+        cutoff = "2026-06-05T12:00:00"
+        self.assertTrue(_started_within({"started_at": "2026-06-30T09:00:00"}, cutoff))   # recente
+        self.assertFalse(_started_within({"started_at": "2026-03-01T09:00:00"}, cutoff))  # antiga
+        self.assertFalse(_started_within({"started_at": ""}, cutoff))                     # sem data = antiga
+        self.assertFalse(_started_within({}, cutoff))
+
+    def test_render_home_badge_antigas_linka_e_some_sem_backlog(self):
+        win = self._win()
+        data = dict(self._DADOS, pending_stale=42, pending_days=30)
+        win._render_home(data)
+        # 1 item ativo + 1 rótulo "42 antiga(s)" (o último widget do layout)
+        self.assertEqual(win._pending_lay.count(), 2)
+        last = win._pending_lay.itemAt(win._pending_lay.count() - 1).widget()
+        self.assertIn("42 antiga", last.text())
+        # sem backlog: só o item ativo (o rótulo não ocupa espaço → sem layout shift)
+        win._render_home(dict(self._DADOS, pending_stale=0, pending_days=30))
+        self.assertEqual(win._pending_lay.count(), 1)
+
+    def test_render_home_badge_ativas_tooltip(self):
+        win = self._win()
+        win._render_home(dict(self._DADOS, pending_stale=0, pending_days=30))
+        self.assertEqual(win._pending_badge.text(), "1")
+        self.assertIn("ativa", win._pending_badge.toolTip())
+
     def test_restyle_theme_nao_retem_acento_do_tema_anterior(self):
         """Regressão do bug #70 (bordas laranjas): trocar de tema a quente deve
         re-estilizar a capa; o acento do tema anterior NÃO pode sobrar na borda do card

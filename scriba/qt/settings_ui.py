@@ -404,6 +404,8 @@ class SettingsWindow(QWidget):
                    tooltip="Atalho global de gravar/parar. Vazio desativa.")
         self._text(ui, "Atalho nova call (dividir)", "ui", "hotkey_split", placeholder="ex.: ctrl+alt+n",
                    tooltip="Divide a call atual em duas. Vazio desativa.")
+        self._int(ui, "Pendências ativas: últimos (dias)", "ui", "pending_window_days", 0, 3650,
+                  hint="0 = sem recorte (conta todas); idade conta pela data da reunião")
 
     def _build_transcription_tab(self) -> None:
         f = self._tab("Transcrição")

@@ -209,6 +209,7 @@ class Ui:
     overlay: bool = True
     hotkey: str = ""
     hotkey_split: str = ""  # atalho global "nova call" / dividir a gravação (#38)
+    pending_window_days: int = 30  # recorte da capa: só pendências dos últimos N dias contam (0 = tudo)
 
 
 @dataclass(frozen=True)
@@ -367,6 +368,7 @@ timeout_seconds = {_n(s.timeout_seconds)}
 overlay = {_b(u.overlay)}           # pílula flutuante durante a gravação
 hotkey = {_s(u.hotkey)}              # atalho global gravar/parar (ex.: "ctrl+alt+r"); vazio desativa
 hotkey_split = {_s(u.hotkey_split)}        # atalho global "nova call" (divide a gravação, #38); vazio desativa
+pending_window_days = {_n(u.pending_window_days)}       # capa: só pendências de reuniões dos últimos N dias contam (0 = sem recorte)
 
 [output]
 # Pasta para onde o notas.md final é copiado. Vazio = Documentos\\ScribaDev
