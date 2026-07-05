@@ -88,10 +88,14 @@ class RelabelSpeakersTests(unittest.TestCase):
 
     def setUp(self):
         self.d = Path(tempfile.mkdtemp(prefix="scriba_relabel_"))
-        # store de voz ISOLADO — nunca tocar no speakers.json real do usuário
+        # store de voz E índice ISOLADOS — relabel_speakers re-indexa (hook index_meeting),
+        # então SEM isolar mi.DB_PATH o teste gravaria no index.db REAL do usuário.
+        self._app0, self._logs0, self._store0, self._db0 = (
+            util.APP_DIR, util.LOGS_DIR, speakers.STORE_PATH, mi.DB_PATH)
         util.APP_DIR = self.d / "app"
         util.LOGS_DIR = util.APP_DIR / "logs"
         speakers.STORE_PATH = util.APP_DIR / "speakers.json"
+        mi.DB_PATH = util.APP_DIR / "index.db"
         self.rec = self.d / "rec"
         self.rec.mkdir(parents=True)
         self.export = self.d / "2026-06-10_20-00_reuniao.md"
@@ -109,6 +113,10 @@ class RelabelSpeakersTests(unittest.TestCase):
         self.export.write_text(nota, encoding="utf-8")
         (self.rec / "meta.json").write_text(
             json.dumps({"export_path": str(self.export)}), encoding="utf-8")
+
+    def tearDown(self):
+        util.APP_DIR, util.LOGS_DIR, speakers.STORE_PATH, mi.DB_PATH = (
+            self._app0, self._logs0, self._store0, self._db0)
 
     def test_aprende_e_corrige_nota_e_transcricao(self):
         ok = notes.relabel_speakers(self.rec, {"Participante 2": "Marcelo"})
