@@ -299,7 +299,7 @@ class MainWindow(QWidget):
         hdr.addStretch(1)
         self._pending_open = QLabel('<a href="#">abrir</a>')
         self._pending_open.setStyleSheet(f"color:{theme.active().muted};")
-        self._pending_open.linkActivated.connect(lambda _=None: self.app.show_notes())
+        self._pending_open.linkActivated.connect(lambda _=None: self._open_pending_hub())
         hdr.addWidget(self._pending_open)
         body.addLayout(hdr)
         body.addSpacing(4)
@@ -560,9 +560,10 @@ class MainWindow(QWidget):
             for header_it, items in _group_by_note(shown):
                 self._pending_lay.addWidget(self._pending_group(header_it, items))
             if n > len(shown):
-                more = QLabel(f"+{n - len(shown)} outras — abrir Notas")
+                more = QLabel(f'<a href="#">+{n - len(shown)} outras — ver todas</a>')
                 more.setProperty("role", "muted")
                 more.setStyleSheet(f"color:{t.muted}; font-size:{t.font_size_small}pt;")
+                more.linkActivated.connect(lambda _=None: self._open_pending_hub())
                 self._pending_lay.addWidget(more)
         # Badge secundário muted: backlog fora do recorte, linka p/ o hub. Só ocupa
         # espaço quando há backlog (sem layout shift).
@@ -632,7 +633,7 @@ class MainWindow(QWidget):
         hdr = QLabel(_elide("  ·  ".join(bits), 52))
         hdr.setStyleSheet(f"color:{t.accent_hover}; font-weight:bold; font-size:{t.font_size_small}pt;")
         hdr.setCursor(Qt.PointingHandCursor)
-        hdr.mousePressEvent = lambda _e, p=note_path: self._open_recent(p)
+        hdr.mousePressEvent = lambda _e, p=note_path: self._open_pending_hub(p)
         col.addWidget(hdr)
         for it in items:
             col.addWidget(self._pending_item(it))
@@ -676,7 +677,7 @@ class MainWindow(QWidget):
         txt = QLabel(_elide(it.get("text") or it.get("raw") or "", 40))
         txt.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         txt.setCursor(Qt.PointingHandCursor)
-        txt.mousePressEvent = lambda _e, p=note_path: self._open_recent(p)
+        txt.mousePressEvent = lambda _e, p=note_path: self._open_pending_hub(p)
         widgets.add_tooltip(txt, it.get("raw") or it.get("text") or "")
         rl.addWidget(txt, 1)
         dismiss = widgets.icon_button("dismiss", "Dispensar (falso-positivo)",

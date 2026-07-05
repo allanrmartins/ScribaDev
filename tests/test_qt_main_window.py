@@ -20,6 +20,7 @@ class _FakeApp:
         self.update_news = None
         self.cfg = None            # sem app real: _collect_home não toca o índice
         self.notes_opened = "unset"
+        self.hub_opened = "unset"
 
     def is_recording(self): return self._rec
     def current_call_app(self): return "Teams"
@@ -27,6 +28,7 @@ class _FakeApp:
     def call_duration(self): return 30.0
     def show_settings(self): pass
     def show_notes(self, note_path=None): self.notes_opened = note_path
+    def show_action_hub(self, note_path=None): self.hub_opened = note_path
     def show_log(self): pass
     def start_recording(self, *a): pass
     def stop_recording(self, **k): pass
@@ -210,6 +212,21 @@ class MainWindowTests(unittest.TestCase):
         win._bump_pending_badge(-5)
         self.assertEqual(win._pending_badge.text(), "0")
         self.assertFalse(win._pending_badge.isVisible())
+
+    # -- roteamento capa → hub (#82) --------------------------------------------
+    def test_open_pending_hub_roteia_para_o_hub(self):
+        win = self._win()
+        win._open_pending_hub("/notas/a.md")
+        self.assertEqual(win.app.hub_opened, "/notas/a.md")   # abriu o hub na reunião
+        win._open_pending_hub()
+        self.assertIsNone(win.app.hub_opened)                 # abriu o hub sem reunião
+
+    def test_open_pending_hub_fallback_sem_hub(self):
+        # app sem show_action_hub (build antigo): cai na tela de Notas, não quebra
+        win = self._win()
+        win.app.show_action_hub = None   # instância shadowa o método → getattr não-callable
+        win._open_pending_hub("/notas/b.md")
+        self.assertEqual(win.app.notes_opened, "/notas/b.md")
 
     def test_restyle_theme_nao_retem_acento_do_tema_anterior(self):
         """Regressão do bug #70 (bordas laranjas): trocar de tema a quente deve

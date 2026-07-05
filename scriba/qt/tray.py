@@ -66,6 +66,7 @@ class Tray:
         m.addSeparator()
         m.addAction("Abrir ScribaDev", lambda: self.app.show_main())  # = duplo clique
         m.addAction("Notas", lambda: self.app.show_notes())
+        m.addAction("Pendências", lambda: self.app.show_action_hub())
         m.addAction("Log", lambda: self.app.show_log())
         m.addAction("Configurações", lambda: self.app.show_settings())
         self._theme_menu = self._build_theme_menu()
