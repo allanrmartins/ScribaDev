@@ -87,74 +87,77 @@ def _pl(text: str, style: str = "", *, wrap: bool = False) -> QLabel:
 
 
 def _mini_home(th: theme.Theme) -> QWidget:
-    """Miniatura da capa pintada com as cores de `th` (um tema ESPECÍFICO, não o ativo):
-    o "como vai ficar" de cada tema no seletor. Espelha a capa real — header + pílulas,
-    card de call com o botão de acento, stats, card de Notas (a borda de ACENTO, que era
-    a do bug #70) e pendências com o badge de aviso. Estilos inline com as cores de `th`;
-    é estático (recriado quando o seletor reconstrói na troca a quente)."""
-    sm, xs = "font-size:8pt;", "font-size:7pt;"
-    root = QFrame()
-    root.setStyleSheet(f"background:{th.bg}; border:1px solid {th.border_strong}; border-radius:8px;")
-    v = QVBoxLayout(root); v.setContentsMargins(9, 8, 9, 9); v.setSpacing(6)
+    """Miniatura ENXUTA da capa nas cores de `th` (um tema específico, não o ativo), com
+    dados fictícios: header + pílulas, card de call com o botão de acento, stats e o card
+    de Notas (a borda de ACENTO — o que o bug #70 sujava). Sem separadores/linhas e sem a
+    seção de pendências: só o essencial p/ ler o tema, como a capa (que não tem linhas)."""
+    xs, xxs = "font-size:7pt;", "font-size:6pt;"
+    # Seletor #id em CADA QFrame: um stylesheet sem seletor vaza `border`/`background`
+    # para os QLabels filhos (era o que desenhava "linhas"/caixas em volta das notas).
+    root = QFrame(); root.setObjectName("miniRoot")
+    root.setStyleSheet(f"#miniRoot {{ background:{th.bg}; border:1px solid {th.border_strong}; border-radius:7px; }}")
+    v = QVBoxLayout(root); v.setContentsMargins(7, 6, 7, 7); v.setSpacing(4)
 
-    hd = QHBoxLayout(); hd.setSpacing(4)
-    hd.addWidget(_pl("ScribaDev", f"color:{th.text}; font-weight:bold; font-size:10pt;"))
+    hd = QHBoxLayout(); hd.setSpacing(3)
+    hd.addWidget(_pl("ScribaDev", f"color:{th.text}; font-weight:bold; {xs}"))
     hd.addStretch(1)
-    hd.addWidget(_pl("Notas", f"background:{th.accent}; color:{th.on_accent}; {xs} padding:2px 6px; border-radius:5px;"))
-    hd.addWidget(_pl("Log", f"background:{th.surface}; color:{th.text}; border:1px solid {th.border}; {xs} padding:2px 6px; border-radius:5px;"))
+    hd.addWidget(_pl("Notas", f"background:{th.accent}; color:{th.on_accent}; {xxs} padding:1px 5px; border-radius:4px;"))
+    hd.addWidget(_pl("Log", f"background:{th.surface}; color:{th.text}; {xxs} padding:1px 5px; border-radius:4px;"))
     v.addLayout(hd)
 
-    call = QFrame(); call.setStyleSheet(f"background:{th.surface}; border:1px solid {th.border}; border-radius:7px;")
-    cl = QHBoxLayout(call); cl.setContentsMargins(8, 6, 8, 6); cl.setSpacing(6)
-    cl.addWidget(_pl("Nenhuma ligação em andamento", f"color:{th.muted}; {sm}"))
+    call = QFrame(); call.setObjectName("miniCall")
+    call.setStyleSheet(f"#miniCall {{ background:{th.surface}; border-radius:5px; }}")
+    cl = QHBoxLayout(call); cl.setContentsMargins(6, 4, 6, 4); cl.setSpacing(5)
+    cl.addWidget(_pl("Nenhuma ligação", f"color:{th.muted}; {xxs}"))
     cl.addStretch(1)
-    cl.addWidget(_pl("● Gravar", f"background:{th.accent}; color:{th.on_accent}; {sm} font-weight:bold; padding:4px 8px; border-radius:6px;"))
+    cl.addWidget(_pl("● Gravar", f"background:{th.accent}; color:{th.on_accent}; {xxs} font-weight:bold; padding:2px 6px; border-radius:4px;"))
     v.addWidget(call)
 
-    v.addWidget(_pl("46 reuniões   ·   17h59 gravadas   ·   11 clientes", f"color:{th.muted}; {xs}"))
+    v.addWidget(_pl("46 reuniões · 17h59 · 11 clientes", f"color:{th.muted}; {xxs}"))
 
-    nc = QFrame(); nc.setStyleSheet(f"background:{th.surface}; border:1px solid {th.accent}; border-radius:8px;")
-    nl = QVBoxLayout(nc); nl.setContentsMargins(8, 7, 8, 7); nl.setSpacing(5)
-    nh = QHBoxLayout()
-    nh.addWidget(_pl("Notas · recentes", f"color:{th.text}; font-weight:bold; {sm}"))
-    nh.addStretch(1)
-    nh.addWidget(_pl("Abrir ›", f"color:{th.muted}; {xs}"))
-    nl.addLayout(nh)
-    for title, meta, client in (("Daily reforma tributária", "02/07 · 11min · 7 part.", "Coruripe"),
-                                ("Matheus Nogueira Peres", "01/07 · 17min · 2 part.", "")):
-        rr = QHBoxLayout(); rr.setSpacing(6)
-        col = QVBoxLayout(); col.setSpacing(0)
-        col.addWidget(_pl(title, f"color:{th.text}; font-weight:bold; {xs}"))
-        col.addWidget(_pl(meta, f"color:{th.muted}; font-size:6pt;"))
-        rr.addLayout(col, 1)
-        if client:
-            rr.addWidget(_pl(client, f"background:{th.field}; color:{th.muted}; border:1px solid {th.border}; font-size:6pt; padding:1px 5px; border-radius:4px;"), 0, Qt.AlignVCenter)
-        nl.addLayout(rr)
+    nc = QFrame(); nc.setObjectName("miniNotes")
+    nc.setStyleSheet(f"#miniNotes {{ background:{th.surface}; border:1px solid {th.accent}; border-radius:5px; }}")
+    nl = QVBoxLayout(nc); nl.setContentsMargins(7, 5, 7, 6); nl.setSpacing(3)
+    nl.addWidget(_pl("Notas · recentes", f"color:{th.text}; font-weight:bold; {xxs}"))
+    nl.addWidget(_pl("Nota 1", f"color:{th.text}; {xs}"))
+    nl.addWidget(_pl("Nota 2", f"color:{th.text}; {xs}"))
     v.addWidget(nc)
-
-    pd = QHBoxLayout(); pd.setSpacing(5)
-    pd.addWidget(_pl("Minhas pendências", f"color:{th.text}; font-weight:bold; {sm}"))
-    pd.addWidget(_pl("283", f"background:{th.warn}; color:{th.bg}; font-weight:bold; {xs} padding:0 6px; border-radius:7px;"))
-    pd.addStretch(1)
-    v.addLayout(pd)
-    it = QHBoxLayout(); it.setSpacing(6)
-    box = QLabel(); box.setFixedSize(10, 10)
-    box.setStyleSheet(f"border:1.4px solid {th.muted}; border-radius:3px; background:transparent;")
-    it.addWidget(box, 0, Qt.AlignTop)
-    col = QVBoxLayout(); col.setSpacing(0)
-    col.addWidget(_pl("Falar com Pedro sobre alocação", f"color:{th.text}; {xs}"))
-    col.addWidget(_pl("Alinhamento demanda NF-e", f"color:{th.muted}; font-size:6pt;"))
-    it.addLayout(col, 1)
-    v.addLayout(it)
     return root
 
 
-class _ThemeCard(QFrame):
-    """Card selecionável de um tema no seletor: rótulo + marcador + a miniatura da capa.
-    `value` = slug do tema (ou None p/ o 'Automático'). Clicar chama on_pick(value). O
-    'chrome' do card (borda/fundo/rótulo) usa o tema ATIVO; a miniatura usa `mini_th`."""
+class _AutoOption(QFrame):
+    """Opção 'Automático' (segue o Windows) no topo do seletor — sem miniatura própria,
+    porque não é uma cor fixa. Clicar aplica o modo automático (on_pick(None))."""
 
-    def __init__(self, mini_th, label, subtitle, value, selected, on_pick):
+    def __init__(self, selected, on_pick):
+        super().__init__()
+        self._value = None
+        self._on_pick = on_pick
+        self.setObjectName("autoopt")
+        self.setCursor(Qt.PointingHandCursor)
+        act = theme.active()
+        edge = act.accent if selected else act.border
+        self.setStyleSheet(f"#autoopt {{ border:{2 if selected else 1}px solid {edge};"
+                           f" border-radius:9px; background:{act.surface}; }}")
+        h = QHBoxLayout(self); h.setContentsMargins(12, 9, 12, 9); h.setSpacing(9)
+        h.addWidget(_pl("●" if selected else "○",
+                        f"color:{act.accent if selected else act.muted}; font-size:12pt;"))
+        col = QVBoxLayout(); col.setSpacing(1)
+        col.addWidget(_pl("Automático", f"color:{act.text}; font-weight:bold; font-size:10pt;"))
+        col.addWidget(_pl("Segue o modo claro/escuro do Windows", f"color:{act.muted}; font-size:8pt;"))
+        h.addLayout(col); h.addStretch(1)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._on_pick(None)
+
+
+class _ThemeCard(QFrame):
+    """Card selecionável de UM tema: rótulo + marcador + a miniatura da capa nas cores do
+    tema. `value` = slug. Clicar chama on_pick(value). O 'chrome' (borda/fundo/rótulo) usa
+    o tema ATIVO; a miniatura usa `mini_th`."""
+
+    def __init__(self, mini_th, label, value, selected, on_pick):
         super().__init__()
         self._value = value
         self._on_pick = on_pick
@@ -163,16 +166,14 @@ class _ThemeCard(QFrame):
         act = theme.active()
         edge = act.accent if selected else act.border
         self.setStyleSheet(f"#tcard {{ border:{2 if selected else 1}px solid {edge};"
-                           f" border-radius:10px; background:{act.surface}; }}")
-        v = QVBoxLayout(self); v.setContentsMargins(11, 10, 11, 11); v.setSpacing(7)
+                           f" border-radius:9px; background:{act.surface}; }}")
+        v = QVBoxLayout(self); v.setContentsMargins(9, 8, 9, 9); v.setSpacing(6)
         top = QHBoxLayout()
-        top.addWidget(_pl(label, f"color:{act.text}; font-weight:bold; font-size:10.5pt;"))
+        top.addWidget(_pl(label, f"color:{act.text}; font-weight:bold; font-size:9.5pt;"))
         top.addStretch(1)
         top.addWidget(_pl("●" if selected else "○",
-                          f"color:{act.accent if selected else act.muted}; font-size:12pt;"))
+                          f"color:{act.accent if selected else act.muted}; font-size:11pt;"))
         v.addLayout(top)
-        if subtitle:
-            v.addWidget(_pl(subtitle, f"color:{act.muted}; font-size:8pt;", wrap=True))
         v.addWidget(_mini_home(mini_th))
 
     def mousePressEvent(self, event) -> None:
@@ -521,8 +522,8 @@ class SettingsWindow(QWidget):
 
     def _build_appearance_tab(self) -> None:
         f = self._tab("Aparência")
-        intro = QLabel("Clique num tema para aplicar na hora. Cada card mostra uma prévia "
-                       "da capa com as cores daquele tema.")
+        intro = QLabel("Clique para aplicar na hora. Cada bloco é uma prévia da capa com "
+                       "as cores daquele tema.")
         intro.setProperty("role", "muted"); intro.setWordWrap(True)
         f.addRow(intro)
         self._theme_host = QWidget()
@@ -536,9 +537,9 @@ class SettingsWindow(QWidget):
         self._populate_theme_cards()
 
     def _populate_theme_cards(self) -> None:
-        """(Re)constrói a grade de cards de tema: 'Automático' + um card por tema, 2 por
-        linha, marcando o vigente. Reconstruir (em vez de mutar) mantém tudo pintado no
-        tema ATIVO e o marcador de seleção correto após a troca a quente (#70)."""
+        """(Re)constrói o seletor: a opção 'Automático' no topo (largura cheia) + os 4
+        temas em blocos 2x2, marcando o vigente. Reconstruir (em vez de mutar) mantém tudo
+        pintado no tema ATIVO e o marcador de seleção correto após a troca a quente (#70)."""
         grid = self._theme_grid
         while grid.count():
             item = grid.takeAt(0)
@@ -546,13 +547,10 @@ class SettingsWindow(QWidget):
             if w is not None:
                 w.deleteLater()
         choice = theme.current_choice()   # None = automático
-        auto_mini = theme.by_slug(theme.os_default_theme())
-        cells = [(auto_mini, "Automático", "Segue o modo claro/escuro do Windows", None, choice is None)]
-        for th in theme.themes():
-            cells.append((th, th.label, "", th.name, choice == th.name))
-        for i, (mini_th, label, sub, value, sel) in enumerate(cells):
-            card = _ThemeCard(mini_th, label, sub, value, sel, self._pick_theme)
-            grid.addWidget(card, i // 2, i % 2)
+        grid.addWidget(_AutoOption(choice is None, self._pick_theme), 0, 0, 1, 2)
+        for i, th in enumerate(theme.themes()):
+            card = _ThemeCard(th, th.label, th.name, choice == th.name, self._pick_theme)
+            grid.addWidget(card, 1 + i // 2, i % 2)
 
     def _pick_theme(self, value) -> None:
         """Aplica o tema clicado a quente (state.json, não config.toml). O apply dispara

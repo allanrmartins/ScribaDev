@@ -69,15 +69,17 @@ class SettingsTests(unittest.TestCase):
 
     def test_aba_aparencia_tem_grade_de_temas(self):
         from scriba.qt import theme
-        from scriba.qt.settings_ui import SettingsWindow, _ThemeCard
+        from scriba.qt.settings_ui import SettingsWindow, _ThemeCard, _AutoOption
 
         win = SettingsWindow(self._app())
         grid = win._theme_grid
-        cards = [grid.itemAt(i).widget() for i in range(grid.count())]
-        self.assertEqual(len(cards), 1 + len(theme.themes()))       # Automático + os 4 temas
+        items = [grid.itemAt(i).widget() for i in range(grid.count())]
+        self.assertEqual(len(items), 1 + len(theme.themes()))       # Automático + os 4 temas
+        self.assertIsInstance(items[0], _AutoOption)                # 1ª opção = Automático
+        self.assertIsNone(items[0]._value)
+        cards = items[1:]
         self.assertTrue(all(isinstance(c, _ThemeCard) for c in cards))
-        self.assertIsNone(cards[0]._value)                          # 1º card = Automático (None)
-        self.assertEqual([c._value for c in cards[1:]], [t.name for t in theme.themes()])
+        self.assertEqual([c._value for c in cards], [t.name for t in theme.themes()])
 
     def test_restyle_reconstroi_a_grade_sem_erro(self):
         from scriba.qt.settings_ui import SettingsWindow
