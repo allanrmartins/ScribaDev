@@ -73,6 +73,29 @@ def _csv_merge(existing: str, additions: list[str]) -> str:
     return ", ".join(items)
 
 
+# --- campo secreto com botão de mostrar/ocultar (#71) -----------------------
+
+def _wrap_secret(field) -> QWidget:
+    """Envolve um QLineEdit-senha com um botão de OLHO (mostrar/ocultar), pedido no #71
+    (o token do Hugging Face e as chaves de API ficavam sempre mascarados, sem conferir).
+    Alterna o echoMode e troca o ícone eye<->eye-off. `field` segue sendo o widget de
+    valor (registrado em _fields); só o container visual muda."""
+    row = QWidget()
+    h = QHBoxLayout(row); h.setContentsMargins(0, 0, 0, 0); h.setSpacing(6)
+    btn = widgets.icon_button("eye", "Mostrar o valor")
+
+    def toggle() -> None:
+        hidden = field.echoMode() == QLineEdit.Password
+        field.setEchoMode(QLineEdit.Normal if hidden else QLineEdit.Password)
+        btn.setIcon(theme.qicon("eye-off" if hidden else "eye"))
+        btn.setToolTip("Ocultar o valor" if hidden else "Mostrar o valor")
+
+    btn.clicked.connect(toggle)
+    h.addWidget(field, 1)
+    h.addWidget(btn, 0)
+    return row
+
+
 # --- seletor de temas com preview (#70) -------------------------------------
 
 def _pl(text: str, style: str = "", *, wrap: bool = False) -> QLabel:
@@ -251,14 +274,16 @@ class SettingsWindow(QWidget):
 
     def _text(self, form, label, section, attr, secret=False, placeholder="", tooltip="", hint=None):
         e = QLineEdit()
-        if secret:
-            e.setEchoMode(QLineEdit.Password)
         if placeholder:
             e.setPlaceholderText(placeholder)
         if tooltip:
             widgets.add_tooltip(e, tooltip)
         self._fields.append((e, section, attr, "text", None))
-        self._row(form, label, e, hint)
+        if secret:
+            e.setEchoMode(QLineEdit.Password)
+            self._row(form, label, _wrap_secret(e), hint)   # campo + botão de olho (#71)
+        else:
+            self._row(form, label, e, hint)
         return e
 
     def _bigtext(self, form, label, section, attr, placeholder="", tooltip="", rows=3):

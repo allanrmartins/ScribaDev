@@ -217,7 +217,7 @@ _ICON_VOCAB = [
     "copy", "chat", "people", "delete", "more-horizontal", "chevron-up",
     "chevron-down", "chevron-right", "search", "folder", "refresh", "checkmark",
     "warning", "hourglass", "settings", "arrow-upload", "stop", "record", "cut",
-    "dismiss", "play", "edit", "sparkle", "task-list",
+    "dismiss", "play", "edit", "sparkle", "task-list", "eye", "eye-off",
 ]
 
 

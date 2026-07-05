@@ -89,6 +89,22 @@ class SettingsTests(unittest.TestCase):
         win.restyle_theme()                                          # troca a quente (#70)
         self.assertEqual(win._theme_grid.count(), n)                 # reconstruiu, mesma contagem
 
+    def test_token_hf_tem_botao_de_olho(self):
+        """#71: o campo Token Hugging Face (e demais campos secretos) tem um botão de
+        mostrar/ocultar que alterna o echoMode entre Password e Normal."""
+        from PySide6.QtWidgets import QLineEdit, QToolButton
+        from scriba.qt.settings_ui import SettingsWindow
+
+        win = SettingsWindow(self._app())
+        field, _ = self._field(win, "diarization", "hf_token")
+        self.assertEqual(field.echoMode(), QLineEdit.Password)     # começa oculto
+        btn = field.parentWidget().findChild(QToolButton)          # o olho, no container
+        self.assertIsNotNone(btn)
+        btn.click()
+        self.assertEqual(field.echoMode(), QLineEdit.Normal)       # mostra
+        btn.click()
+        self.assertEqual(field.echoMode(), QLineEdit.Password)     # oculta de novo
+
     def test_round_trip_persiste_mudancas(self):
         from scriba import config as config_mod
         from scriba.qt.settings_ui import SettingsWindow
