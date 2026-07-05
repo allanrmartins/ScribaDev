@@ -159,6 +159,56 @@ class SwitchTests(unittest.TestCase):
         self.assertEqual(theme.active().name, theme.os_default_theme())
 
 
+@unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")
+class RestyleContractTests(unittest.TestCase):
+    """Contrato da troca a quente (#70): theme.apply empurra restyle_theme p/ as janelas
+    abertas que o expõem, e NÃO quebra com as que não têm (nem se uma restyle falhar)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_apply_chama_restyle_e_ignora_quem_nao_tem(self):
+        from PySide6.QtWidgets import QWidget
+
+        calls = []
+
+        class _W(QWidget):
+            def restyle_theme(inner):
+                calls.append(1)
+
+        w = _W(); w.show()
+        plain = QWidget(); plain.show()          # sem restyle_theme: não pode quebrar
+        orig = theme._active
+        self.addCleanup(lambda: setattr(theme, "_active", orig))
+        self.addCleanup(w.close)
+        self.addCleanup(plain.close)
+        theme.apply(self.app, theme.by_slug("vscode"))
+        self.assertTrue(calls)                   # a janela foi re-estilizada
+
+    def test_uma_restyle_que_falha_nao_derruba_as_outras(self):
+        from PySide6.QtWidgets import QWidget
+
+        ok = []
+
+        class _Bad(QWidget):
+            def restyle_theme(inner):
+                raise RuntimeError("boom no restyle")
+
+        class _Good(QWidget):
+            def restyle_theme(inner):
+                ok.append(1)
+
+        bad = _Bad(); bad.show()
+        good = _Good(); good.show()
+        self.addCleanup(bad.close)
+        self.addCleanup(good.close)
+        theme._restyle_top_levels(self.app)      # não propaga a exceção
+        self.assertTrue(ok)                      # a boa ainda rodou
+
+
 # -- ícones Fluent vendorizados (#59) -----------------------------------------
 
 # Vocabulário que a fundação promete (scriba/qt/icons/*.svg). Se um nome sumir do

@@ -300,15 +300,10 @@ class NotesWindow(QWidget):
         # que fica pendente ao usuário — a faixa dá importância a ela. Clicável (abre o
         # mesmo diálogo do ícone de vozes). Numa faixa própria (não na fileira) porque o
         # texto não caberia junto do botão de IA sem cortá-lo no minimumSize.
-        th = theme.active()
-        _wr = tuple(int(th.warn.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
         self._voice_hint = QLabel("Participantes ainda não rotulados - clique aqui para identificar quem falou")
         self._voice_hint.setCursor(Qt.PointingHandCursor)
         self._voice_hint.mousePressEvent = lambda _e: self._open_speaker_labeler()
-        self._voice_hint.setStyleSheet(
-            f"color:{th.warn}; font-weight:bold; font-size:{th.font_size_small}pt;"
-            f" background:rgba({_wr[0]},{_wr[1]},{_wr[2]},0.14);"
-            f" border:1px solid {th.warn}; border-radius:{th.radius_sm}px; padding:4px 10px;")
+        self._style_voice_hint()
         self._voice_hint.setVisible(False)
         lay.addWidget(self._voice_hint)
 
@@ -355,6 +350,42 @@ class NotesWindow(QWidget):
         t = theme.active()
         self._view.setStyleSheet(f"QTextBrowser {{ background:{t.field}; border:1px solid {t.border};"
                                  f" border-radius:{t.radius + 2}px; padding:8px; }}")
+
+    def _style_voice_hint(self) -> None:
+        """Estilo da faixa de aviso de vozes (cor de aviso). Método próprio para re-aplicar
+        na troca a quente — as cores são fixadas inline (#70)."""
+        th = theme.active()
+        wr = tuple(int(th.warn.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+        self._voice_hint.setStyleSheet(
+            f"color:{th.warn}; font-weight:bold; font-size:{th.font_size_small}pt;"
+            f" background:rgba({wr[0]},{wr[1]},{wr[2]},0.14);"
+            f" border:1px solid {th.warn}; border-radius:{th.radius_sm}px; padding:4px 10px;")
+
+    def restyle_theme(self) -> None:
+        """Troca a quente (#70): re-estiliza o leitor e a faixa de vozes; re-renderiza a
+        nota aberta (presentes + markdown pegam a cor do tema novo) e delega às
+        sub-janelas vivas (chat / itens de ação)."""
+        self._apply_theme()
+        self._style_voice_hint()
+        if self._current_key is not None:
+            md = self._selected_md()
+            if md is not None:
+                self._build_presentes(md)
+                summary, self._transcript_md = _summary_and_transcript(md)
+                self._render_view(summary)
+        if self._chat is not None:
+            try:
+                if self._chat.isVisible():
+                    self._chat.restyle_theme()
+            except RuntimeError:
+                self._chat = None
+        aw = getattr(self, "_actions_win", None)
+        if aw is not None:
+            try:
+                if aw.isVisible():
+                    aw._render()
+            except RuntimeError:
+                pass
 
     # -- atalhos e menu de contexto (#63) ------------------------------------
 

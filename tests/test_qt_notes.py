@@ -85,6 +85,16 @@ class NotesWindowSmokeTests(unittest.TestCase):
 
         return NotesWindow(_App())
 
+    def test_restyle_theme_smoke(self):
+        from scriba.qt import theme
+
+        win = self._win()
+        orig = theme._active
+        self.addCleanup(lambda: setattr(theme, "_active", orig))
+        theme._active = theme.by_slug("light")
+        win.restyle_theme()   # troca a quente (#70), sem nota aberta: não estoura
+        self.assertIn(theme.by_slug("light").field.lower(), win._view.styleSheet().lower())
+
     def test_lista_agrupa_por_dia(self):
         win = self._win()
         win._refresh_list()

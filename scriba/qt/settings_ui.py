@@ -25,6 +25,8 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -69,6 +71,114 @@ def _csv_merge(existing: str, additions: list[str]) -> str:
             items.append(a)
             seen.add(a.lower())
     return ", ".join(items)
+
+
+# --- seletor de temas com preview (#70) -------------------------------------
+
+def _pl(text: str, style: str = "", *, wrap: bool = False) -> QLabel:
+    """QLabel de texto puro com estilo inline — átomo dos previews de tema."""
+    lbl = QLabel(text)
+    lbl.setTextFormat(Qt.PlainText)
+    if wrap:
+        lbl.setWordWrap(True)
+    if style:
+        lbl.setStyleSheet(style)
+    return lbl
+
+
+def _mini_home(th: theme.Theme) -> QWidget:
+    """Miniatura ENXUTA da capa nas cores de `th` (um tema específico, não o ativo), com
+    dados fictícios: header + pílulas, card de call com o botão de acento, stats e o card
+    de Notas (a borda de ACENTO — o que o bug #70 sujava). Sem separadores/linhas e sem a
+    seção de pendências: só o essencial p/ ler o tema, como a capa (que não tem linhas)."""
+    xs, xxs = "font-size:7pt;", "font-size:6pt;"
+    # Seletor #id em CADA QFrame: um stylesheet sem seletor vaza `border`/`background`
+    # para os QLabels filhos (era o que desenhava "linhas"/caixas em volta das notas).
+    root = QFrame(); root.setObjectName("miniRoot")
+    root.setStyleSheet(f"#miniRoot {{ background:{th.bg}; border:1px solid {th.border_strong}; border-radius:7px; }}")
+    v = QVBoxLayout(root); v.setContentsMargins(7, 6, 7, 7); v.setSpacing(4)
+
+    hd = QHBoxLayout(); hd.setSpacing(3)
+    hd.addWidget(_pl("ScribaDev", f"color:{th.text}; font-weight:bold; {xs}"))
+    hd.addStretch(1)
+    hd.addWidget(_pl("Notas", f"background:{th.accent}; color:{th.on_accent}; {xxs} padding:1px 5px; border-radius:4px;"))
+    hd.addWidget(_pl("Log", f"background:{th.surface}; color:{th.text}; {xxs} padding:1px 5px; border-radius:4px;"))
+    v.addLayout(hd)
+
+    call = QFrame(); call.setObjectName("miniCall")
+    call.setStyleSheet(f"#miniCall {{ background:{th.surface}; border-radius:5px; }}")
+    cl = QHBoxLayout(call); cl.setContentsMargins(6, 4, 6, 4); cl.setSpacing(5)
+    cl.addWidget(_pl("Nenhuma ligação", f"color:{th.muted}; {xxs}"))
+    cl.addStretch(1)
+    cl.addWidget(_pl("● Gravar", f"background:{th.accent}; color:{th.on_accent}; {xxs} font-weight:bold; padding:2px 6px; border-radius:4px;"))
+    v.addWidget(call)
+
+    v.addWidget(_pl("46 reuniões · 17h59 · 11 clientes", f"color:{th.muted}; {xxs}"))
+
+    nc = QFrame(); nc.setObjectName("miniNotes")
+    nc.setStyleSheet(f"#miniNotes {{ background:{th.surface}; border:1px solid {th.accent}; border-radius:5px; }}")
+    nl = QVBoxLayout(nc); nl.setContentsMargins(7, 5, 7, 6); nl.setSpacing(3)
+    nl.addWidget(_pl("Notas · recentes", f"color:{th.text}; font-weight:bold; {xxs}"))
+    nl.addWidget(_pl("Nota 1", f"color:{th.text}; {xs}"))
+    nl.addWidget(_pl("Nota 2", f"color:{th.text}; {xs}"))
+    v.addWidget(nc)
+    return root
+
+
+class _AutoOption(QFrame):
+    """Opção 'Automático' (segue o Windows) no topo do seletor — sem miniatura própria,
+    porque não é uma cor fixa. Clicar aplica o modo automático (on_pick(None))."""
+
+    def __init__(self, selected, on_pick):
+        super().__init__()
+        self._value = None
+        self._on_pick = on_pick
+        self.setObjectName("autoopt")
+        self.setCursor(Qt.PointingHandCursor)
+        act = theme.active()
+        edge = act.accent if selected else act.border
+        self.setStyleSheet(f"#autoopt {{ border:{2 if selected else 1}px solid {edge};"
+                           f" border-radius:9px; background:{act.surface}; }}")
+        h = QHBoxLayout(self); h.setContentsMargins(12, 9, 12, 9); h.setSpacing(9)
+        h.addWidget(_pl("●" if selected else "○",
+                        f"color:{act.accent if selected else act.muted}; font-size:12pt;"))
+        col = QVBoxLayout(); col.setSpacing(1)
+        col.addWidget(_pl("Automático", f"color:{act.text}; font-weight:bold; font-size:10pt;"))
+        col.addWidget(_pl("Segue o modo claro/escuro do Windows", f"color:{act.muted}; font-size:8pt;"))
+        h.addLayout(col); h.addStretch(1)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._on_pick(None)
+
+
+class _ThemeCard(QFrame):
+    """Card selecionável de UM tema: rótulo + marcador + a miniatura da capa nas cores do
+    tema. `value` = slug. Clicar chama on_pick(value). O 'chrome' (borda/fundo/rótulo) usa
+    o tema ATIVO; a miniatura usa `mini_th`."""
+
+    def __init__(self, mini_th, label, value, selected, on_pick):
+        super().__init__()
+        self._value = value
+        self._on_pick = on_pick
+        self.setObjectName("tcard")
+        self.setCursor(Qt.PointingHandCursor)
+        act = theme.active()
+        edge = act.accent if selected else act.border
+        self.setStyleSheet(f"#tcard {{ border:{2 if selected else 1}px solid {edge};"
+                           f" border-radius:9px; background:{act.surface}; }}")
+        v = QVBoxLayout(self); v.setContentsMargins(9, 8, 9, 9); v.setSpacing(6)
+        top = QHBoxLayout()
+        top.addWidget(_pl(label, f"color:{act.text}; font-weight:bold; font-size:9.5pt;"))
+        top.addStretch(1)
+        top.addWidget(_pl("●" if selected else "○",
+                          f"color:{act.accent if selected else act.muted}; font-size:11pt;"))
+        v.addLayout(top)
+        v.addWidget(_mini_home(mini_th))
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._on_pick(self._value)
 
 
 class SettingsWindow(QWidget):
@@ -412,23 +522,56 @@ class SettingsWindow(QWidget):
 
     def _build_appearance_tab(self) -> None:
         f = self._tab("Aparência")
-        combo = QComboBox(); widgets.no_wheel_steal(combo)
-        combo.addItem("Automático (segue o Windows)", None)
-        for th in theme.themes():
-            combo.addItem(th.label, th.name)
-        choice = theme.current_choice()
-        idx = combo.findData(choice) if choice else 0
-        combo.setCurrentIndex(idx if idx >= 0 else 0)
-        combo.currentIndexChanged.connect(self._apply_theme_choice)
-        self._theme_combo = combo
-        self._row(f, "Tema", combo,
-                  "Muda na hora. Em Automático, segue o modo claro/escuro do Windows.")
+        intro = QLabel("Clique para aplicar na hora. Cada bloco é uma prévia da capa com "
+                       "as cores daquele tema.")
+        intro.setProperty("role", "muted"); intro.setWordWrap(True)
+        f.addRow(intro)
+        # largura contida: os blocos não devem esticar p/ preencher a janela (a capa real é
+        # estreita) — teto de ~760px alinhado à esquerda, mesmo com a janela maximizada.
+        row = QWidget()
+        rl = QHBoxLayout(row); rl.setContentsMargins(0, 0, 0, 0)
+        self._theme_host = QWidget()
+        self._theme_host.setMaximumWidth(760)
+        self._theme_grid = QGridLayout(self._theme_host)
+        self._theme_grid.setContentsMargins(0, 8, 0, 0)
+        self._theme_grid.setHorizontalSpacing(14)
+        self._theme_grid.setVerticalSpacing(14)
+        self._theme_grid.setColumnStretch(0, 1)
+        self._theme_grid.setColumnStretch(1, 1)
+        rl.addWidget(self._theme_host)
+        rl.addStretch(1)   # empurra os blocos p/ a esquerda; o excesso fica vazio à direita
+        f.addRow(row)
+        self._populate_theme_cards()
 
-    def _apply_theme_choice(self, _idx: int = 0) -> None:
-        """Aplica o tema escolhido no combo, a quente (state.json, não config.toml)."""
+    def _populate_theme_cards(self) -> None:
+        """(Re)constrói o seletor: a opção 'Automático' no topo (largura cheia) + os 4
+        temas em blocos 2x2, marcando o vigente. Reconstruir (em vez de mutar) mantém tudo
+        pintado no tema ATIVO e o marcador de seleção correto após a troca a quente (#70)."""
+        grid = self._theme_grid
+        while grid.count():
+            item = grid.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        choice = theme.current_choice()   # None = automático
+        grid.addWidget(_AutoOption(choice is None, self._pick_theme), 0, 0, 1, 2)
+        for i, th in enumerate(theme.themes()):
+            card = _ThemeCard(th, th.label, th.name, choice == th.name, self._pick_theme)
+            grid.addWidget(card, 1 + i // 2, i % 2)
+
+    def _pick_theme(self, value) -> None:
+        """Aplica o tema clicado a quente (state.json, não config.toml). O apply dispara
+        theme._restyle_top_levels -> self.restyle_theme, que reconstrói a grade marcando
+        o novo vigente. `value` = slug do tema, ou None para o Automático."""
         from PySide6.QtWidgets import QApplication
 
-        theme.apply_choice(self._theme_combo.currentData(), app=QApplication.instance())
+        theme.apply_choice(value, app=QApplication.instance())
+
+    def restyle_theme(self) -> None:
+        """Após a troca a quente, reconstrói a grade de temas (repinta os cards no tema
+        ativo + marca o novo selecionado). Contrato `restyle_theme` de theme.apply (#70)."""
+        if getattr(self, "_theme_grid", None) is not None:
+            self._populate_theme_cards()
 
     def _build_about_tab(self) -> None:
         from .. import updates

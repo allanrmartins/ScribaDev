@@ -140,6 +140,11 @@ class RecordingPill(QWidget):
         self._tip_timer.setInterval(700)
         self._tip_timer.timeout.connect(self._tip_show)
 
+    def restyle_theme(self) -> None:
+        """Repinta a pílula no tema novo — o paintEvent lê theme.active() a cada frame,
+        então basta forçar o repaint (contrato de troca a quente, #70)."""
+        self.update()
+
     # -- pintura -------------------------------------------------------------
 
     def paintEvent(self, _e) -> None:
