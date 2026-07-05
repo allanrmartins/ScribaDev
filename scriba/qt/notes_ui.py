@@ -25,13 +25,18 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
+    QButtonGroup,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMenu,
     QMessageBox,
     QProgressBar,
+    QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QTextBrowser,
     QTextEdit,
@@ -379,13 +384,8 @@ class NotesWindow(QWidget):
                     self._chat.restyle_theme()
             except RuntimeError:
                 self._chat = None
-        aw = getattr(self, "_actions_win", None)
-        if aw is not None:
-            try:
-                if aw.isVisible():
-                    aw._render()
-            except RuntimeError:
-                pass
+        # o hub de pendências é top-level próprio (app.action_hub): _restyle_top_levels
+        # já chama o restyle_theme dele — nada a fazer aqui (#78).
 
     # -- atalhos e menu de contexto (#63) ------------------------------------
 
@@ -1066,10 +1066,14 @@ class NotesWindow(QWidget):
 
     # -- "Minhas pendências" (#22) -------------------------------------------
 
-    def _collect_action_groups(self) -> list:
+    def _collect_action_groups(self) -> list[dict]:
+        """Agrega a seção 'Pendências e Ações' de TODAS as reuniões, uma entrada por
+        reunião: {dt, title, path, folder, client, items}. Ponto ÚNICO de origem dos
+        dados do hub (#78) — a migração p/ o índice (#76) troca só aqui. Ordenado por
+        data desc."""
         from .. import notes
 
-        groups = []
+        groups: list[dict] = []
         try:
             files = list(self._notes_dir().glob("*.md"))
         except OSError:
@@ -1083,18 +1087,36 @@ class NotesWindow(QWidget):
             if not items:
                 continue
             dt, _dur, title = _note_info(f)
-            groups.append((dt, title or f.stem, f, self._recording_folder_for(f), items))
-        groups.sort(key=lambda g: g[0], reverse=True)
+            groups.append({"dt": dt, "title": title or f.stem, "path": f,
+                           "folder": self._recording_folder_for(f),
+                           "client": _client_of(f), "items": items})
+        groups.sort(key=lambda g: g["dt"], reverse=True)
         return groups
 
     def _open_action_items(self) -> None:
-        self._actions_win = _ActionItemsWindow(self._collect_action_groups(), self._reveal_note)
-        self._actions_win.show()
+        # atalho secundário (ícone task-list do rodapé): abre o hub de 1ª classe (#78/#82)
+        self.app.show_action_hub()
 
     def reveal_note(self, note_path) -> None:
         """Navega até a reunião de caminho `note_path` na árvore (público; usado
         pela capa ao clicar numa reunião recente). Aceita str ou Path."""
         self._reveal_note(Path(note_path))
+
+    def reveal_note_at_section(self, note_path, section_title: str = "Pendências e Ações") -> None:
+        """Abre a nota E rola o leitor até a seção `section_title` (default: pendências).
+        Usado pelo hub (#78): clicar num item leva à nota já posicionada. Como o leitor
+        usa setMarkdown (sem âncoras de header), reusa o mecanismo de find por texto
+        (QTextCursor + ensureCursorVisible, padrão do _goto_hit)."""
+        self.show()
+        self.raise_()
+        self._reveal_note(Path(note_path))   # seleciona na árvore → renderiza o markdown
+        if not section_title:
+            return
+        doc = self._view.document()
+        cur = doc.find(section_title)        # 1ª ocorrência do texto do header
+        if not cur.isNull():
+            self._view.setTextCursor(cur)
+            self._view.ensureCursorVisible()
 
     def _reveal_note(self, note_path: Path) -> None:
         if self._select_in_tree(note_path):
@@ -1145,81 +1167,335 @@ class NotesWindow(QWidget):
         self.hide()
 
 
-class _ActionItemsWindow(QWidget):
-    """"Minhas pendências": agrega a seção 'Pendências e Ações' de TODAS as reuniões,
-    com checkbox por item (estado em .actions.json por pasta) e clique no título → nota."""
+def _is_blocking(label: str) -> bool:
+    up = (label or "").upper()
+    return "BLOQUEANTE" in up or "BLOCK" in up
 
-    def __init__(self, groups: list, on_reveal):
+
+def _label_rank(label: str) -> int:
+    """Severidade do rótulo p/ a ordenação 'por rótulo' (bloqueantes no topo)."""
+    up = (label or "").upper()
+    if _is_blocking(label):
+        return 0
+    if "ABERTO" in up or "OPEN" in up:
+        return 1
+    return 2 if (label or "").strip() else 3
+
+
+# filtros de estado do hub (chip -> rótulo). "Ativas" é o default.
+_HUB_FILTERS = (
+    ("active", "Ativas"),
+    ("blocking", "Bloqueantes"),
+    ("done", "Resolvidas"),
+    ("dismissed", "Dispensadas"),
+    ("archived", "Arquivadas"),
+)
+
+
+class _ActionItemsWindow(QWidget):
+    """Hub de pendências (#78): agrega a seção 'Pendências e Ações' de TODAS as reuniões,
+    com filtros (ativas/bloqueantes/resolvidas/dispensadas/arquivadas), por cliente, busca
+    e ordenação; agrupa por reunião (título · data · cliente); rótulos como chips coloridos;
+    clique no item abre a nota já rolada na seção. Estado em .actions.json por pasta
+    (fonte da verdade); navegação delegada à janela de Notas. Instância única do app."""
+
+    def __init__(self, app, collect, on_reveal_section):
         super().__init__()
-        self._groups = groups
-        self._on_reveal = on_reveal
-        self.setWindowTitle("ScribaDev — Minhas pendências")
-        self.setMinimumSize(560, 400)
+        self.app = app
+        self._collect = collect                       # callable -> list[dict] de grupos
+        self._on_reveal_section = on_reveal_section    # callable(path) -> navega até a seção
+        self._groups: list[dict] = []
+        self._filter = "active"
+        self._focus_path = None
+        self._headers: dict[str, QLabel] = {}
+        self.setWindowTitle("ScribaDev — Pendências")
+        self.setMinimumSize(600, 460)
+        widgets.remember_geometry(self, "action_hub", default=(160, 120, 660, 560))
+        self._build()
+
+    # -- construção ----------------------------------------------------------
+    def _build(self) -> None:
         root = QVBoxLayout(self)
         head = QHBoxLayout()
-        title = QLabel("Minhas pendências"); title.setStyleSheet("font-size:15pt; font-weight:bold;")
+        title = QLabel("Pendências"); title.setStyleSheet("font-size:15pt; font-weight:bold;")
         head.addWidget(title)
         self._count = QLabel(""); self._count.setProperty("role", "muted")
-        head.addWidget(self._count); head.addStretch(1)
-        self._show_done = widgets.AnimatedCheckBox("mostrar resolvidas")
-        self._show_done.toggled.connect(self._render)
-        head.addWidget(self._show_done)
+        head.addWidget(self._count)
+        head.addStretch(1)
+        self._archive_btn = QPushButton("Arquivar antigas")
+        self._archive_btn.setCursor(Qt.PointingHandCursor)
+        self._archive_btn.clicked.connect(self._archive_old)
+        head.addWidget(self._archive_btn)
         root.addLayout(head)
+
+        chips = QHBoxLayout(); chips.setSpacing(6)
+        self._chip_group = QButtonGroup(self); self._chip_group.setExclusive(True)
+        self._chips: dict[str, QPushButton] = {}
+        for key, label in _HUB_FILTERS:
+            b = QPushButton(label); b.setCheckable(True); b.setCursor(Qt.PointingHandCursor)
+            b.setObjectName("hubChip")
+            b.clicked.connect(lambda _c=False, k=key: self._set_filter(k))
+            self._chip_group.addButton(b)
+            self._chips[key] = b
+            chips.addWidget(b)
+        self._chips["active"].setChecked(True)
+        chips.addStretch(1)
+        root.addLayout(chips)
+
+        tools = QHBoxLayout(); tools.setSpacing(8)
+        self._client = QComboBox(); widgets.no_wheel_steal(self._client)
+        self._client.currentIndexChanged.connect(lambda _=0: self._render())
+        tools.addWidget(QLabel("Cliente:")); tools.addWidget(self._client)
+        self._sort = QComboBox(); widgets.no_wheel_steal(self._sort)
+        self._sort.addItems(["Data (recente)", "Rótulo"])
+        self._sort.currentIndexChanged.connect(lambda _=0: self._render())
+        tools.addWidget(QLabel("Ordenar:")); tools.addWidget(self._sort)
+        self._search = QLineEdit(); self._search.setClearButtonEnabled(True)
+        self._search.setPlaceholderText("Buscar nos itens…")
+        self._search.textChanged.connect(lambda _=0: self._render())
+        tools.addWidget(self._search, 1)
+        root.addLayout(tools)
+
         self._scroll = QScrollArea(); self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QScrollArea.NoFrame)
         root.addWidget(self._scroll, 1)
+        self._style_controls()
+
+    def _style_controls(self) -> None:
+        # QSS por objectName (#hubChip): scoped, não vaza border p/ filhos (gotcha #70).
+        t = theme.active()
+        for b in self._chips.values():
+            b.setStyleSheet(
+                f"QPushButton#hubChip {{ padding:3px 12px; border-radius:{t.radius}px;"
+                f" border:1px solid {t.border}; background:{t.field}; color:{t.muted}; }}"
+                f"QPushButton#hubChip:checked {{ background:{t.accent}; color:{t.on_accent};"
+                f" border-color:{t.accent}; }}")
+
+    # -- dados / filtros -----------------------------------------------------
+    def refresh(self) -> None:
+        """(Re)coleta os grupos da origem única e re-renderiza (após marcar/dispensar/
+        arquivar, ou ao abrir)."""
+        try:
+            self._groups = self._collect() if self._collect else []
+        except Exception:
+            log.exception("falha ao coletar pendências do hub")
+            self._groups = []
+        self._populate_clients()
         self._render()
 
+    def _populate_clients(self) -> None:
+        cur = self._client.currentText() if self._client.count() else ""
+        clients = sorted({(g["client"] or "").strip() for g in self._groups
+                          if (g["client"] or "").strip()})
+        self._client.blockSignals(True)
+        self._client.clear()
+        self._client.addItem("Todos os clientes")
+        self._client.addItems(clients)
+        i = self._client.findText(cur)
+        self._client.setCurrentIndex(i if i > 0 else 0)
+        self._client.blockSignals(False)
+
+    def _set_filter(self, key: str) -> None:
+        self._filter = key
+        self._render()
+
+    def _passes_filter(self, state: str, label: str) -> bool:
+        f = self._filter
+        if f == "active":
+            return state == "open"
+        if f == "blocking":
+            return state == "open" and _is_blocking(label)
+        return state == f   # done / dismissed / archived
+
+    def focus_meeting(self, note_path) -> None:
+        """Rola até a reunião de `note_path` (abertura via app.show_action_hub(note_path))."""
+        self._focus_path = str(note_path) if note_path else None
+        self._render()
+
+    # -- render --------------------------------------------------------------
     def _render(self) -> None:
         from .. import notes
 
-        body = QWidget()
-        lay = QVBoxLayout(body)
-        open_n = done_n = 0
-        any_visible = False
-        for dt, title, md_path, folder, items in self._groups:
-            state = notes.load_action_state(folder)
-            shown = [it for it in items if self._show_done.isChecked() or not state.get(it["key"])]
-            done_n += sum(1 for it in items if state.get(it["key"]))
-            open_n += sum(1 for it in items if not state.get(it["key"]))
-            if not shown:
+        self._headers = {}
+        client_sel = self._client.currentText() if self._client.currentIndex() > 0 else ""
+        needle = self._search.text().strip().lower()
+        by_label = self._sort.currentIndex() == 1
+        visible: list[tuple[dict, list]] = []
+        for g in self._groups:
+            if client_sel and (g["client"] or "").strip() != client_sel:
                 continue
-            any_visible = True
-            hdr = QLabel(f"{title}  ·  {dt:%d/%m %H:%M}")
-            hdr.setStyleSheet(f"color:{theme.active().accent_hover}; font-weight:bold; font-size:11pt;")
-            hdr.setCursor(Qt.PointingHandCursor)
-            hdr.mousePressEvent = lambda _e, p=md_path: self._on_reveal(p)
-            lay.addWidget(hdr)
-            for it in shown:
-                self._add_item(lay, folder, it, bool(state.get(it["key"])))
-        if not any_visible:
-            lay.addWidget(QLabel("Nenhuma reunião tem pendências." if not self._groups
-                                 else 'Tudo resolvido! Marque "mostrar resolvidas" para revê-las.'))
-        lay.addStretch(1)
-        self._count.setText(f"{open_n} aberta(s) · {done_n} resolvida(s)")
-        self._scroll.setWidget(body)
+            state_map = notes.load_action_state(g["folder"])
+            items = []
+            for it in g["items"]:
+                st = state_map.get(it["key"], "open")
+                if not self._passes_filter(st, it.get("label", "")):
+                    continue
+                if needle and needle not in (
+                        f"{it.get('text', '')} {it.get('raw', '')} {it.get('label', '')}".lower()):
+                    continue
+                items.append((it, st))
+            if not items:
+                continue
+            if by_label:
+                items.sort(key=lambda pair: _label_rank(pair[0].get("label", "")))
+            visible.append((g, items))
+        if by_label:
+            visible.sort(key=lambda gi: min(_label_rank(it.get("label", "")) for it, _ in gi[1]))
 
-    def _add_item(self, lay, folder, item, done) -> None:
+        body = QWidget(); lay = QVBoxLayout(body)
+        shown_total = 0
+        for g, items in visible:
+            self._add_group_header(lay, g)
+            for it, st in items:
+                self._add_item(lay, g, it, st)
+                shown_total += 1
+        if shown_total == 0:
+            empty = QLabel(self._empty_text()); empty.setProperty("role", "muted")
+            lay.addWidget(empty)
+        lay.addStretch(1)
+        self._count.setText(f"{shown_total} item(ns)")
+        self._scroll.setWidget(body)
+        if self._focus_path is not None:
+            hdr = self._headers.get(self._focus_path)
+            if hdr is not None:
+                self._scroll.ensureWidgetVisible(hdr)
+            self._focus_path = None
+
+    def _empty_text(self) -> str:
+        return {
+            "active": "Nenhuma pendência ativa. ✓",
+            "blocking": "Nenhuma pendência bloqueante.",
+            "done": "Nada resolvido ainda.",
+            "dismissed": "Nada dispensado.",
+            "archived": "Nada arquivado.",
+        }.get(self._filter, "Nada por aqui.")
+
+    def _add_group_header(self, lay, g: dict) -> None:
+        t = theme.active()
+        bits = [g["title"], f"{g['dt']:%d/%m %H:%M}"]
+        if (g["client"] or "").strip():
+            bits.append(g["client"].strip())
+        hdr = QLabel("  ·  ".join(bits))
+        hdr.setStyleSheet(f"color:{t.accent_hover}; font-weight:bold; font-size:{t.font_size_small + 1}pt;")
+        hdr.setCursor(Qt.PointingHandCursor)
+        hdr.mousePressEvent = lambda _e, p=g["path"]: self._on_reveal_section(p)
+        lay.addWidget(hdr)
+        self._headers[str(g["path"])] = hdr
+
+    def _label_chip(self, label: str) -> QLabel:
+        t = theme.active()
+        up = (label or "").upper()
+        if _is_blocking(label):
+            bg, fg = t.rec, t.on_accent
+        elif "ABERTO" in up or "OPEN" in up:
+            bg, fg = t.warn, t.on_highlight
+        else:
+            bg, fg = t.field, t.muted
+        word = label.split()[0].upper() if label.split() else ""
+        chip = QLabel(word); chip.setObjectName("hubLabelChip")
+        chip.setStyleSheet(f"QLabel#hubLabelChip {{ background:{bg}; color:{fg};"
+                           f" border-radius:9px; padding:1px 8px; font-size:{t.font_size_small}pt; }}")
+        return chip
+
+    def _add_item(self, lay, g: dict, item: dict, state: str) -> None:
         from .. import notes
 
-        text = (f"[{item['label']}] " if item.get("label") else "") + (item.get("text") or item.get("raw") or "")
-        cb = widgets.AnimatedCheckBox(text)
-        cb.setChecked(done)
-        if done:
-            cb.setStyleSheet(f"color:{theme.active().muted}; text-decoration:line-through;")
+        t = theme.active()
+        row = QWidget()
+        rl = QHBoxLayout(row); rl.setContentsMargins(14, 1, 4, 1); rl.setSpacing(8)
+        cb = widgets.AnimatedCheckBox()
+        cb.setFixedWidth(cb._BOX + 8)   # indicador só: área de clique disjunta do texto
+        cb.setChecked(state == "done")
 
-        def toggle(on, f=folder, k=item["key"]) -> None:
-            notes.set_action_done(f, k, on)
+        def toggle(on, folder=g["folder"], k=item["key"]) -> None:
+            notes.set_action_done(folder, k, on)
             self._render()
 
         cb.toggled.connect(toggle)
-        lay.addWidget(cb)
+        rl.addWidget(cb, 0, Qt.AlignTop)
+        if item.get("label"):
+            rl.addWidget(self._label_chip(item["label"]), 0, Qt.AlignTop)
+        txt = QLabel(item.get("text") or item.get("raw") or "")
+        txt.setWordWrap(True)
+        txt.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        if state == "done":
+            txt.setStyleSheet(f"color:{t.muted}; text-decoration:line-through;")
+        elif state in ("dismissed", "archived"):
+            txt.setStyleSheet(f"color:{t.muted};")
+        txt.setCursor(Qt.PointingHandCursor)
+        txt.mousePressEvent = lambda _e, p=g["path"]: self._on_reveal_section(p)
+        widgets.add_tooltip(txt, item.get("raw") or item.get("text") or "")
+        rl.addWidget(txt, 1)
+        if state in ("dismissed", "archived"):
+            rl.addWidget(widgets.icon_button(
+                "refresh", "Reabrir (voltar para ativa)",
+                lambda folder=g["folder"], k=item["key"]: self._set_state(folder, k, "open"),
+                size=15), 0, Qt.AlignTop)
+        else:
+            rl.addWidget(widgets.icon_button(
+                "dismiss", "Dispensar (falso-positivo)",
+                lambda folder=g["folder"], k=item["key"]: self._set_state(folder, k, "dismissed"),
+                size=15), 0, Qt.AlignTop)
+        lay.addWidget(row)
+
+    def _set_state(self, folder, key: str, state: str) -> None:
+        from .. import notes
+
+        notes.set_action_state(folder, key, state)
+        self._render()
+
+    def _archive_old(self) -> None:
+        from datetime import datetime, timedelta
+
+        from .. import notes
+
+        try:
+            days = int(self.app.cfg.ui.pending_window_days)
+        except Exception:
+            days = 30
+        if days <= 0:
+            QMessageBox.information(self, "Arquivar antigas",
+                                    "O recorte está desligado (0 dias). Ajuste em Configurações.")
+            return
+        cutoff = datetime.now() - timedelta(days=days)
+        pending = 0
+        for g in self._groups:
+            if g["dt"] >= cutoff:
+                continue
+            st = notes.load_action_state(g["folder"])
+            pending += sum(1 for it in g["items"] if st.get(it["key"], "open") == "open")
+        if pending == 0:
+            QMessageBox.information(self, "Arquivar antigas",
+                                    f"Nenhuma pendência ativa em reuniões com mais de {days} dias.")
+            return
+        resp = QMessageBox.question(
+            self, "Arquivar antigas",
+            f"Arquivar {pending} pendência(s) de reuniões com mais de {days} dias?\n"
+            "Ficam recuperáveis no filtro Arquivadas.")
+        if resp != QMessageBox.Yes:
+            return
+        meetings = [{"export_path": str(g["path"]), "folder": str(g["folder"]),
+                     "started_at": g["dt"].isoformat()} for g in self._groups]
+        n = notes.archive_old_action_items(meetings, older_than_days=days)
+        self.refresh()
+        widgets.flash_button(self._archive_btn, f"{n} arquivada(s)", "Arquivar antigas")
+
+    # -- janela --------------------------------------------------------------
+    def restyle_theme(self) -> None:
+        """Troca de tema a quente (#70/#78): re-aplica os estilos inline (chips, cabeçalhos,
+        rótulos, strikethrough) re-renderizando. Chamado por theme._restyle_top_levels."""
+        self._style_controls()
+        self._render()
 
     def show(self) -> None:  # noqa: A003
         super().show()
         self.raise_()
         self.activateWindow()
         widgets.enable_dark_titlebar(self)
+
+    def closeEvent(self, event) -> None:
+        event.ignore()
+        self.hide()
 
 
 def _clip(text: str) -> None:

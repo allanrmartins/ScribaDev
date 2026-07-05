@@ -94,6 +94,7 @@ class ScribaApp:
         self.tray = None
         self.settings = None
         self.notes_win = None
+        self.action_hub = None   # hub de pendências (#78), instância única
         self.wizard_win = None
         self.log_win = None
         self.main_win = None
@@ -401,6 +402,27 @@ class ScribaApp:
         self.notes_win.show()
         if note_path is not None:
             self.notes_win.reveal_note(note_path)
+
+    def show_action_hub(self, note_path=None) -> None:
+        """Abre o hub de pendências (#78/#82), instância única, chamável de qualquer thread.
+        Se `note_path` for dado, posiciona o hub na reunião correspondente."""
+        self.ui(lambda: self._open_action_hub_ui(note_path))
+
+    def _open_action_hub_ui(self, note_path=None) -> None:
+        if self.notes_win is None:
+            from .qt.notes_ui import NotesWindow
+
+            self.notes_win = NotesWindow(self)   # o hub reusa collect + navegação de Notas
+        if self.action_hub is None:
+            from .qt.notes_ui import _ActionItemsWindow
+
+            self.action_hub = _ActionItemsWindow(
+                self, self.notes_win._collect_action_groups,
+                self.notes_win.reveal_note_at_section)
+        self.action_hub.refresh()
+        self.action_hub.show()
+        if note_path is not None:
+            self.action_hub.focus_meeting(note_path)
 
     def show_log(self) -> None:
         """Abre a janela de Log/diagnóstico (chamável de qualquer thread)."""
