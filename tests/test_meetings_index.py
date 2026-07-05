@@ -39,7 +39,7 @@ class MeetingsIndexTests(unittest.TestCase):
     def _make_meeting(self, name, *, started_at, title="Reunião X", client="",
                       status="done", presentes=None, mencionados=None,
                       body="assunto generico", duration_s=600, meeting_title="",
-                      transcript_token="ZZTRANSCONLYZZ"):
+                      transcript_token="ZZTRANSCONLYZZ", pendencias=None):
         folder = self.rec / name
         folder.mkdir(parents=True, exist_ok=True)
         meta = {
@@ -54,6 +54,9 @@ class MeetingsIndexTests(unittest.TestCase):
         if mencionados:
             lines += ["", "**Mencionados (não necessariamente presentes):**"]
             lines += [f"- **{n}** — citado" for n in mencionados]
+        # pendencias = lista de bullets crus da seção "## Pendências e Ações" (#76)
+        if pendencias:
+            lines += ["", "## Pendências e Ações"] + [f"- {p}" for p in pendencias]
         # token SÓ na transcrição: prova que a transcrição completa NÃO é indexada
         lines += ["", mi._TRANSCRIPT_MARKER, "", f"**[00:00:00] Eu:** {transcript_token}", ""]
         (folder / "notas.md").write_text("\n".join(lines), encoding="utf-8")
@@ -290,6 +293,150 @@ class MeetingsIndexTests(unittest.TestCase):
         mi.mark_deleted(f)  # não cria tombstone solto, não quebra
         self.assertEqual(mi.count(), 0)
         self.assertFalse((f / mi._DELETED_MARKER).exists())
+
+    # -- pendências (action items) no índice (#76) ---------------------------
+    def _action_rows(self, folder):
+        """Linhas de action_items da pasta, ordenadas por position (helper de teste)."""
+        import sqlite3
+        with sqlite3.connect(str(mi.DB_PATH)) as c:
+            c.row_factory = sqlite3.Row
+            return [dict(r) for r in c.execute(
+                "SELECT a.* FROM action_items a JOIN meetings m ON m.id = a.meeting_id "
+                "WHERE m.folder = ? ORDER BY a.position", (str(folder),)).fetchall()]
+
+    def test_schema_tem_tabela_action_items(self):
+        mi.count()  # cria o schema
+        import sqlite3
+        with sqlite3.connect(str(mi.DB_PATH)) as c:
+            row = c.execute("SELECT name FROM sqlite_master WHERE type='table' "
+                            "AND name='action_items'").fetchone()
+        self.assertIsNotNone(row)
+
+    def test_indexa_popula_action_items(self):
+        f = self._make_meeting("a", started_at="2026-06-10T09:00:00", pendencias=[
+            "**[BLOQUEANTE]** Aplicar nota 123 [00:01:02]",
+            "**[ABERTO]** Enviar estimativa",
+            "Nada identificado.",  # deve ser ignorado pelo parser
+        ])
+        mi.index_meeting(f)
+        rows = self._action_rows(f)
+        self.assertEqual(len(rows), 2)  # o "Nada identificado." não vira linha
+        self.assertEqual(rows[0]["label"], "BLOQUEANTE")
+        self.assertTrue(rows[0]["text"].startswith("Aplicar nota 123"))
+        self.assertEqual([r["position"] for r in rows], [0, 1])
+        self.assertEqual([r["state"] for r in rows], ["open", "open"])
+        # key bate com o parser (fonte da verdade)
+        parsed = notes.parse_action_items((f / "notas.md").read_text(encoding="utf-8"))
+        self.assertEqual([r["key"] for r in rows], [p["key"] for p in parsed])
+
+    def test_state_done_vem_do_actions_json(self):
+        f = self._make_meeting("a", started_at="2026-06-10T09:00:00", pendencias=[
+            "**[BLOQUEANTE]** Aplicar nota 123", "**[ABERTO]** Enviar estimativa"])
+        parsed = notes.parse_action_items((f / "notas.md").read_text(encoding="utf-8"))
+        notes.set_action_done(f, parsed[0]["key"], True)  # marca o 1º ANTES de indexar
+        mi.index_meeting(f)
+        rows = self._action_rows(f)
+        by_key = {r["key"]: r["state"] for r in rows}
+        self.assertEqual(by_key[parsed[0]["key"]], "done")
+        self.assertEqual(by_key[parsed[1]["key"]], "open")
+
+    def test_cascata_exclui_action_items(self):
+        f = self._make_meeting("a", started_at="2026-06-10T09:00:00",
+                               pendencias=["**[ABERTO]** Fazer X"])
+        mi.index_meeting(f)
+        self.assertEqual(len(self._action_rows(f)), 1)
+        mi.remove_meeting(f)
+        self.assertEqual(self._action_rows(f), [])  # cascata: nenhuma órfã
+        import sqlite3
+        with sqlite3.connect(str(mi.DB_PATH)) as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM action_items").fetchone()[0], 0)
+
+    def test_tombstone_nao_gera_action_items(self):
+        f = self._make_meeting("a", started_at="2026-06-10T09:00:00",
+                               pendencias=["**[ABERTO]** Fazer X"])
+        (f / mi._DELETED_MARKER).write_text("", encoding="utf-8")
+        mi.reindex(self.rec)
+        self.assertEqual(self._action_rows(f), [])
+
+    def test_set_action_done_reflete_no_indice_sem_reindex(self):
+        f = self._make_meeting("a", started_at="2026-06-10T09:00:00", pendencias=[
+            "**[BLOQUEANTE]** Aplicar nota 123", "**[ABERTO]** Enviar estimativa"])
+        mi.index_meeting(f)
+        key = notes.parse_action_items((f / "notas.md").read_text(encoding="utf-8"))[0]["key"]
+        notes.set_action_done(f, key, True)  # hook atualiza o índice na hora
+        by_key = {r["key"]: r["state"] for r in self._action_rows(f)}
+        self.assertEqual(by_key[key], "done")
+        notes.set_action_done(f, key, False)  # desmarcar volta p/ open
+        by_key = {r["key"]: r["state"] for r in self._action_rows(f)}
+        self.assertEqual(by_key[key], "open")
+
+    def test_set_action_state_resiliente_a_indice_indisponivel(self):
+        # índice quebrado NÃO pode derrubar o set_action_done nem perder o .actions.json
+        f = self._make_meeting("a", started_at="2026-06-10T09:00:00",
+                               pendencias=["**[ABERTO]** Fazer X"])
+        mi.index_meeting(f)
+        key = notes.parse_action_items((f / "notas.md").read_text(encoding="utf-8"))[0]["key"]
+        orig = mi._connect
+        mi._connect = lambda: (_ for _ in ()).throw(RuntimeError("índice fora"))
+        try:
+            self.assertFalse(mi.set_action_state(f, key, "done"))  # não levanta, devolve False
+            notes.set_action_done(f, key, True)  # também não levanta
+        finally:
+            mi._connect = orig
+        self.assertTrue(notes.load_action_state(f).get(key))  # .actions.json íntegro
+
+    def test_set_action_state_folder_nao_indexada(self):
+        # pasta sem linha no índice: UPDATE não casa nada → False, sem erro
+        self.assertFalse(mi.set_action_state(self.rec / "inexistente", "abc123", "done"))
+
+    def test_action_counts_por_estado_e_recorte(self):
+        a = self._make_meeting("a", started_at="2026-06-10T09:00:00", pendencias=[
+            "**[BLOQUEANTE]** X1", "**[ABERTO]** X2"])
+        b = self._make_meeting("b", started_at="2026-06-20T09:00:00",
+                               pendencias=["**[ABERTO]** Y1"])
+        mi.index_meeting(a)
+        mi.index_meeting(b)
+        # marca X1 como done
+        k = notes.parse_action_items((a / "notas.md").read_text(encoding="utf-8"))[0]["key"]
+        notes.set_action_done(a, k, True)
+        self.assertEqual(mi.action_counts(), {"open": 2, "done": 1})
+        # recorte temporal: só a reunião 'b' (>= 15/06) → 1 open, 0 done
+        self.assertEqual(mi.action_counts(since="2026-06-15"), {"open": 1})
+
+    def test_list_action_items_filtros_e_contexto(self):
+        a = self._make_meeting("a", started_at="2026-06-10T09:00:00", client="ACME",
+                               title="Kickoff", pendencias=[
+                                   "**[BLOQUEANTE]** X1", "**[ABERTO]** X2"])
+        b = self._make_meeting("b", started_at="2026-06-20T09:00:00", client="Globex",
+                               pendencias=["**[ABERTO]** Y1"])
+        mi.index_meeting(a)
+        mi.index_meeting(b)
+        # todos: 3 itens, mais recente (b) primeiro; itens de 'a' na ordem da nota
+        alli = mi.list_action_items()
+        self.assertEqual([i["text"] for i in alli], ["Y1", "X1", "X2"])
+        # contexto p/ abrir a nota
+        self.assertEqual(alli[0]["client"], "Globex")
+        self.assertEqual(alli[0]["folder"], str(b))
+        self.assertEqual(alli[1]["title"], "Kickoff")
+        # filtro por cliente (parcial, case-insensitive)
+        self.assertEqual([i["text"] for i in mi.list_action_items(client="acme")], ["X1", "X2"])
+        # filtro por estado
+        k = notes.parse_action_items((a / "notas.md").read_text(encoding="utf-8"))[0]["key"]
+        notes.set_action_done(a, k, True)
+        self.assertEqual([i["text"] for i in mi.list_action_items(state="done")], ["X1"])
+        self.assertEqual({i["text"] for i in mi.list_action_items(state="open")}, {"X2", "Y1"})
+        # recorte temporal
+        self.assertEqual([i["text"] for i in mi.list_action_items(since="2026-06-15")], ["Y1"])
+
+    def test_list_action_items_paridade_com_parse(self):
+        # paridade com o cálculo antigo (open_action_items): mesmos itens abertos
+        a = self._make_meeting("a", started_at="2026-06-10T09:00:00", pendencias=[
+            "**[BLOQUEANTE]** Aplicar nota", "**[ABERTO]** Enviar estimativa"])
+        mi.index_meeting(a)
+        idx_open = {i["key"] for i in mi.list_action_items(state="open")}
+        parse_open = {i["key"] for i in notes.parse_action_items(
+            (a / "notas.md").read_text(encoding="utf-8"))}  # nenhum resolvido ainda
+        self.assertEqual(idx_open, parse_open)
 
 
 if __name__ == "__main__":

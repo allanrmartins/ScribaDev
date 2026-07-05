@@ -840,6 +840,13 @@ def set_action_done(folder: Path, key: str, done: bool) -> None:
         import logging
 
         logging.getLogger("scriba.notes").warning("falha ao salvar .actions.json em %s: %s", folder, e)
+    # Reflete o clique no snapshot do índice (#76) p/ capa/hub atualizarem sem reindex.
+    # O `.actions.json` acima é a fonte da verdade; o índice é derivado e resiliente
+    # (set_action_state nunca levanta), então isto é best-effort e roda mesmo se o
+    # .actions.json falhou — o próximo reindex reconcilia os dois de qualquer forma.
+    from . import meetings_index  # lazy: evita ciclo (meetings_index importa notes)
+
+    meetings_index.set_action_state(folder, key, "done" if done else "open")
 
 
 def open_action_items(meetings: list[dict]) -> list[dict]:

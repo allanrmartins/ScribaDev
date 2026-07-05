@@ -24,7 +24,7 @@ from . import util
 log = logging.getLogger("scriba.meetings_index")
 
 DB_PATH = util.APP_DIR / "index.db"
-SCHEMA_VERSION = 2  # v2 (#11): transcrição agora também entra no FTS
+SCHEMA_VERSION = 3  # v3 (#76): pendências (action items) viram snapshot no índice
 
 # Separa o resumo da transcrição completa no notas.md. AMBOS entram no FTS (v2/#11):
 # o resumo na coluna `body`, a transcrição na coluna `transcript` — assim a busca do
@@ -62,6 +62,21 @@ _DDL = (
     )""",
     "CREATE INDEX IF NOT EXISTS ix_part_name    ON participants(name)",
     "CREATE INDEX IF NOT EXISTS ix_part_meeting ON participants(meeting_id)",
+    # Pendências (#76): snapshot DERIVADO da seção "## Pendências e Ações" de cada nota,
+    # cruzado com o `.actions.json` (fonte da verdade do estado). `state` já nasce string
+    # p/ acomodar os estados futuros do épico (open/done/dismissed/archived) sem novo bump;
+    # aqui só `open` e `done` são populados (o .actions.json de hoje só distingue feito).
+    # `position` = ordem do item na nota (p/ listar na mesma sequência).
+    """CREATE TABLE IF NOT EXISTS action_items (
+        meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        key        TEXT NOT NULL,
+        label      TEXT,
+        text       TEXT,
+        state      TEXT NOT NULL DEFAULT 'open',
+        position   INTEGER
+    )""",
+    "CREATE INDEX IF NOT EXISTS ix_action_meeting ON action_items(meeting_id)",
+    "CREATE INDEX IF NOT EXISTS ix_action_state   ON action_items(state)",
     # FTS5 standalone (guarda o próprio texto: simples e robusto p/ delete/rebuild).
     # rowid == meetings.id, mantido à mão no insert/delete. `body` = resumo,
     # `transcript` = transcrição completa (v2/#11) — MATCH sem coluna busca em todas.
@@ -87,7 +102,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         # índice é reconstruível: schema divergente = dropa tudo e recria vazio
         # (reindexar repopula a partir das pastas — sem migração de dados dolorosa).
         log.warning("index.db schema v%s != v%s — recriando (reindexe p/ repopular)", version, SCHEMA_VERSION)
-        for tbl in ("meetings_fts", "participants", "meetings"):
+        for tbl in ("meetings_fts", "action_items", "participants", "meetings"):
             conn.execute(f"DROP TABLE IF EXISTS {tbl}")
         version = 0
     for ddl in _DDL:
@@ -148,6 +163,14 @@ def _extract(folder: Path) -> dict | None:
     presentes, mencionados = notes.parse_participants(md) if md else ({}, [])
     parts = [{"name": n, "role": (r or "").strip(), "kind": "present"} for n, r in presentes.items()]
     parts += [{"name": n, "role": "", "kind": "mentioned"} for n in mencionados]
+    # Pendências (#76): itens da nota + estado do sidecar. `state` derivado do
+    # `.actions.json` (fonte da verdade): item marcado → 'done', senão 'open'.
+    action_state = notes.load_action_state(folder) if md else {}
+    action_items = [
+        {"key": it["key"], "label": it["label"], "text": it["text"],
+         "state": "done" if action_state.get(it["key"]) else "open"}
+        for it in (notes.parse_action_items(md) if md else [])
+    ]
     dur = meta.get("duration_seconds")
     return {
         "folder": str(folder),
@@ -160,6 +183,7 @@ def _extract(folder: Path) -> dict | None:
         "meeting_title": (meta.get("meeting_title") or "").strip(),
         "export_path": meta.get("export_path") or "",
         "participants": parts,
+        "action_items": action_items,
         "body": _summary_body(md),
         "transcript": _transcript_text(md),
     }
@@ -187,6 +211,14 @@ def _upsert(conn: sqlite3.Connection, rec: dict) -> int:
         conn.executemany(
             "INSERT INTO participants (meeting_id, name, role, kind) VALUES (?,?,?,?)",
             [(mid, p["name"], p["role"], p["kind"]) for p in rec["participants"]],
+        )
+    action_items = rec.get("action_items") or []
+    if action_items:
+        conn.executemany(
+            "INSERT INTO action_items (meeting_id, key, label, text, state, position)"
+            " VALUES (?,?,?,?,?,?)",
+            [(mid, a["key"], a["label"], a["text"], a["state"], i)
+             for i, a in enumerate(action_items)],
         )
     names = " ".join(p["name"] for p in rec["participants"])
     conn.execute(
@@ -245,6 +277,30 @@ def remove_meeting(folder) -> bool:
         return False
 
 
+def set_action_state(folder, key: str, state: str) -> bool:
+    """Atualiza no índice o `state` de UMA pendência (snapshot), sem reindexar a nota.
+    Chamado por `notes.set_action_done` logo após gravar o `.actions.json` (que segue
+    a FONTE DA VERDADE do estado), p/ capa/hub refletirem o clique na hora. NUNCA levanta
+    (só loga e devolve False): o índice é derivado, um erro aqui não pode quebrar a UI —
+    o próximo reindex reconstrói o snapshot a partir do `.actions.json` de qualquer forma.
+    Devolve True se a linha existia e foi atualizada."""
+    try:
+        conn = _connect()
+        try:
+            with conn:
+                cur = conn.execute(
+                    "UPDATE action_items SET state = ? WHERE key = ? AND meeting_id = "
+                    "(SELECT id FROM meetings WHERE folder = ?)",
+                    (state, key, str(folder)),
+                )
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+    except Exception:
+        log.exception("falha ao atualizar estado da pendência %s em %s", key, folder)
+        return False
+
+
 def mark_deleted(folder) -> None:
     """Exclusão pela UI (#16) MANTENDO o áudio: tira a reunião do índice agora E deixa um
     tombstone `.deleted` na pasta para o reindex não trazê-la de volta. O áudio + meta
@@ -273,6 +329,7 @@ def reindex(recordings_dir=None) -> int:
     try:
         with conn:
             conn.execute("DELETE FROM meetings_fts")
+            conn.execute("DELETE FROM action_items")
             conn.execute("DELETE FROM participants")
             conn.execute("DELETE FROM meetings")
         for meta_path in sorted(recordings_dir.rglob("meta.json")):
@@ -384,5 +441,76 @@ def count() -> int:
     conn = _connect()
     try:
         return conn.execute("SELECT COUNT(*) FROM meetings").fetchone()[0]
+    finally:
+        conn.close()
+
+
+# -- pendências (action items): consulta do snapshot (#76) ------------------
+
+def _action_filters(state=None, states=None, since=None, until=None, client=None,
+                    folder=None) -> tuple[list[str], list]:
+    """Cláusulas WHERE + params comuns a `action_counts` e `list_action_items`.
+    `a` = action_items, `m` = meetings (o JOIN é montado por quem chama)."""
+    where, params = [], []
+    st = list(states) if states else ([state] if state else [])
+    if st:
+        where.append("a.state IN (%s)" % ",".join("?" * len(st)))
+        params += [str(s) for s in st]
+    if since:
+        where.append("m.started_at >= ?")
+        params.append(str(since))
+    if until:
+        where.append("m.started_at <= ?")
+        params.append(_until_bound(until))
+    if client:
+        where.append("m.client LIKE ?")
+        params.append(f"%{client}%")
+    if folder:
+        where.append("m.folder = ?")
+        params.append(str(folder))
+    return where, params
+
+
+def action_counts(since=None, until=None, client=None) -> dict:
+    """Contagem de pendências POR ESTADO (ex.: `{'open': 5, 'done': 3}`), aplicando o
+    recorte temporal (`since`/`until` em `meetings.started_at`) e por `client`. Base do
+    badge "N ativas" da capa (A4) e dos totais do hub (A3) — barato, sem re-parsear `.md`.
+    Estados ausentes simplesmente não aparecem no dict (use `.get(estado, 0)`)."""
+    conn = _connect()
+    try:
+        where, params = _action_filters(since=since, until=until, client=client)
+        sql = ("SELECT a.state AS state, COUNT(*) AS n FROM action_items a "
+               "JOIN meetings m ON m.id = a.meeting_id")
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " GROUP BY a.state"
+        return {r["state"]: r["n"] for r in conn.execute(sql, params).fetchall()}
+    finally:
+        conn.close()
+
+
+def list_action_items(state=None, states=None, since=None, until=None, client=None,
+                      folder=None, limit=500) -> list[dict]:
+    """Pendências do índice já com o contexto da reunião (p/ o hub/capa abrirem a nota
+    certa sem ler disco). Substitui o papel de `notes.open_action_items` (que re-parseava
+    cada `.md`). Filtros combinam (AND): `state` (um) ou `states` (vários), recorte por
+    `since`/`until` em `started_at`, `client` (parcial), `folder` (exato).
+
+    Cada item volta com `key`/`label`/`text`/`state`/`position` + o contexto da reunião
+    (`meeting_id`, `folder`, `export_path`, `title`, `meeting_title`, `client`,
+    `started_at`). Ordenado por reunião mais recente primeiro, itens na ordem da nota."""
+    conn = _connect()
+    try:
+        where, params = _action_filters(state=state, states=states, since=since,
+                                        until=until, client=client, folder=folder)
+        sql = ("SELECT a.key, a.label, a.text, a.state, a.position, "
+               "m.id AS meeting_id, m.folder, m.export_path, m.title, "
+               "m.meeting_title, m.client, m.started_at "
+               "FROM action_items a JOIN meetings m ON m.id = a.meeting_id")
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY m.started_at DESC, a.position ASC LIMIT ?"
+        params.append(int(limit))
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
     finally:
         conn.close()

@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scriba import meetings_index as mi  # noqa: E402
 from scriba import notes, speakers, util  # noqa: E402
 from scriba.notes import split_header  # noqa: E402
 
@@ -351,8 +352,14 @@ class ActionStateTests(unittest.TestCase):
     def setUp(self):
         self._td = tempfile.TemporaryDirectory()
         self.tmp = Path(self._td.name)
+        # set_action_done reflete no índice (#76): isolar APP_DIR/DB_PATH p/ não tocar o real
+        self._app0, self._logs0, self._db0 = util.APP_DIR, util.LOGS_DIR, mi.DB_PATH
+        util.APP_DIR = self.tmp / "app"
+        util.LOGS_DIR = util.APP_DIR / "logs"
+        mi.DB_PATH = util.APP_DIR / "index.db"
 
     def tearDown(self):
+        util.APP_DIR, util.LOGS_DIR, mi.DB_PATH = self._app0, self._logs0, self._db0
         self._td.cleanup()
 
     def test_marca_e_desmarca(self):
@@ -377,8 +384,14 @@ class OpenActionItemsTests(unittest.TestCase):
     def setUp(self):
         self._td = tempfile.TemporaryDirectory()
         self.tmp = Path(self._td.name)
+        # set_action_done reflete no índice (#76): isolar APP_DIR/DB_PATH p/ não tocar o real
+        self._app0, self._logs0, self._db0 = util.APP_DIR, util.LOGS_DIR, mi.DB_PATH
+        util.APP_DIR = self.tmp / "app"
+        util.LOGS_DIR = util.APP_DIR / "logs"
+        mi.DB_PATH = util.APP_DIR / "index.db"
 
     def tearDown(self):
+        util.APP_DIR, util.LOGS_DIR, mi.DB_PATH = self._app0, self._logs0, self._db0
         self._td.cleanup()
 
     def _meeting(self, name, md=None):
