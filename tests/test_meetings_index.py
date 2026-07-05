@@ -25,6 +25,8 @@ class MeetingsIndexTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="scriba_idx_"))
         # isolamento total: índice e store de voz em tempdir
+        self._app0, self._logs0, self._store0, self._db0 = (
+            util.APP_DIR, util.LOGS_DIR, speakers.STORE_PATH, mi.DB_PATH)
         util.APP_DIR = self.tmp / "app"
         util.LOGS_DIR = util.APP_DIR / "logs"
         speakers.STORE_PATH = util.APP_DIR / "speakers.json"
@@ -33,6 +35,9 @@ class MeetingsIndexTests(unittest.TestCase):
         self.rec.mkdir(parents=True)
 
     def tearDown(self):
+        # restaura os globais (DB_PATH volta a None → resolução dinâmica p/ testes seguintes)
+        util.APP_DIR, util.LOGS_DIR, speakers.STORE_PATH, mi.DB_PATH = (
+            self._app0, self._logs0, self._store0, self._db0)
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     # -- helper: cria uma pasta de gravação (meta.json + notas.md) -----------
@@ -437,6 +442,39 @@ class MeetingsIndexTests(unittest.TestCase):
         parse_open = {i["key"] for i in notes.parse_action_items(
             (a / "notas.md").read_text(encoding="utf-8"))}  # nenhum resolvido ainda
         self.assertEqual(idx_open, parse_open)
+
+
+class IndexPathIsolationTests(unittest.TestCase):
+    """Rede de segurança (#84): com DB_PATH None (default), o índice é RESOLVIDO de
+    util.APP_DIR — isolar só o APP_DIR já redireciona, então nenhum teste toca o
+    index.db REAL do usuário por esquecer de setar mi.DB_PATH."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="scriba_idxiso_"))
+        self._app0, self._logs0, self._db0 = util.APP_DIR, util.LOGS_DIR, mi.DB_PATH
+        util.APP_DIR = self.tmp / "app"
+        util.LOGS_DIR = util.APP_DIR / "logs"
+        mi.DB_PATH = None   # SEM override explícito: deve resolver de util.APP_DIR
+
+    def tearDown(self):
+        util.APP_DIR, util.LOGS_DIR, mi.DB_PATH = self._app0, self._logs0, self._db0
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_db_path_resolve_de_app_dir(self):
+        self.assertEqual(mi._db_path(), util.APP_DIR / "index.db")
+
+    def test_index_writer_grava_sob_app_dir_isolado(self):
+        rec = self.tmp / "rec" / "m"
+        rec.mkdir(parents=True)
+        (rec / "meta.json").write_text(
+            '{"status":"done","started_at":"2026-06-10T09:00:00"}', encoding="utf-8")
+        (rec / "notas.md").write_text("# X\n\n## Resumo\nok\n", encoding="utf-8")
+        self.assertTrue(mi.index_meeting(rec))
+        self.assertEqual(mi.count(), 1)
+        # o índice nasceu SOB o APP_DIR isolado (tmp), nunca no path real
+        db = util.APP_DIR / "index.db"
+        self.assertTrue(db.exists())
+        self.assertTrue(str(db).startswith(str(self.tmp)))
 
 
 if __name__ == "__main__":
