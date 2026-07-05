@@ -375,6 +375,20 @@ class MeetingsIndexTests(unittest.TestCase):
         by_key = {r["key"]: r["state"] for r in self._action_rows(f)}
         self.assertEqual(by_key[key], "open")
 
+    def test_set_action_state_reflete_dismissed_e_archived(self):
+        f = self._make_meeting("a", started_at="2026-06-10T09:00:00", pendencias=[
+            "**[BLOQUEANTE]** X1", "**[ABERTO]** X2"])
+        mi.index_meeting(f)
+        keys = [i["key"] for i in notes.parse_action_items(
+            (f / "notas.md").read_text(encoding="utf-8"))]
+        notes.set_action_state(f, keys[0], "dismissed")
+        notes.set_action_state(f, keys[1], "archived")
+        by = {r["key"]: r["state"] for r in self._action_rows(f)}
+        self.assertEqual((by[keys[0]], by[keys[1]]), ("dismissed", "archived"))
+        # contagens e filtros do índice enxergam os estados novos (nenhum 'open' sobra)
+        self.assertEqual(mi.action_counts(), {"dismissed": 1, "archived": 1})
+        self.assertEqual([i["text"] for i in mi.list_action_items(state="dismissed")], ["X1"])
+
     def test_set_action_state_resiliente_a_indice_indisponivel(self):
         # índice quebrado NÃO pode derrubar o set_action_done nem perder o .actions.json
         f = self._make_meeting("a", started_at="2026-06-10T09:00:00",

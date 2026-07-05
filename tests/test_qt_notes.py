@@ -25,6 +25,35 @@ _NOTE_MD = (
 )
 
 
+_MODULE_ISO = None
+
+
+def setUpModule():
+    # Robustez (#84): vários testes constroem NotesWindow, cujo show() dispara uma thread
+    # de reindex_if_needed. Com DB_PATH dinâmico, isolar APP_DIR/DB_PATH no módulo inteiro
+    # manda TODO acesso ao índice (sync e da thread) p/ um tmp — nenhum teste toca o
+    # index.db REAL do usuário (o bug que zerava a capa).
+    global _MODULE_ISO
+    from scriba import meetings_index as _mi
+    from scriba import util as _util
+    tmp = Path(tempfile.mkdtemp(prefix="scriba_qtnotes_app_"))
+    _MODULE_ISO = (_util.APP_DIR, _util.LOGS_DIR, _mi.DB_PATH, tmp)
+    _util.APP_DIR = tmp / "app"
+    _util.LOGS_DIR = _util.APP_DIR / "logs"
+    _mi.DB_PATH = None   # None = resolve de util.APP_DIR (agora o tmp isolado)
+
+
+def tearDownModule():
+    if _MODULE_ISO is None:
+        return
+    import shutil
+    from scriba import meetings_index as _mi
+    from scriba import util as _util
+    app0, logs0, db0, tmp = _MODULE_ISO
+    _util.APP_DIR, _util.LOGS_DIR, _mi.DB_PATH = app0, logs0, db0
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
 @unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")
 class PureHelperTests(unittest.TestCase):
     def test_note_info_le_frontmatter(self):
@@ -321,6 +350,44 @@ class NotesSlice2Tests(unittest.TestCase):
         w = self._hub([g])
         w._on_reveal_section(g["path"])                       # simula o clique
         self.assertEqual(self._revealed, [g["path"]])
+
+    def test_hub_focus_meeting_nao_quebra_sem_grupo(self):
+        # focar uma reunião que não está na lista atual não pode levantar (best-effort)
+        folder = Path(tempfile.mkdtemp(prefix="scriba_qt_foc_"))
+        w = self._hub([self._pend_group(folder)])
+        w.focus_meeting(str(folder / "inexistente.md"))       # header não existe → no-op silencioso
+        w.focus_meeting(str((folder / "n.md")))               # header existe → rola sem erro
+
+    def test_reveal_note_at_section_posiciona_cursor_na_secao(self):
+        from scriba import meetings_index as _mi
+        from scriba import util as _util
+        from scriba.qt.notes_ui import NotesWindow
+
+        base = Path(tempfile.mkdtemp(prefix="scriba_qt_sec_"))
+        # DB_PATH dinâmico (#84): isolar APP_DIR já manda o índice p/ o tmp
+        app0, logs0 = _util.APP_DIR, _util.LOGS_DIR
+        _util.APP_DIR = base / "app"; _util.LOGS_DIR = _util.APP_DIR / "logs"
+        self.addCleanup(lambda: (setattr(_util, "APP_DIR", app0),
+                                 setattr(_util, "LOGS_DIR", logs0)))
+        self.assertTrue(str(_mi._db_path()).startswith(str(base)))  # índice no tmp, não no real
+        note = base / "2026-07-02_15-30_Boleto.md"
+        note.write_text("# Boleto\n\n## Resumo\ntexto do resumo\n\n"
+                        "## Pendências e Ações\n- **[ABERTO]** corrigir CNPJ\n", encoding="utf-8")
+
+        class _Out:
+            def resolved_export_dir(_s): return base
+            def resolved_recordings_dir(_s): return base / "_rec"
+
+        class _App:
+            cfg = type("C", (), {"output": _Out()})()
+            def ui(_s, fn): fn()
+
+        win = NotesWindow(_App())
+        win._ensure_index_async = lambda: None   # sem thread de reindex (evita corrida APP_DIR)
+        win._refresh_list()
+        win.reveal_note_at_section(note)
+        self.assertEqual(win._selected()[0], note)                      # nota selecionada
+        self.assertIn("Pendências", win._view.textCursor().selectedText())  # cursor na seção
 
     def test_hint_de_pendencia_de_vozes_aparece_e_some_ao_rotular(self):
         from scriba.qt.notes_ui import NotesWindow
