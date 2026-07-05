@@ -39,6 +39,7 @@ class _FakeApp:
     # métodos chamados por ações (não exercitados no _sync)
     def show_main(self): pass
     def show_notes(self): pass
+    def show_action_hub(self, note_path=None): pass
     def show_log(self): pass
     def show_settings(self): pass
 
@@ -72,6 +73,15 @@ class TrayTests(unittest.TestCase):
         self.assertTrue(tray._act_speakers.isVisible())
         self.assertTrue(tray._spk_acts[3].isChecked())
         self.assertFalse(tray._spk_acts[1].isChecked())
+
+    def test_menu_tem_entrada_pendencias(self):
+        from scriba.qt.tray import Tray
+
+        tray = Tray(_FakeApp())
+        labels = [a.text() for a in tray._menu.actions()]
+        self.assertIn("Pendências", labels)
+        # posicionada junto de "Notas" (logo depois)
+        self.assertEqual(labels.index("Pendências"), labels.index("Notas") + 1)
 
     def test_set_recording_troca_icone_e_tooltip(self):
         from scriba.qt.tray import Tray

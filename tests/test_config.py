@@ -84,6 +84,32 @@ class DiarizationConfigTests(unittest.TestCase):
         self.assertEqual(got.chunk_minutes, 5)
 
 
+class UiConfigTests(unittest.TestCase):
+    """Campos de [ui], incluindo o recorte de pendências da capa (#79)."""
+
+    def setUp(self):
+        d = Path(tempfile.mkdtemp(prefix="scriba_ui_"))
+        util.APP_DIR = d
+        util.LOGS_DIR = d / "logs"
+        util.CONFIG_PATH = d / "config.toml"
+
+    def test_default_pending_window_days(self):
+        self.assertEqual(config.load().ui.pending_window_days, 30)
+
+    def test_round_trip_pending_window_days(self):
+        import dataclasses
+
+        cfg = config.load()
+        config.save(dataclasses.replace(cfg, ui=dataclasses.replace(
+            cfg.ui, pending_window_days=7)))
+        self.assertEqual(config.load().ui.pending_window_days, 7)
+        # 0 = sem recorte (escape hatch) também persiste
+        cfg = config.load()
+        config.save(dataclasses.replace(cfg, ui=dataclasses.replace(
+            cfg.ui, pending_window_days=0)))
+        self.assertEqual(config.load().ui.pending_window_days, 0)
+
+
 class WhisperConfigTests(unittest.TestCase):
     """Novos campos de [whisper] (#6): beam_size, cpu_threads, vad, batch_size (#7: default 4)."""
 

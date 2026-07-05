@@ -278,15 +278,49 @@ class NotesSlice2Tests(unittest.TestCase):
         self.assertTrue(win._voice_btn.isVisibleTo(win))
         self.assertTrue(win._voice_btn.isEnabled())          # a gravação tem voices.json
 
-    def test_janela_pendencias_renderiza(self):
+    def _hub(self, groups):
         from scriba.qt.notes_ui import _ActionItemsWindow
 
+        app = type("A", (), {"cfg": type("C", (), {
+            "ui": type("U", (), {"pending_window_days": 30})()})()})()
+        self._revealed = []
+        w = _ActionItemsWindow(app, lambda: list(groups), self._revealed.append)
+        w.refresh()
+        return w
+
+    def _pend_group(self, folder):
+        return {"dt": datetime(2026, 7, 2, 15, 30), "title": "Boleto",
+                "path": folder / "n.md", "folder": folder, "client": "ACME",
+                "items": [
+                    {"key": "k1", "label": "BLOQUEANTE", "text": "corrigir CNPJ", "raw": "corrigir CNPJ"},
+                    {"key": "k2", "label": "ABERTO", "text": "enviar planilha", "raw": "enviar planilha"}]}
+
+    def test_hub_pendencias_renderiza_conta_ativas(self):
         folder = Path(tempfile.mkdtemp(prefix="scriba_qt_pend_"))
-        group = (datetime(2026, 7, 2, 15, 30), "Boleto", folder / "n.md", folder,
-                 [{"key": "k1", "label": "", "text": "corrigir CNPJ", "raw": "corrigir CNPJ"}])
-        revealed = []
-        w = _ActionItemsWindow([group], revealed.append)
-        self.assertIn("aberta", w._count.text())             # 1 item aberto
+        w = self._hub([self._pend_group(folder)])
+        self.assertIn("2 item", w._count.text())             # 2 ativas (default filtro Ativas)
+        self.assertGreaterEqual(w._client.count(), 2)        # "Todos os clientes" + ACME
+
+    def test_hub_filtro_bloqueantes(self):
+        folder = Path(tempfile.mkdtemp(prefix="scriba_qt_blk_"))
+        w = self._hub([self._pend_group(folder)])
+        w._set_filter("blocking")
+        self.assertIn("1 item", w._count.text())             # só o BLOQUEANTE
+        w._set_filter("archived")
+        self.assertIn("0 item", w._count.text())             # nada arquivado
+
+    def test_hub_busca_por_texto(self):
+        folder = Path(tempfile.mkdtemp(prefix="scriba_qt_bus_"))
+        w = self._hub([self._pend_group(folder)])
+        w._search.setText("planilha")
+        self.assertIn("1 item", w._count.text())             # casa só "enviar planilha"
+
+    def test_hub_clique_no_item_navega_ate_secao(self):
+        folder = Path(tempfile.mkdtemp(prefix="scriba_qt_nav_"))
+        g = self._pend_group(folder)
+        w = self._hub([g])
+        w._on_reveal_section(g["path"])                       # simula o clique
+        self.assertEqual(self._revealed, [g["path"]])
 
     def test_hint_de_pendencia_de_vozes_aparece_e_some_ao_rotular(self):
         from scriba.qt.notes_ui import NotesWindow
