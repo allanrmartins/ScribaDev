@@ -164,6 +164,53 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual(win._pending_badge.text(), "1")
         self.assertIn("ativa", win._pending_badge.toolTip())
 
+    # -- capa viva (#80): agrupamento, chips, checkbox real, badge ao vivo -------
+    def test_group_by_note_agrupa_preservando_ordem(self):
+        from scriba.qt.main_window import _group_by_note
+        groups = _group_by_note([
+            {"note_path": "/a.md", "text": "1"},
+            {"note_path": "/a.md", "text": "2"},
+            {"note_path": "/b.md", "text": "3"},
+        ])
+        self.assertEqual([g[0]["note_path"] for g in groups], ["/a.md", "/b.md"])
+        self.assertEqual([len(g[1]) for g in groups], [2, 1])
+
+    def test_short_date(self):
+        from scriba.qt.main_window import _short_date
+        self.assertEqual(_short_date("2026-07-04T09:15:00"), "04/07")
+        self.assertEqual(_short_date(""), "")
+
+    def test_render_home_agrupa_por_reuniao(self):
+        win = self._win()
+        data = {"total": 3, "seconds": 0, "clients": 2, "recent": [], "pending": [
+            {"text": "X1", "title": "Reunião A", "client": "ACME", "note_path": "/a.md",
+             "label": "BLOQUEANTE", "key": "", "folder": "", "started_at": "2026-07-04T09:00:00"},
+            {"text": "X2", "title": "Reunião A", "client": "ACME", "note_path": "/a.md",
+             "label": "ABERTO", "key": "", "folder": "", "started_at": "2026-07-04T09:00:00"},
+            {"text": "Y1", "title": "Reunião B", "client": "Globex", "note_path": "/b.md",
+             "label": "", "key": "", "folder": "", "started_at": "2026-07-03T09:00:00"},
+        ]}
+        win._render_home(data)
+        self.assertEqual(win._pending_lay.count(), 2)   # 2 reuniões, não 3 subtítulos
+        self.assertEqual(win._pending_badge.text(), "3")
+
+    def test_label_chip_cores_e_vazio(self):
+        win = self._win()
+        self.assertIsNone(win._label_chip(""))
+        self.assertEqual(win._label_chip("BLOQUEANTE — Eu").text(), "BLOQUEANTE")
+        self.assertEqual(win._label_chip("ABERTO").text(), "ABERTO")
+        self.assertEqual(win._label_chip("Indefinido").text(), "INDEFINIDO")  # neutro, não quebra
+
+    def test_bump_pending_badge_nao_fica_negativo(self):
+        win = self._win()
+        win._pending_active_n = 2
+        win._pending_badge.setVisible(True)
+        win._bump_pending_badge(-1)
+        self.assertEqual(win._pending_badge.text(), "1")
+        win._bump_pending_badge(-5)
+        self.assertEqual(win._pending_badge.text(), "0")
+        self.assertFalse(win._pending_badge.isVisible())
+
     def test_restyle_theme_nao_retem_acento_do_tema_anterior(self):
         """Regressão do bug #70 (bordas laranjas): trocar de tema a quente deve
         re-estilizar a capa; o acento do tema anterior NÃO pode sobrar na borda do card

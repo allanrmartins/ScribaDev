@@ -61,6 +61,27 @@ def _elide(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
+def _group_by_note(items: list) -> list:
+    """Agrupa itens de pendência por reunião (`note_path`), preservando a ordem de entrada.
+    Devolve [(item_cabeça, [itens]), …] — o 1º item de cada grupo carrega o contexto
+    (título/data/cliente) do cabeçalho. Evita repetir o subtítulo da reunião (#80)."""
+    groups: list = []
+    index: dict = {}
+    for it in items:
+        key = (it.get("note_path") or "").strip()
+        if key not in index:
+            index[key] = len(groups)
+            groups.append((it, []))
+        groups[index[key]][1].append(it)
+    return groups
+
+
+def _short_date(iso: str) -> str:
+    """'YYYY-MM-DD…' -> 'dd/mm' (data curta do cabeçalho de grupo). '' se vazio/curto."""
+    iso = (iso or "").strip()
+    return f"{iso[8:10]}/{iso[5:7]}" if len(iso) >= 10 else ""
+
+
 def _started_within(m: dict, cutoff_iso: str) -> bool:
     """True se a reunião começou em `cutoff_iso` ou depois (dentro do recorte da capa, #79).
     Data ausente/corrompida → False (vai p/ o backlog: degradação segura, nunca infla ativas)."""
@@ -528,16 +549,18 @@ class MainWindow(QWidget):
             (f"{n} ativa(s) — reuniões dos últimos {days} dias" if days > 0
              else f"{n} pendência(s) — sem recorte") if n else "")
         self._pending_open.setVisible(n > 0)
+        self._pending_active_n = n   # base p/ o badge decrementar ao marcar/dispensar (#80)
         if not pend:
             empty = QLabel("Nada pendente por aqui. ✓")
             empty.setProperty("role", "muted")
             empty.setStyleSheet(f"color:{t.muted}; font-size:{t.font_size_small}pt;")
             self._pending_lay.addWidget(empty)
         else:
-            for it in pend[:_PENDING_N]:
-                self._pending_lay.addWidget(self._pending_item(it))
-            if n > _PENDING_N:
-                more = QLabel(f"+{n - _PENDING_N} outras — abrir Notas")
+            shown = pend[:_PENDING_N]
+            for header_it, items in _group_by_note(shown):
+                self._pending_lay.addWidget(self._pending_group(header_it, items))
+            if n > len(shown):
+                more = QLabel(f"+{n - len(shown)} outras — abrir Notas")
                 more.setProperty("role", "muted")
                 more.setStyleSheet(f"color:{t.muted}; font-size:{t.font_size_small}pt;")
                 self._pending_lay.addWidget(more)
@@ -597,30 +620,98 @@ class MainWindow(QWidget):
             parts.append(f"{n} part.")
         return "  ·  ".join(parts)
 
-    def _pending_item(self, it: dict) -> QWidget:
+    def _pending_group(self, header_it: dict, items: list) -> QWidget:
+        """Um grupo de pendências da MESMA reunião: 1 cabeçalho compacto (título · data ·
+        cliente, clicável) + N itens de 1 linha. Elimina o subtítulo repetido (#80)."""
         t = theme.active()
+        box = QWidget()
+        col = QVBoxLayout(box); col.setContentsMargins(0, 0, 0, 0); col.setSpacing(1)
+        note_path = (header_it.get("note_path") or "").strip()
+        bits = [b for b in (header_it.get("title"), _short_date(header_it.get("started_at")),
+                            header_it.get("client")) if b]
+        hdr = QLabel(_elide("  ·  ".join(bits), 52))
+        hdr.setStyleSheet(f"color:{t.accent_hover}; font-weight:bold; font-size:{t.font_size_small}pt;")
+        hdr.setCursor(Qt.PointingHandCursor)
+        hdr.mousePressEvent = lambda _e, p=note_path: self._open_recent(p)
+        col.addWidget(hdr)
+        for it in items:
+            col.addWidget(self._pending_item(it))
+        return box
+
+    def _label_chip(self, label: str):
+        """Chip colorido da 1ª palavra do rótulo (BLOQUEANTE=rec, ABERTO=warn, resto=neutro).
+        None se não houver rótulo. A IA não usa vocabulário fechado — labels fora dos dois
+        conhecidos caem no neutro sem quebrar."""
+        label = (label or "").strip()
+        if not label:
+            return None
+        t = theme.active()
+        up = label.upper()
+        if "BLOQUEANTE" in up or "BLOCK" in up:
+            bg, fg = t.rec, t.on_accent
+        elif "ABERTO" in up or "OPEN" in up:
+            bg, fg = t.warn, t.on_highlight
+        else:
+            bg, fg = t.field, t.muted
+        chip = QLabel(label.split()[0].upper()); chip.setObjectName("pendChip")
+        chip.setStyleSheet(f"QLabel#pendChip {{ background:{bg}; color:{fg};"
+                           f" border-radius:9px; padding:1px 7px; font-size:{t.font_size_small}pt; }}")
+        return chip
+
+    def _pending_item(self, it: dict) -> QWidget:
+        """Item vivo de 1 linha: checkbox REAL (resolve) + chip de rótulo + texto clicável
+        (navega) + ✕ dispensar. Áreas de clique disjuntas (checkbox marca, texto navega)."""
+        t = theme.active()
+        folder = (it.get("folder") or "").strip()
+        key = it.get("key") or ""
         note_path = (it.get("note_path") or "").strip()
-        row = _ClickRow(lambda p=note_path: self._open_recent(p))
-        rl = QHBoxLayout(row)
-        rl.setContentsMargins(8, 5, 8, 5)
-        rl.setSpacing(9)
-        box = QLabel()   # marcador "a fazer": quadrado VAZIO (um ☑ leria como concluído)
-        box.setFixedSize(13, 13)
-        box.setStyleSheet(f"border:1.5px solid {t.warn}; border-radius:3px; background:transparent;")
-        rl.addWidget(box, 0, Qt.AlignTop)
-        mid = QVBoxLayout()
-        mid.setSpacing(1)
-        txt = QLabel(_elide(it.get("text") or it.get("raw") or "", 44))
+        row = QWidget()
+        rl = QHBoxLayout(row); rl.setContentsMargins(8, 2, 6, 2); rl.setSpacing(7)
+        cb = widgets.AnimatedCheckBox()
+        cb.setFixedWidth(cb._BOX + 6)   # indicador só: clique disjunto do texto
+        rl.addWidget(cb, 0, Qt.AlignVCenter)
+        chip = self._label_chip(it.get("label") or "")
+        if chip is not None:
+            rl.addWidget(chip, 0, Qt.AlignVCenter)
+        txt = QLabel(_elide(it.get("text") or it.get("raw") or "", 40))
         txt.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        ctx_bits = [b for b in (it.get("title"), it.get("client")) if b]
-        sub = QLabel(_elide("  ·  ".join(ctx_bits), 44))
-        sub.setStyleSheet(f"color:{t.faint}; font-size:{t.font_size_small}pt;")
-        sub.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        mid.addWidget(txt)
-        if ctx_bits:
-            mid.addWidget(sub)
-        rl.addLayout(mid, 1)
+        txt.setCursor(Qt.PointingHandCursor)
+        txt.mousePressEvent = lambda _e, p=note_path: self._open_recent(p)
+        widgets.add_tooltip(txt, it.get("raw") or it.get("text") or "")
+        rl.addWidget(txt, 1)
+        dismiss = widgets.icon_button("dismiss", "Dispensar (falso-positivo)",
+                                      size=13, color=t.faint)
+        rl.addWidget(dismiss, 0, Qt.AlignVCenter)
+
+        def _resolve(on: bool) -> None:
+            from .. import notes
+            if folder and key:
+                notes.set_action_done(folder, key, on)
+            self._style_resolved(txt, on)
+            self._bump_pending_badge(-1 if on else 1)
+
+        def _dismiss() -> None:
+            from .. import notes
+            if folder and key:
+                notes.set_action_state(folder, key, "dismissed")
+            self._style_resolved(txt, True)
+            cb.setEnabled(False); dismiss.setEnabled(False)
+            self._bump_pending_badge(-1)
+
+        cb.toggled.connect(_resolve)
+        dismiss.clicked.connect(_dismiss)
         return row
+
+    def _style_resolved(self, txt_label, on: bool) -> None:
+        t = theme.active()
+        txt_label.setStyleSheet(f"color:{t.muted}; text-decoration:line-through;" if on else "")
+
+    def _bump_pending_badge(self, delta: int) -> None:
+        """Ajusta o badge de ativas sem re-render da home inteira (evita flicker, #80)."""
+        n = max(0, getattr(self, "_pending_active_n", 0) + delta)
+        self._pending_active_n = n
+        self._pending_badge.setText(str(n))
+        self._pending_badge.setVisible(n > 0)
 
     def _open_recent(self, note_path: str) -> None:
         """Clique numa reunião/pendência: abre a nota selecionada (ou só a tela

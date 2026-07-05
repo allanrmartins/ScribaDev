@@ -917,6 +917,7 @@ def open_action_items(meetings: list[dict]) -> list[dict]:
                 "client": (m.get("client") or "").strip(),
                 "note_path": exp,
                 "folder": folder,
+                "started_at": (m.get("started_at") or "").strip(),
             })
     return out
 
