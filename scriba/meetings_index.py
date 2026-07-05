@@ -23,8 +23,16 @@ from . import util
 
 log = logging.getLogger("scriba.meetings_index")
 
-DB_PATH = util.APP_DIR / "index.db"
+# Caminho do índice. Por padrão (None) é RESOLVIDO dinamicamente de `util.APP_DIR` a cada
+# conexão (`_db_path`), então isolar `util.APP_DIR` num teste já redireciona o índice —
+# sem isto, um teste que esquecesse de setar DB_PATH gravaria no index.db REAL do usuário
+# (o path era capturado no import). Setar DB_PATH explicitamente ainda funciona (override).
+DB_PATH = None
 SCHEMA_VERSION = 3  # v3 (#76): pendências (action items) viram snapshot no índice
+
+
+def _db_path() -> Path:
+    return DB_PATH if DB_PATH is not None else util.APP_DIR / "index.db"
 
 # Separa o resumo da transcrição completa no notas.md. AMBOS entram no FTS (v2/#11):
 # o resumo na coluna `body`, a transcrição na coluna `transcript` — assim a busca do
@@ -88,7 +96,7 @@ _DDL = (
 
 def _connect() -> sqlite3.Connection:
     util.ensure_app_dirs()
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(str(_db_path()))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")  # 2 workers finalizando juntos: espera o lock
