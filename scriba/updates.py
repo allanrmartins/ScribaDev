@@ -165,6 +165,26 @@ def _git(root: Path, *args: str, timeout: float = 120):
                           text=True, timeout=timeout, creationflags=_NO_WINDOW)
 
 
+def _pip_interpreter(executable: str, exists=Path.exists) -> str:
+    """(puro/testável) Interpretador que deve rodar o `pip install` a partir de
+    `executable`. NUNCA devolve o pythonw.exe.
+
+    Por quê: ao (re)instalar, o setuptools/distlib regera o launcher dos gui-scripts
+    (scribadev-tray.exe) derivando o interpretador do exe atual com um replace ingênuo
+    'python' -> 'pythonw'. A partir de 'pythonw.exe' isso vira 'pythonww.exe' (com dois
+    'w'), que não existe — e o app deixa de abrir pelo atalho/bandeja com
+    "Unable to create process using ...\\pythonww.exe". Como a bandeja roda sob o
+    pythonw.exe (sem console), sys.executable É o pythonw.exe e cairíamos exatamente
+    nesse caso. Rodar o pip pelo python.exe irmão gera o launcher correto (-> pythonw.exe).
+    Se o irmão não existir, mantém o original (não inventa caminho)."""
+    py = Path(executable)
+    if py.name.lower() == "pythonw.exe":
+        sibling = py.with_name("python.exe")
+        if exists(sibling):
+            return str(sibling)
+    return executable
+
+
 def apply_git_update() -> tuple[bool, str]:
     """Atualiza uma instalação via git: `git pull --ff-only` + reinstala (pip -e) se o
     pyproject mudou. Retorna (ok, mensagem). Sem git → (False, instrução p/ baixar)."""
@@ -181,7 +201,9 @@ def apply_git_update() -> tuple[bool, str]:
             return (True, "Você já está na versão mais recente.")
         changed = _git(root, "diff", "--name-only", before, after).stdout
         if "pyproject.toml" in changed:  # deps podem ter mudado → reinstala o editable
-            pip = subprocess.run([sys.executable, "-m", "pip", "install", "-e", str(root)],
+            # pelo python.exe (nunca pythonw.exe) p/ não gerar o launcher quebrado
+            # scribadev-tray.exe -> pythonww.exe. Ver _pip_interpreter.
+            pip = subprocess.run([_pip_interpreter(sys.executable), "-m", "pip", "install", "-e", str(root)],
                                  capture_output=True, text=True, timeout=600, creationflags=_NO_WINDOW)
             if pip.returncode != 0:
                 return (False, "Código atualizado, mas a reinstalação de dependências falhou:\n"

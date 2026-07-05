@@ -79,6 +79,29 @@ class ManifestTests(unittest.TestCase):
         self.assertIsNone(up.update_available())  # igual → nada novo
 
 
+class PipInterpreterTests(unittest.TestCase):
+    """Regressão do launcher 'pythonww.exe': o auto-update JAMAIS pode rodar o pip pelo
+    pythonw.exe. Sob a bandeja sys.executable é o pythonw.exe e o distlib gera o
+    scribadev-tray.exe com replace 'python'->'pythonw', virando pythonww.exe (inexistente)
+    -> "Unable to create process using ...\\pythonww.exe" ao abrir pelo atalho."""
+
+    def test_pythonw_cai_no_python_irmao(self):
+        got = up._pip_interpreter(r"C:\ScribaDev\venv\Scripts\pythonw.exe", exists=lambda p: True)
+        self.assertEqual(Path(got).name, "python.exe")
+
+    def test_pythonw_sem_irmao_mantem_original(self):  # não inventa caminho inexistente
+        exe = r"C:\ScribaDev\venv\Scripts\pythonw.exe"
+        self.assertEqual(up._pip_interpreter(exe, exists=lambda p: False), exe)
+
+    def test_python_normal_inalterado(self):
+        exe = r"C:\ScribaDev\venv\Scripts\python.exe"
+        self.assertEqual(up._pip_interpreter(exe, exists=lambda p: True), exe)
+
+    def test_case_insensitive(self):  # Windows: PythonW.EXE também é o caso ruim
+        got = up._pip_interpreter(r"C:\v\Scripts\PythonW.EXE", exists=lambda p: True)
+        self.assertEqual(Path(got).name, "python.exe")
+
+
 class DescribeTests(unittest.TestCase):
     def test_na_tag(self):
         self.assertEqual(up._describe_to_str("v0.3.0", "v0.3.0"), "v0.3.0")
