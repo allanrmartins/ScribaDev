@@ -815,38 +815,72 @@ def parse_action_items(md: str) -> list[dict]:
     return items
 
 
+# Estados nomeados de uma pendência (#77). "open" NÃO é gravado no sidecar — ausência
+# da chave já significa aberta, mantendo o `.actions.json` enxuto. Os demais (recuperáveis)
+# ficam persistidos. O snapshot no índice (#76) espelha estes mesmos estados.
+ACTION_STATES = ("open", "done", "dismissed", "archived")
+
+
+def _normalize_action_state(value) -> str:
+    """Normaliza um valor do `.actions.json` para um estado nomeado (retrocompat de leitura).
+    Formato legado bool: `true` -> 'done', `false`/ausente -> 'open'. String conhecida passa
+    direto; qualquer outra coisa (desconhecida/corrompida) -> 'open' (defensivo)."""
+    if value is True:
+        return "done"
+    if isinstance(value, str) and value in ACTION_STATES:
+        return value
+    return "open"
+
+
 def load_action_state(folder: Path) -> dict:
-    """Estado dos itens resolvidos: {item_key: True}. Sidecar `.actions.json` na pasta da
-    gravação — NÃO reescreve o .md. {} se ausente/ilegível."""
+    """Estado nomeado dos itens: `{item_key: 'done'|'dismissed'|'archived'}`. Sidecar
+    `.actions.json` na pasta da gravação — NÃO reescreve o .md. Itens `open` (ausentes ou
+    normalizados p/ aberto) NÃO entram no dict. Lê o formato legado `{key: true}` como
+    `done` (retrocompat, sem migração destrutiva). {} se ausente/ilegível."""
     try:
         data = json.loads((Path(folder) / ".actions.json").read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for k, v in data.items():
+        st = _normalize_action_state(v)
+        if st != "open":
+            out[k] = st
+    return out
 
 
-def set_action_done(folder: Path, key: str, done: bool) -> None:
-    """Marca/desmarca um item como resolvido no `.actions.json` da pasta (escrita atômica)."""
+def set_action_state(folder: Path, key: str, state: str) -> None:
+    """Grava o estado nomeado de UM item no `.actions.json` (escrita atômica). `state ==
+    'open'` REMOVE a chave (ausência = aberta), mantendo o arquivo enxuto. Ponto único de
+    escrita do estado: também sincroniza o snapshot do índice (#76) p/ capa/hub refletirem
+    na hora, sem reindex. O `.actions.json` é a FONTE DA VERDADE; o índice é derivado e
+    resiliente (set_action_state do índice nunca levanta) — o próximo reindex reconcilia."""
     folder = Path(folder)
-    state = load_action_state(folder)
-    if done:
-        state[key] = True
+    if state not in ACTION_STATES:
+        state = "open"
+    data = load_action_state(folder)
+    if state == "open":
+        data.pop(key, None)
     else:
-        state.pop(key, None)
+        data[key] = state
     try:
         folder.mkdir(parents=True, exist_ok=True)
-        util.atomic_write_text(folder / ".actions.json", json.dumps(state, ensure_ascii=False))
+        util.atomic_write_text(folder / ".actions.json", json.dumps(data, ensure_ascii=False))
     except OSError as e:
         import logging
 
         logging.getLogger("scriba.notes").warning("falha ao salvar .actions.json em %s: %s", folder, e)
-    # Reflete o clique no snapshot do índice (#76) p/ capa/hub atualizarem sem reindex.
-    # O `.actions.json` acima é a fonte da verdade; o índice é derivado e resiliente
-    # (set_action_state nunca levanta), então isto é best-effort e roda mesmo se o
-    # .actions.json falhou — o próximo reindex reconcilia os dois de qualquer forma.
     from . import meetings_index  # lazy: evita ciclo (meetings_index importa notes)
 
-    meetings_index.set_action_state(folder, key, "done" if done else "open")
+    meetings_index.set_action_state(folder, key, state)
+
+
+def set_action_done(folder: Path, key: str, done: bool) -> None:
+    """Marca/desmarca um item como resolvido. Wrapper fino sobre `set_action_state`
+    (`done` -> 'done', desmarcar -> 'open') p/ não quebrar os call sites existentes."""
+    set_action_state(folder, key, "done" if done else "open")
 
 
 def open_action_items(meetings: list[dict]) -> list[dict]:
@@ -854,11 +888,12 @@ def open_action_items(meetings: list[dict]) -> list[dict]:
 
     `meetings` é uma lista de reuniões como `meetings_index.search` devolve (cada
     dict com pelo menos `export_path` e `folder`). Para cada uma, lê o .md
-    exportado, extrai os itens (`parse_action_items`) e descarta os já resolvidos
-    no `.actions.json` da pasta (`load_action_state`). Cada item volta enriquecido
-    com o contexto da reunião (`title`, `client`, `note_path`) para a UI abrir a
-    nota certa. Preserva a ordem de entrada (as reuniões já vêm da mais recente
-    para a mais antiga)."""
+    exportado, extrai os itens (`parse_action_items`) e mantém só os `open` — itens
+    `done`/`dismissed`/`archived` no `.actions.json` saem do contador de ativas
+    (`load_action_state`). Cada item volta enriquecido com o contexto da reunião
+    (`title`, `client`, `note_path`, `folder`) para a UI abrir a nota certa e poder
+    marcar/dispensar (`set_action_state` precisa de `folder`+`key`). Preserva a ordem
+    de entrada (as reuniões já vêm da mais recente para a mais antiga)."""
     out: list[dict] = []
     for m in meetings:
         exp = (m.get("export_path") or "").strip()
@@ -874,15 +909,59 @@ def open_action_items(meetings: list[dict]) -> list[dict]:
             continue
         state = load_action_state(Path(folder))
         for it in items:
-            if state.get(it["key"]):
+            if state.get(it["key"], "open") != "open":
                 continue
             out.append({
                 **it,
                 "title": (m.get("title") or m.get("meeting_title") or "").strip(),
                 "client": (m.get("client") or "").strip(),
                 "note_path": exp,
+                "folder": folder,
             })
     return out
+
+
+def archive_old_action_items(meetings: list[dict], older_than_days: int = 30,
+                             reference_date=None) -> int:
+    """Arquiva em massa (`state='archived'`) todos os itens AINDA ABERTOS de reuniões com
+    mais de `older_than_days` dias — zera o backlog antigo de uma vez sem tocar nos `.md`.
+    A idade conta pela DATA DA REUNIÃO (`started_at`), não pela edição do item. Reunião
+    sem `started_at` válido conta como ANTIGA (degradação segura: vai para o backlog).
+    NÃO mexe em itens já `done`/`dismissed`/`archived` nem em reuniões recentes. Função
+    pura/testável (a UI só orquestra + confirma). Devolve quantos itens foram arquivados.
+
+    `meetings` = lista como `meetings_index.search` devolve (precisa de `export_path`,
+    `folder`, `started_at`). `older_than_days <= 0` = sem recorte: não arquiva nada."""
+    from datetime import datetime, timedelta
+
+    if older_than_days <= 0:
+        return 0
+    now = reference_date or datetime.now()
+    cutoff = now - timedelta(days=older_than_days)
+    n = 0
+    for m in meetings:
+        exp = (m.get("export_path") or "").strip()
+        folder = (m.get("folder") or "").strip()
+        if not exp or not folder:
+            continue
+        started = (m.get("started_at") or "").strip()
+        # reunião recente (dentro do recorte) é preservada; sem data válida = antiga
+        if started:
+            try:
+                if datetime.fromisoformat(started) >= cutoff:
+                    continue
+            except ValueError:
+                pass  # data corrompida → trata como antiga
+        try:
+            md = Path(exp).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        state = load_action_state(Path(folder))
+        for it in parse_action_items(md):
+            if state.get(it["key"], "open") == "open":
+                set_action_state(Path(folder), it["key"], "archived")
+                n += 1
+    return n
 
 
 def set_note_title(md_path: Path, new_title: str) -> None:

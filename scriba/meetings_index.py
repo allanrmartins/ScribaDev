@@ -164,11 +164,12 @@ def _extract(folder: Path) -> dict | None:
     parts = [{"name": n, "role": (r or "").strip(), "kind": "present"} for n, r in presentes.items()]
     parts += [{"name": n, "role": "", "kind": "mentioned"} for n in mencionados]
     # Pendências (#76): itens da nota + estado do sidecar. `state` derivado do
-    # `.actions.json` (fonte da verdade): item marcado → 'done', senão 'open'.
+    # `.actions.json` (fonte da verdade), já normalizado p/ estado nomeado (#77):
+    # open/done/dismissed/archived; ausente = 'open'.
     action_state = notes.load_action_state(folder) if md else {}
     action_items = [
         {"key": it["key"], "label": it["label"], "text": it["text"],
-         "state": "done" if action_state.get(it["key"]) else "open"}
+         "state": action_state.get(it["key"], "open")}
         for it in (notes.parse_action_items(md) if md else [])
     ]
     dur = meta.get("duration_seconds")

@@ -364,12 +364,45 @@ class ActionStateTests(unittest.TestCase):
 
     def test_marca_e_desmarca(self):
         notes.set_action_done(self.tmp, "abc", True)
-        self.assertEqual(notes.load_action_state(self.tmp), {"abc": True})
+        self.assertEqual(notes.load_action_state(self.tmp), {"abc": "done"})  # estado nomeado (#77)
         notes.set_action_done(self.tmp, "abc", False)
         self.assertEqual(notes.load_action_state(self.tmp), {})
 
     def test_load_ausente_vira_vazio(self):
         self.assertEqual(notes.load_action_state(self.tmp / "nao_existe"), {})
+
+    # -- estados nomeados + retrocompat (#77) --------------------------------
+    def test_retrocompat_le_bool_legado_como_done(self):
+        # arquivo antigo {key: true} deve ser lido como 'done' (sem migração destrutiva)
+        (self.tmp / ".actions.json").write_text(
+            json.dumps({"k1": True, "k2": False}), encoding="utf-8")
+        self.assertEqual(notes.load_action_state(self.tmp), {"k1": "done"})  # false = aberto (omitido)
+
+    def test_le_estados_nomeados(self):
+        (self.tmp / ".actions.json").write_text(
+            json.dumps({"a": "done", "b": "dismissed", "c": "archived", "d": "open", "e": "bogus"}),
+            encoding="utf-8")
+        # 'open' e valor desconhecido saem do dict (ausência = aberto)
+        self.assertEqual(notes.load_action_state(self.tmp),
+                         {"a": "done", "b": "dismissed", "c": "archived"})
+
+    def test_set_action_state_open_remove_a_chave(self):
+        notes.set_action_state(self.tmp, "k", "dismissed")
+        self.assertEqual(notes.load_action_state(self.tmp), {"k": "dismissed"})
+        notes.set_action_state(self.tmp, "k", "open")  # volta p/ aberto = remove
+        self.assertEqual(notes.load_action_state(self.tmp), {})
+        # e o arquivo não acumula "open"
+        raw = json.loads((self.tmp / ".actions.json").read_text(encoding="utf-8"))
+        self.assertNotIn("k", raw)
+
+    def test_set_action_state_dismissed_e_archived(self):
+        notes.set_action_state(self.tmp, "k1", "dismissed")
+        notes.set_action_state(self.tmp, "k2", "archived")
+        self.assertEqual(notes.load_action_state(self.tmp), {"k1": "dismissed", "k2": "archived"})
+
+    def test_set_action_state_valor_invalido_vira_open(self):
+        notes.set_action_state(self.tmp, "k", "xpto")  # estado inválido → open (remove)
+        self.assertEqual(notes.load_action_state(self.tmp), {})
 
 
 class OpenActionItemsTests(unittest.TestCase):
@@ -408,7 +441,18 @@ class OpenActionItemsTests(unittest.TestCase):
         self.assertEqual(items[0]["title"], "reuniao_a")
         self.assertEqual(items[0]["client"], "ACME")
         self.assertEqual(items[0]["note_path"], m["export_path"])
+        self.assertEqual(items[0]["folder"], m["folder"])  # #80: folder p/ marcar/dispensar
         self.assertTrue(items[0]["text"].startswith("Aplicar"))
+
+    def test_dismissed_e_archived_saem_do_contador(self):
+        m = self._meeting("reuniao_x")
+        keys = [i["key"] for i in notes.open_action_items([m])]
+        notes.set_action_state(Path(m["folder"]), keys[0], "dismissed")
+        # só o segundo (open) sobra; dismissed não conta como ativa
+        rest = notes.open_action_items([m])
+        self.assertEqual([i["key"] for i in rest], [keys[1]])
+        notes.set_action_state(Path(m["folder"]), keys[1], "archived")
+        self.assertEqual(notes.open_action_items([m]), [])  # archived também sai
 
     def test_descarta_resolvidos(self):
         m = self._meeting("reuniao_b")
@@ -434,6 +478,82 @@ class OpenActionItemsTests(unittest.TestCase):
     def test_reuniao_sem_pendencias(self):
         m = self._meeting("vazia", md="# X\n\n## Resumo\ntexto\n")
         self.assertEqual(notes.open_action_items([m]), [])
+
+
+class ArchiveOldActionItemsTests(unittest.TestCase):
+    """notes.archive_old_action_items: arquiva em massa o backlog antigo (#77)."""
+
+    _MD = (
+        "# Reunião\n\n## Pendências e Ações\n"
+        "- **[BLOQUEANTE]** Aplicar nota 123 no QAS\n"
+        "- **[ABERTO]** Enviar estimativa\n"
+    )
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name)
+        # set_action_state reflete no índice: isolar APP_DIR/DB_PATH p/ não tocar o real
+        self._app0, self._logs0, self._db0 = util.APP_DIR, util.LOGS_DIR, mi.DB_PATH
+        util.APP_DIR = self.tmp / "app"
+        util.LOGS_DIR = util.APP_DIR / "logs"
+        mi.DB_PATH = util.APP_DIR / "index.db"
+        from datetime import datetime
+        self.now = datetime(2026, 7, 5, 12, 0, 0)
+
+    def tearDown(self):
+        util.APP_DIR, util.LOGS_DIR, mi.DB_PATH = self._app0, self._logs0, self._db0
+        self._td.cleanup()
+
+    def _meeting(self, name, *, days_ago, md=None):
+        from datetime import timedelta
+        folder = self.tmp / name
+        folder.mkdir()
+        note = folder / f"{name}.md"
+        note.write_text(self._MD if md is None else md, encoding="utf-8")
+        started = (self.now - timedelta(days=days_ago)).isoformat()
+        return {"export_path": str(note), "folder": str(folder), "started_at": started}
+
+    def test_arquiva_so_reunioes_antigas(self):
+        recente = self._meeting("recente", days_ago=5)
+        antiga = self._meeting("antiga", days_ago=90)
+        n = notes.archive_old_action_items([recente, antiga], older_than_days=30,
+                                           reference_date=self.now)
+        self.assertEqual(n, 2)  # os 2 itens abertos da reunião antiga
+        # a recente fica intacta (nada arquivado)
+        self.assertEqual(notes.load_action_state(Path(recente["folder"])), {})
+        # a antiga: ambos os itens agora archived
+        st = notes.load_action_state(Path(antiga["folder"]))
+        self.assertEqual(set(st.values()), {"archived"})
+        self.assertEqual(len(st), 2)
+
+    def test_nao_toca_itens_ja_resolvidos_ou_dispensados(self):
+        antiga = self._meeting("antiga", days_ago=90)
+        keys = [i["key"] for i in notes.open_action_items([antiga])]
+        notes.set_action_state(Path(antiga["folder"]), keys[0], "done")
+        n = notes.archive_old_action_items([antiga], older_than_days=30, reference_date=self.now)
+        self.assertEqual(n, 1)  # só o item que estava open
+        st = notes.load_action_state(Path(antiga["folder"]))
+        self.assertEqual(st[keys[0]], "done")       # done preservado
+        self.assertEqual(st[keys[1]], "archived")   # o open virou archived
+
+    def test_reuniao_sem_data_conta_como_antiga(self):
+        m = self._meeting("sem_data", days_ago=0)
+        m["started_at"] = ""  # dado ausente → tratado como antigo (degradação segura)
+        n = notes.archive_old_action_items([m], older_than_days=30, reference_date=self.now)
+        self.assertEqual(n, 2)
+
+    def test_older_than_zero_nao_arquiva(self):
+        antiga = self._meeting("antiga", days_ago=90)
+        self.assertEqual(
+            notes.archive_old_action_items([antiga], older_than_days=0, reference_date=self.now), 0)
+        self.assertEqual(notes.load_action_state(Path(antiga["folder"])), {})
+
+    def test_nao_modifica_o_md(self):
+        antiga = self._meeting("antiga", days_ago=90)
+        before = (Path(antiga["folder"]) / "antiga.md").read_text(encoding="utf-8")
+        notes.archive_old_action_items([antiga], older_than_days=30, reference_date=self.now)
+        after = (Path(antiga["folder"]) / "antiga.md").read_text(encoding="utf-8")
+        self.assertEqual(before, after)  # estado vive só no sidecar; .md intacto
 
 
 if __name__ == "__main__":
