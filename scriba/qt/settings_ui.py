@@ -526,14 +526,21 @@ class SettingsWindow(QWidget):
                        "as cores daquele tema.")
         intro.setProperty("role", "muted"); intro.setWordWrap(True)
         f.addRow(intro)
+        # largura contida: os blocos não devem esticar p/ preencher a janela (a capa real é
+        # estreita) — teto de ~760px alinhado à esquerda, mesmo com a janela maximizada.
+        row = QWidget()
+        rl = QHBoxLayout(row); rl.setContentsMargins(0, 0, 0, 0)
         self._theme_host = QWidget()
+        self._theme_host.setMaximumWidth(760)
         self._theme_grid = QGridLayout(self._theme_host)
         self._theme_grid.setContentsMargins(0, 8, 0, 0)
         self._theme_grid.setHorizontalSpacing(14)
         self._theme_grid.setVerticalSpacing(14)
         self._theme_grid.setColumnStretch(0, 1)
         self._theme_grid.setColumnStretch(1, 1)
-        f.addRow(self._theme_host)
+        rl.addWidget(self._theme_host)
+        rl.addStretch(1)   # empurra os blocos p/ a esquerda; o excesso fica vazio à direita
+        f.addRow(row)
         self._populate_theme_cards()
 
     def _populate_theme_cards(self) -> None:
