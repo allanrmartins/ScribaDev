@@ -137,6 +137,43 @@ class MainWindowTests(unittest.TestCase):
         win._open_recent("")
         self.assertIsNone(win.app.notes_opened)
 
+    def test_restyle_theme_nao_retem_acento_do_tema_anterior(self):
+        """Regressão do bug #70 (bordas laranjas): trocar de tema a quente deve
+        re-estilizar a capa; o acento do tema anterior NÃO pode sobrar na borda do card
+        de Notas (era fixado inline na construção e nunca regenerado)."""
+        from scriba.qt import theme
+
+        orig = theme._active
+        self.addCleanup(lambda: setattr(theme, "_active", orig))
+        win = self._win()
+        win._render_home(self._DADOS)   # popula o cache p/ o re-render
+
+        theme._active = theme.by_slug("claude")
+        win.restyle_theme()
+        self.assertIn(theme.by_slug("claude").accent.lower(), win.styleSheet().lower())
+
+        theme._active = theme.by_slug("vscode")   # sai do Claude
+        win.restyle_theme()
+        ss = win.styleSheet().lower()
+        self.assertIn(theme.by_slug("vscode").accent.lower(), ss)      # acento novo entrou
+        self.assertNotIn(theme.by_slug("claude").accent.lower(), ss)   # o terracota não sobrou
+
+    def test_restyle_theme_re_renderiza_secoes_em_cache(self):
+        """restyle_theme re-renderiza recentes/pendências/serviços a partir do cache
+        (sem re-coletar do disco), preservando a contagem."""
+        from scriba.qt import theme
+
+        orig = theme._active
+        self.addCleanup(lambda: setattr(theme, "_active", orig))
+        win = self._win()
+        win._render_home(self._DADOS)
+        win._render_status([("ok", "Detecção", "ativa"), ("warn", "Áudio", "x")])
+        theme._active = theme.by_slug("light")
+        win.restyle_theme()
+        self.assertEqual(win._recent_lay.count(), 2)
+        self.assertEqual(win._pending_lay.count(), 1)
+        self.assertEqual(win._rows_lay.count(), 2)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

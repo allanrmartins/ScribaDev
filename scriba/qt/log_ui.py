@@ -116,6 +116,17 @@ class LogWindow(QWidget):
         self._entries = diagnostics.parse_entries(text)
         self._render()
 
+    def restyle_theme(self) -> None:
+        """Troca a quente (#70): re-aplica os estilos com cor de tema (status + view) e
+        re-renderiza o HTML (as cores das linhas são embutidas por _render, a partir do
+        cache self._entries — não relê o arquivo)."""
+        t = theme.active()
+        self._status.setStyleSheet(f"font-size:{t.font_size_small}pt;")
+        self._view.setStyleSheet(
+            f"QTextEdit {{ background:{t.code_bg}; color:{t.text};"
+            f" font-family:'{t.font_mono}','Consolas',monospace; border:none; }}")
+        self._render()
+
     def _render(self) -> None:
         date_br = self._date.br()
         time_from = self._time.hhmm()

@@ -104,6 +104,8 @@ class MainWindow(QWidget):
         self._update_ver = None
         self._titlebar_done = False
         self._call_state_kind = "idle"   # idle | rec | call (p/ estilizar o card)
+        self._home_data = None           # último payload de _render_home (re-tema #70)
+        self._status_items = None        # últimos itens de _render_status (re-tema #70)
 
         self.setWindowTitle(f"ScribaDev v{__version__}")
         self.setMinimumSize(520, 560)
@@ -312,6 +314,20 @@ class MainWindow(QWidget):
         self._card.setStyleSheet(f"QFrame#callCard {{ background:{t.surface};"
                                  f" border-radius:{t.radius + 2}px; {edge} }}")
 
+    def restyle_theme(self) -> None:
+        """Re-aplica os estilos inline dependentes de tema após uma troca a quente (o
+        QSS global já mudou): cards da capa (fundo + borda de acento), borda do card de
+        call por estado e re-render das seções dinâmicas (recentes/pendências/serviços)
+        com os dados em cache — cada item fixa a cor do tema na criação, então sem o
+        re-render sobra a cor do tema anterior (borda laranja / cards escuros no claro).
+        Chamado por theme._restyle_top_levels via o contrato `restyle_theme`. (#70)"""
+        self._apply_theme()
+        self._style_call_card()
+        if self._home_data is not None:
+            self._render_home(self._home_data)
+        if self._status_items is not None:
+            self._render_status(self._status_items)
+
     # ---- gravação --------------------------------------------------------------
 
     def _toggle_record(self) -> None:
@@ -455,6 +471,7 @@ class MainWindow(QWidget):
         self.app.ui(lambda: self._render_home(data))
 
     def _render_home(self, data: dict) -> None:
+        self._home_data = data   # cache p/ re-render na troca de tema (restyle_theme)
         t = theme.active()
         # -- estatísticas
         self._stat_meetings._val.setText(f"<b>{data['total']}</b> reuniões")
@@ -603,6 +620,7 @@ class MainWindow(QWidget):
         threading.Thread(target=self._collect_status, daemon=True, name="status").start()
 
     def _render_status(self, items) -> None:
+        self._status_items = items   # cache p/ re-render na troca de tema (restyle_theme)
         _clear_layout(self._rows_lay)
         t = theme.active()
         for level, name, detail in items:

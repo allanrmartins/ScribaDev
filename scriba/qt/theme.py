@@ -17,9 +17,12 @@ Decisões (épico #44, 2026-07-02):
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, fields
 
 from .. import util
+
+log = logging.getLogger("scriba.qt.theme")
 
 
 @dataclass(frozen=True)
@@ -139,15 +142,19 @@ _CLAUDE = Theme(
     radius=8, radius_sm=5,
 )
 
+# Claro (refinado, #70): camadas separadas por LUMINÂNCIA, não por 2% de cinza. A
+# versão antiga tinha bg #fff e surface #f3f3f3 (quase iguais) — os cards sumiam no
+# fundo. Aqui o fundo é cinza-claro e os cards/campos são brancos, que "flutuam"
+# (padrão Win11/GitHub/VS Code Light). border mais definido separa sem peso.
 _LIGHT = Theme(
     name="light", label="Claro", dark=False,
-    bg="#ffffff", bg2="#eef1f6", surface="#f3f3f3", field="#ffffff", overlay="#ffffff",
-    border="#d4d4d4", border_strong="#b0b0b0",
-    text="#1f1f1f", muted="#616161", faint="#8c8c8c",
+    bg="#f4f6f8", bg2="#eef1f6", surface="#ffffff", field="#ffffff", overlay="#ffffff",
+    border="#dde1e6", border_strong="#b6bfca",
+    text="#1a1d21", muted="#586170", faint="#8a929e",
     accent="#0067c0", accent_hover="#0078d4", accent_press="#005ba1", on_accent="#ffffff",
-    ok="#1a7f37", warn="#9a6700", rec="#d13438", rec_dim="#f1a0a2", info="#0067c0",
-    highlight="#ffd23f", highlight_current="#ff8c1a", on_highlight="#1f1f1f",
-    code_bg="#f3f3f3", code_err="#d13438",
+    ok="#1a7f37", warn="#8a5d00", rec="#c9302f", rec_dim="#e5a3a2", info="#0067c0",
+    highlight="#ffd23f", highlight_current="#f08000", on_highlight="#1f1f1f",
+    code_bg="#eef1f5", code_err="#c9302f",
     selection_bg="#cce4f7", selection_fg="#1f1f1f",
     font_family=_UI, font_mono=_MONO, font_size=9, font_size_small=8,
     radius=6, radius_sm=4,
@@ -192,6 +199,11 @@ def os_default_theme() -> str:
 def themes() -> list[Theme]:
     """Todos os temas registrados, na ordem de exibição."""
     return list(_THEMES.values())
+
+
+def by_slug(name: str) -> Theme:
+    """Tema pelo slug; cai no padrão do SO se o slug for desconhecido/None."""
+    return _THEMES.get(name, _THEMES[os_default_theme()])
 
 
 def active() -> Theme:
@@ -599,11 +611,29 @@ def qss(theme: Theme | None = None) -> str:
     """
 
 
+def _restyle_top_levels(app) -> None:
+    """Depois de trocar o QSS global, EMPURRA o novo tema para as janelas abertas: cada
+    top-level widget que exponha `restyle_theme()` re-aplica seus estilos INLINE (que o
+    QSS global não cobre — bordas de acento, fundos de card etc. capturados na
+    construção). Sem isto, trocar de tema a quente deixa resíduos do tema anterior
+    (ex.: borda de card laranja ao sair do Claude; cards escuros no tema claro) — #70.
+    Contrato leve e desacoplado: nada de sinais persistentes; só toca janelas VIVAS."""
+    for w in app.topLevelWidgets():
+        fn = getattr(w, "restyle_theme", None)
+        if callable(fn):
+            try:
+                fn()
+            except Exception:
+                log.exception("restyle_theme falhou em %s", type(w).__name__)
+
+
 def apply(app, theme: Theme | None = None) -> None:
-    """Aplica fonte-base (Inter…) + QSS do tema ao QApplication. Idempotente."""
+    """Aplica fonte-base (Inter…) + QSS do tema ao QApplication e re-estiliza as janelas
+    abertas (restyle_theme). Idempotente."""
     t = theme or active()
     app.setFont(qfont(t))
     app.setStyleSheet(qss(t))
+    _restyle_top_levels(app)
 
 
 def token_names() -> list[str]:

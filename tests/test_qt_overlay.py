@@ -68,6 +68,11 @@ class PillSmokeTests(unittest.TestCase):
             setup()
             pill.repaint()  # exercita cada ramo do paintEvent
 
+    def test_restyle_theme_repinta_sem_erro(self):
+        pill = self._pill()
+        pill.set_mode("recording")
+        pill.restyle_theme()   # troca a quente (#70): força repaint (paintEvent lê active())
+
     def test_callbacks_por_regiao(self):
         pill = self._pill()
         pill.set_mode("recording")

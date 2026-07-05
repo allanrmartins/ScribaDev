@@ -67,16 +67,25 @@ class SettingsTests(unittest.TestCase):
         arch, _ = self._field(win, "audio", "archive_format")
         self.assertEqual(arch.currentData(), "opus")
 
-    def test_aba_aparencia_tem_seletor_de_tema(self):
+    def test_aba_aparencia_tem_grade_de_temas(self):
         from scriba.qt import theme
+        from scriba.qt.settings_ui import SettingsWindow, _ThemeCard
+
+        win = SettingsWindow(self._app())
+        grid = win._theme_grid
+        cards = [grid.itemAt(i).widget() for i in range(grid.count())]
+        self.assertEqual(len(cards), 1 + len(theme.themes()))       # Automático + os 4 temas
+        self.assertTrue(all(isinstance(c, _ThemeCard) for c in cards))
+        self.assertIsNone(cards[0]._value)                          # 1º card = Automático (None)
+        self.assertEqual([c._value for c in cards[1:]], [t.name for t in theme.themes()])
+
+    def test_restyle_reconstroi_a_grade_sem_erro(self):
         from scriba.qt.settings_ui import SettingsWindow
 
         win = SettingsWindow(self._app())
-        combo = win._theme_combo
-        self.assertEqual(combo.count(), 1 + len(theme.themes()))   # Automático + os 4 temas
-        self.assertIsNone(combo.itemData(0))                        # 1º item = Automático (None)
-        slugs = [combo.itemData(i) for i in range(1, combo.count())]
-        self.assertEqual(slugs, [t.name for t in theme.themes()])
+        n = win._theme_grid.count()
+        win.restyle_theme()                                          # troca a quente (#70)
+        self.assertEqual(win._theme_grid.count(), n)                 # reconstruiu, mesma contagem
 
     def test_round_trip_persiste_mudancas(self):
         from scriba import config as config_mod

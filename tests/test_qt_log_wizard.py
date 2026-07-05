@@ -33,6 +33,17 @@ class LogTests(unittest.TestCase):
         win._render()
         self.assertIn("entradas", win._status.text())
 
+    def test_restyle_theme_smoke(self):
+        from scriba.qt import theme
+        from scriba.qt.log_ui import LogWindow
+
+        win = LogWindow(_App())
+        orig = theme._active
+        self.addCleanup(lambda: setattr(theme, "_active", orig))
+        theme._active = theme.by_slug("light")
+        win.restyle_theme()   # troca a quente (#70): re-aplica view/status + re-render
+        self.assertIn(theme.by_slug("light").code_bg.lower(), win._view.styleSheet().lower())
+
     def test_cycle_level(self):
         from scriba.qt.log_ui import LogWindow
 

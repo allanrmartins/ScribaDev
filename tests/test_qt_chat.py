@@ -34,6 +34,22 @@ class ChatTests(unittest.TestCase):
 
         return ChatWindow(_SUMMARY, transcript, "Reunião de teste")
 
+    def test_restyle_theme_reestila_bolhas_sem_quebrar(self):
+        from scriba.qt import theme
+
+        win = self._win()
+        win._append_user("oi")
+        win._append_assistant("**resposta**")
+        win._append_system("aviso")
+        orig = theme._active
+        self.addCleanup(lambda: setattr(theme, "_active", orig))
+        theme._active = theme.by_slug("light")
+        win.restyle_theme()                                   # troca a quente (#70): não estoura
+        user = [b for b in win._bubbles if b.property("bubbleKind") == "user"]
+        self.assertTrue(user)
+        r, g, b = (int(theme.by_slug("light").accent.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+        self.assertIn(f"{r}, {g}, {b}", user[0].styleSheet())          # bolha user pegou o acento novo
+
     def test_intro_e_toggle_com_transcricao(self):
         win = self._win()
         self.assertEqual(self._rows(win), 1)          # só o intro

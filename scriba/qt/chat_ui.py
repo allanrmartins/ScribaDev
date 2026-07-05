@@ -214,33 +214,56 @@ class ChatWindow(QWidget):
         super().resizeEvent(event)
         QTimer.singleShot(0, self._refit_all)   # após o layout atualizar a largura do viewport
 
+    @staticmethod
+    def _bubble_style(kind: str, t) -> str:
+        """QSS de uma bolha por tipo (user/assistant/system). Único ponto de verdade das
+        cores da bolha — usado na criação E na re-estilização da troca a quente (#70)."""
+        if kind == "user":
+            return (f"background:{theme._rgba(t.accent, 0.20)}; border:1px solid {theme._rgba(t.accent, 0.42)};"
+                    f" border-radius:13px; padding:10px 14px; color:{t.text}; font-size:{t.font_size + 2}pt;")
+        if kind == "assistant":
+            return (f"background:{theme._rgba(t.surface, 0.60)}; border:1px solid {theme._rgba(t.border, 0.55)};"
+                    f" border-radius:13px; padding:10px 14px; color:{t.text}; font-size:{t.font_size + 2}pt;")
+        return f"color:{t.muted}; font-size:{t.font_size + 1}pt; font-style:italic; padding:4px;"  # system
+
     def _append_user(self, text: str) -> None:
-        t = theme.active()
         lbl = self._bubble(text, markdown=False)
-        lbl.setStyleSheet(
-            f"background:{theme._rgba(t.accent, 0.20)}; border:1px solid {theme._rgba(t.accent, 0.42)};"
-            f" border-radius:13px; padding:10px 14px; color:{t.text}; font-size:{t.font_size + 2}pt;"
-        )
+        lbl.setProperty("bubbleKind", "user")
+        lbl.setStyleSheet(self._bubble_style("user", theme.active()))
         self._fit_bubble(lbl)
         self._add_row(lbl, "right")
 
     def _append_assistant(self, md: str) -> None:
-        t = theme.active()
         lbl = self._bubble(md, markdown=True)
-        lbl.setStyleSheet(
-            f"background:{theme._rgba(t.surface, 0.60)}; border:1px solid {theme._rgba(t.border, 0.55)};"
-            f" border-radius:13px; padding:10px 14px; color:{t.text}; font-size:{t.font_size + 2}pt;"
-        )
+        lbl.setProperty("bubbleKind", "assistant")
+        lbl.setStyleSheet(self._bubble_style("assistant", theme.active()))
         self._fit_bubble(lbl)
         self._add_row(lbl, "left")
 
     def _append_system(self, text: str) -> None:
-        t = theme.active()
         lbl = self._bubble(text, markdown=False)
+        lbl.setProperty("bubbleKind", "system")
         lbl.setAlignment(Qt.AlignCenter)
-        lbl.setStyleSheet(f"color:{t.muted}; font-size:{t.font_size + 1}pt; font-style:italic; padding:4px;")
+        lbl.setStyleSheet(self._bubble_style("system", theme.active()))
         self._fit_bubble(lbl)
         self._add_row(lbl, "center")
+
+    def restyle_theme(self) -> None:
+        """Troca a quente (#70): re-estiliza as bolhas já criadas (cada uma guarda seu
+        'bubbleKind') e o indicador 'pensando', que fixam a cor do tema na criação. O
+        markdown já renderizado do assistente mantém a cor do texto (herda color)."""
+        t = theme.active()
+        for b in list(self._bubbles):
+            try:
+                b.setStyleSheet(self._bubble_style(b.property("bubbleKind") or "assistant", t))
+            except RuntimeError:
+                self._bubbles.remove(b)   # bolha destruída (após /clear)
+        tl = getattr(self, "_think_lbl", None)
+        if tl is not None:
+            try:
+                tl.setStyleSheet(f"color:{t.accent}; font-style:italic; padding:2px 8px;")
+            except RuntimeError:
+                pass
 
     # -------------------------------------------------------------- chat -------
 
