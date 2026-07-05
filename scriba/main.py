@@ -29,10 +29,33 @@ log = logging.getLogger("scriba")
 _mutex_handle = None  # mantém o handle vivo durante o processo
 
 
-def _single_instance() -> bool:
+_MUTEX_NAME = "Local\\ScribaDevSingleInstance"
+
+
+def _single_instance(retries: int = 0, delay: float = 0.4, name: str = _MUTEX_NAME) -> bool:
+    """True se esta é a única instância (adquiriu o mutex nomeado `name`).
+
+    Se o mutex já existe e `retries` > 0, FECHA o handle e tenta de novo após `delay` s
+    até `retries` vezes. Isso conserta o reinício pós-update intermitente (#74): o
+    relançamento pode chegar enquanto a instância ANTERIOR ainda está no teardown
+    (encerra por `os._exit` em até 3 s) segurando o mutex — sem o retry a nova instância
+    via ERROR_ALREADY_EXISTS e abortava calada, então o app "não reabria sozinho".
+
+    Importante: quando o mutex já existe, CreateMutexW devolve um handle para o mutex
+    EXISTENTE; segurá-lo manteria o objeto vivo e o retry nunca veria a liberação — por
+    isso fechamos o handle antes de reesperar."""
     global _mutex_handle
-    _mutex_handle = ctypes.windll.kernel32.CreateMutexW(None, False, "Local\\ScribaDevSingleInstance")
-    return ctypes.windll.kernel32.GetLastError() != 183  # ERROR_ALREADY_EXISTS
+    k32 = ctypes.windll.kernel32
+    for attempt in range(retries + 1):
+        _mutex_handle = k32.CreateMutexW(None, False, name)
+        if k32.GetLastError() != 183:  # != ERROR_ALREADY_EXISTS → adquirimos
+            return True
+        if _mutex_handle:
+            k32.CloseHandle(_mutex_handle)
+            _mutex_handle = None
+        if attempt < retries:
+            time.sleep(delay)
+    return False
 
 
 # Evento nomeado que a 2ª instância usa para pedir "mostre a janela" à 1ª —
@@ -521,11 +544,23 @@ class ScribaApp:
         pyw = Path(sys.executable)
         if pyw.name.lower() == "python.exe":
             pyw = pyw.with_name("pythonw.exe")  # sem janela de console
-        ps = (f"Wait-Process -Id {os.getpid()} -Timeout 60 -ErrorAction SilentlyContinue; "
-              f"Start-Process '{pyw}' -ArgumentList '-m','scriba.cli','run'")
+        # PS que espera este processo sair (libera o mutex) e sobe a nova instância.
+        # Marca SCRIBA_RELAUNCHED p/ a nova instância dar retry no single-instance (#74),
+        # e LOGA cada passo — antes a falha do Start-Process era 100% silenciosa.
+        ps = ("$ErrorActionPreference='Continue'; "
+              f"Write-Output ('[' + (Get-Date -Format s) + '] relaunch: aguardando pid {os.getpid()} sair'); "
+              f"Wait-Process -Id {os.getpid()} -Timeout 60 -ErrorAction SilentlyContinue; "
+              "$env:SCRIBA_RELAUNCHED='1'; "
+              "Write-Output 'relaunch: subindo nova instancia'; "
+              f"try {{ Start-Process '{pyw}' -ArgumentList '-m','scriba.cli','run' -ErrorAction Stop; "
+              "Write-Output 'relaunch: Start-Process OK' } "
+              "catch { Write-Output ('relaunch: Start-Process FALHOU - ' + $_.Exception.Message) }")
         try:
+            util.ensure_app_dirs()
+            logf = open(util.LOGS_DIR / "relaunch.log", "a", encoding="utf-8")
             subprocess.Popen(
                 ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps],
+                stdout=logf, stderr=subprocess.STDOUT,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
                 | getattr(subprocess, "DETACHED_PROCESS", 0),
             )
@@ -1020,7 +1055,11 @@ def run_app(minimized: bool = False) -> int:
     # do atalho do IDLE; precisa vir antes de qualquer janela
     util.set_explicit_app_id()
     _setup_logging()
-    if not _single_instance():
+    # Reinício pós-update (#74): a instância antiga pode ainda estar no teardown segurando
+    # o mutex; damos alguns retries p/ ela liberar (o 2º-launch normal, do atalho, segue
+    # instantâneo — sem retry). Marcado pela env var setada no PS do relaunch.
+    relaunched = os.environ.get("SCRIBA_RELAUNCHED") == "1"
+    if not _single_instance(retries=10 if relaunched else 0):
         # clique no atalho com o app já vivo: pede à instância ativa que abra a
         # janela principal (antes a 2ª instância morria muda e "nada acontecia")
         if _signal_show_window():
