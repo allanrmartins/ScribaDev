@@ -56,6 +56,61 @@ class ScanMeetingsByStatusTests(unittest.TestCase):
         self.assertEqual(notes.scan_meetings_by_status(self.tmp / "nao-existe", ("done",)), [])
 
 
+class UpdateNoteMetaTests(unittest.TestCase):
+    """Editar título/cliente sincroniza meta.json + notas.md + .md exportado + o ÍNDICE
+    (de onde a capa e a busca por cliente leem). Índice isolado num tmp (não polui o real)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="scriba_upd_"))
+        self._app0, self._logs0, self._db0 = util.APP_DIR, util.LOGS_DIR, mi.DB_PATH
+        util.APP_DIR = self.tmp / "app"
+        util.LOGS_DIR = util.APP_DIR / "logs"
+        mi.DB_PATH = self.tmp / "index.db"
+        self.rec = self.tmp / "rec"
+        self.rec.mkdir(parents=True)
+
+    def tearDown(self):
+        import shutil
+        util.APP_DIR, util.LOGS_DIR, mi.DB_PATH = self._app0, self._logs0, self._db0
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _make(self, client=""):
+        folder = self.rec / "2026" / "07" / "06" / "10-24"
+        folder.mkdir(parents=True)
+        export = self.tmp / "2026-07-06_10-24_reuniao.md"
+        meta_line = f"*2026-07-06 10:24 · 5 min{(' · Cliente: ' + client) if client else ''}*"
+        md = (f"---\ntitulo: Alinhamento\ndata: 2026-07-06T10:24:00\ncliente: {client}\n---\n\n"
+              f"# Alinhamento\n\n{meta_line}\n\n## Resumo\ncorpo da reunião\n")
+        (folder / "notas.md").write_text(md, encoding="utf-8")
+        export.write_text(md, encoding="utf-8")
+        meta = {"status": "done", "started_at": "2026-07-06T10:24:00",
+                "title": "Alinhamento", "client": client, "export_path": str(export)}
+        (folder / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        return folder, export
+
+    def test_cliente_sincroniza_meta_notas_export_e_indice(self):
+        folder, export = self._make(client="")
+        self.assertTrue(notes.update_note_meta(folder, client="abaco"))
+        meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["client"], "abaco")                     # FONTE do índice
+        self.assertIn("Cliente: abaco", (folder / "notas.md").read_text(encoding="utf-8"))
+        self.assertIn("Cliente: abaco", export.read_text(encoding="utf-8"))
+        hits = mi.search(client="abaco")                              # capa/busca refletem
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["client"], "abaco")
+
+    def test_remover_cliente_e_manter_titulo(self):
+        folder, _ = self._make(client="acme")
+        self.assertTrue(notes.update_note_meta(folder, client=""))    # title=None: não mexe
+        meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["client"], "")
+        self.assertEqual(meta["title"], "Alinhamento")               # título intacto
+        self.assertEqual(mi.search(client="acme"), [])               # saiu da busca
+
+    def test_pasta_inexistente_devolve_false(self):
+        self.assertFalse(notes.update_note_meta(self.rec / "nao-existe", client="x"))
+
+
 class SplitHeaderTests(unittest.TestCase):
     def test_caso_feliz(self):
         body, title, client = split_header("TITULO: Migração SAP\nCLIENTE: Acme\n\n## Resumo\nlinha")
