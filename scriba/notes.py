@@ -634,6 +634,43 @@ def set_note_client(md_path: Path, new_client: str) -> None:
     util.atomic_write_text(md_path, "\n".join(out) + "\n")
 
 
+def update_note_meta(folder, *, title: str | None = None, client: str | None = None) -> bool:
+    """Edita título e/ou cliente de uma reunião JÁ processada mantendo TUDO em sincronia:
+    `meta.json` (a FONTE que o índice lê para título/cliente), `notas.md` (fonte da verdade
+    da pasta) e a cópia `.md` exportada; depois reindexa — a capa e a busca por cliente leem
+    do índice, então sem isto a edição só ficava no `.md` exportado e nunca refletia. `title`/
+    `client` = None não mexe naquele campo; `client=""` remove o cliente. False se a pasta/
+    meta sumiu (o chamador cai no fallback de editar só o `.md`)."""
+    folder = Path(folder)
+    meta_path = folder / "meta.json"
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    targets = [folder / "notas.md"]
+    export = meta.get("export_path")
+    if export:
+        targets.append(Path(export))
+    if title:
+        title = title.strip()
+        meta["title"] = title
+        for md in targets:
+            set_note_title(md, title)
+    if client is not None:
+        client = client.strip()
+        meta["client"] = client
+        for md in targets:
+            set_note_client(md, client)
+    util.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
+    try:
+        from . import meetings_index
+
+        meetings_index.index_meeting(folder)
+    except Exception:
+        pass
+    return True
+
+
 def relabel_speakers(folder: Path, renames: dict[str, str]) -> bool:
     """Aplica rótulos de voz (#1) a uma reunião já processada:
 

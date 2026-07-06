@@ -867,14 +867,25 @@ class NotesWindow(QWidget):
         path = sel[0]
         new_title = self._title.text().strip()
         new_client = self._client.text().strip()
-        from ..notes import set_note_client, set_note_title
+        from .. import notes
 
-        if new_title:
-            set_note_title(path, new_title)
-        set_note_client(path, new_client)
+        # Fonte da verdade é a pasta da gravação (meta.json + notas.md), de onde o índice
+        # lê — update_note_meta sincroniza os três (meta/notas/.md exportado) + reindexa,
+        # p/ a capa e a busca por cliente refletirem a edição. Fallback (pasta sumiu, só o
+        # .md exportado sobrou): edita só o .md.
+        folder = self._recording_folder_for(path)
+        if not (folder.exists() and notes.update_note_meta(
+                folder, title=new_title or None, client=new_client)):
+            if new_title:
+                notes.set_note_title(path, new_title)
+            notes.set_note_client(path, new_client)
         self._header_orig = (new_title, new_client)   # salvo agora -> volta a limpo
         self._update_save_state()
         self._refresh_list()
+        # a capa lê do índice: pede o refresh p/ a edição aparecer lá sem reabrir a janela
+        mw = getattr(self.app, "main_win", None)
+        if mw is not None:
+            mw.refresh_home()
         widgets.flash_button(self._save_btn, "✓ Salvo", "Salvar")
 
     def _ask_delete(self) -> None:
