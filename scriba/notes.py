@@ -368,6 +368,9 @@ def generate_summary(transcript_md: str, folder: Path) -> tuple[str | None, str 
     Retorna (resumo, título, cliente) — None em cada campo se a IA estiver desligada ou falhar. O
     provider (claude CLI / Ollama / OpenAI-compatível) é escolhido em [summary].provider (ver ai.py).
     """
+    from . import ai
+
+    ai.last_error = None  # limpa o motivo de uma tentativa anterior (ver ai.ERR_LOGGED_OUT)
     cfg = load().summary
     if not cfg.enabled:
         return None, None, None
@@ -494,7 +497,13 @@ def build_notes(folder: Path) -> Path | None:
     summary, title, client = generate_summary(transcript_md, folder)
     has_summary = summary is not None
     if summary is None:
-        summary = f'> Resumo indisponível — rode: scriba summarize "{folder}"'
+        from . import ai
+
+        if ai.last_error == ai.ERR_LOGGED_OUT:
+            summary = ('> Resumo indisponível — a CLI `claude` não está logada. '
+                       f'Rode `claude`, faça `/login` e então: scriba summarize "{folder}"')
+        else:
+            summary = f'> Resumo indisponível — rode: scriba summarize "{folder}"'
 
     started = meta.get("started_at", "")
     duration_min = int(float(meta.get("duration_seconds", 0)) // 60)

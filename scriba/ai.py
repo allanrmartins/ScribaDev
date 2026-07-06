@@ -22,6 +22,14 @@ from . import config, util
 _OLLAMA_DEFAULT = "http://localhost:11434"
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+# Motivo da última falha de provider, para o chamador dar uma dica PRECISA na nota
+# (ver notes.build_notes) em vez do genérico "rode scriba summarize" — que falharia
+# igual se a causa for a CLI deslogada. Reposto no início de generate_summary; escrito
+# no caminho de falha. Sequencial no worker de resumo; um chat concorrente no máximo
+# troca o texto da dica (cosmético), nunca quebra o resumo.
+ERR_LOGGED_OUT = "logged_out"
+last_error: str | None = None
+
 
 def complete(
     system_prompt: str,
@@ -103,10 +111,27 @@ def _claude_cli(cfg, system_prompt, user_payload, *, timeout, cwd, hidden_window
         print(f"resumo: erro ao executar claude ({e})")
         return None
     if proc.returncode != 0 or not proc.stdout.strip():
-        err = (proc.stderr or "").strip().splitlines()
-        print(f"resumo: claude retornou {proc.returncode}" + (f" ({err[-1]})" if err else ""))
+        # A CLI escreve alguns erros (ex.: "Not logged in · Please run /login") no STDOUT,
+        # não no stderr — olhe os DOIS, senão o diagnóstico sai mudo ("retornou 1" pelado,
+        # que foi o que aconteceu quando a sessão expirou).
+        combined = f"{proc.stderr or ''}\n{proc.stdout or ''}"
+        if _looks_logged_out(combined):
+            global last_error
+            last_error = ERR_LOGGED_OUT
+            print(f"resumo: claude CLI não está logada — rode `claude` e faça /login "
+                  f"(retornou {proc.returncode})")
+        else:
+            tail = combined.strip().splitlines()
+            print(f"resumo: claude retornou {proc.returncode}" + (f" ({tail[-1]})" if tail else ""))
         return None
     return proc.stdout.strip()
+
+
+def _looks_logged_out(text: str) -> bool:
+    """A CLI claude imprime "Not logged in · Please run /login" e sai 1 quando a sessão
+    expirou. Detecta isso para o chamador avisar o login em vez do genérico de re-rodar."""
+    t = (text or "").lower()
+    return "not logged in" in t or "/login" in t
 
 
 # ------------------------------------------------------------- providers HTTP --
