@@ -624,7 +624,10 @@ class MainWindow(QWidget):
         rl.addWidget(ico, 0, Qt.AlignTop)
         mid = QVBoxLayout()
         mid.setSpacing(1)
-        title = m.get("meeting_title") or m.get("title") or "(sem título)"
+        # o TÍTULO da nota (gerado pela IA ou editado à mão) vem primeiro — é o que a lista
+        # de Notas mostra e o que o usuário renomeia; cai no meeting_title (título da janela
+        # do Teams) só se a nota não tem título. Antes era o contrário: renomear não refletia.
+        title = m.get("title") or m.get("meeting_title") or "(sem título)"
         tl = QLabel(_elide(title, 38))
         tl.setStyleSheet("font-weight:bold;")
         tl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)  # encolhe, não empurra o chip

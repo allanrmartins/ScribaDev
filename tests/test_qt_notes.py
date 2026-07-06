@@ -659,6 +659,28 @@ class MainWindowLiveBandSmokeTests(unittest.TestCase):
         self.assertFalse(win._live_box.isHidden())
         self.assertEqual(len(win._live_anims), 0)      # status terminal não pulsa
 
+    def test_recente_mostra_titulo_da_nota_e_reflete_rename(self):
+        from PySide6.QtWidgets import QLabel
+
+        win = self._win()
+        # título da nota (editado à mão) ganha do meeting_title (janela do Teams) — antes
+        # era o contrário e renomear não refletia na capa.
+        row = win._recent_item({"title": "Coruripe - RT - Daily",
+                                "meeting_title": "Meeting join — Daily reforma tributaria",
+                                "started_at": "2026-07-06T14:03:00", "export_path": ""})
+        texts = [lbl.text() for lbl in row.findChildren(QLabel)]
+        self.assertIn("Coruripe - RT - Daily", texts)
+        self.assertNotIn("Meeting join — Daily reforma tributaria", texts)
+
+    def test_recente_cai_no_meeting_title_quando_nota_sem_titulo(self):
+        from PySide6.QtWidgets import QLabel
+
+        win = self._win()
+        row = win._recent_item({"title": "", "meeting_title": "Janela do Teams",
+                                "started_at": "2026-07-06T14:03:00"})
+        texts = [lbl.text() for lbl in row.findChildren(QLabel)]
+        self.assertIn("Janela do Teams", texts)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
