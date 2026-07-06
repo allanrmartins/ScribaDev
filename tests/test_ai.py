@@ -137,11 +137,11 @@ class ClaudeCliTests(unittest.TestCase):
         subprocess.run = self._real_run
         util.claude_command = self._real_cmd
 
-    def _patch_run(self, rc=0, stdout="ok"):
+    def _patch_run(self, rc=0, stdout="ok", stderr=""):
         def fake(cmd, **kw):
             self.captured["cmd"] = cmd
             self.captured["kw"] = kw
-            return type("P", (), {"returncode": rc, "stdout": stdout, "stderr": ""})()
+            return type("P", (), {"returncode": rc, "stdout": stdout, "stderr": stderr})()
         subprocess.run = fake
 
     def test_hidden_window_liga_creationflags(self):
@@ -167,6 +167,22 @@ class ClaudeCliTests(unittest.TestCase):
         util.claude_command = lambda: None
         cfg = Summary(provider="claude", model="m")
         self.assertIsNone(ai._claude_cli(cfg, "s", "p", timeout=5, cwd=None, hidden_window=False))
+
+    def test_nao_logado_marca_last_error(self):
+        # a CLI escreve "Not logged in" no STDOUT (não stderr) e sai 1: precisa ser
+        # detectado p/ a nota avisar o /login em vez do genérico "rode summarize".
+        ai.last_error = None
+        self._patch_run(rc=1, stdout="Not logged in · Please run /login", stderr="")
+        cfg = Summary(provider="claude", model="m")
+        self.assertIsNone(ai._claude_cli(cfg, "s", "p", timeout=5, cwd=None, hidden_window=False))
+        self.assertEqual(ai.last_error, ai.ERR_LOGGED_OUT)
+
+    def test_falha_generica_nao_marca_logged_out(self):
+        ai.last_error = None
+        self._patch_run(rc=1, stdout="", stderr="boom qualquer erro")
+        cfg = Summary(provider="claude", model="m")
+        self.assertIsNone(ai._claude_cli(cfg, "s", "p", timeout=5, cwd=None, hidden_window=False))
+        self.assertIsNone(ai.last_error)
 
 
 class DispatchTests(unittest.TestCase):
