@@ -112,5 +112,24 @@ class FfmpegStatusTests(unittest.TestCase):
             self.assertEqual(util.ffmpeg_status(True, None), "warn")
 
 
+class ProcessingStagesTests(unittest.TestCase):
+    """Estágios do processamento (rótulo + fração), fonte da pílula, da aba Notas e da
+    faixa 'em andamento' da capa."""
+
+    def test_diarizing_e_um_estagio_proprio(self):
+        self.assertEqual(util.stage_label("diarizing"), "Separando vozes…")
+        self.assertIn("diarizing", util.IN_PROGRESS_STATUSES)
+
+    def test_ordem_das_fracoes_e_monotonica(self):
+        seq = ["recording", "recorded", "transcribing", "diarizing",
+               "transcribed", "summarizing", "done"]
+        fracs = [util.stage_fraction(s) for s in seq]
+        self.assertEqual(fracs, sorted(fracs))          # barra nunca anda p/ trás
+        self.assertTrue(0 < util.stage_fraction("diarizing") < 1)
+
+    def test_status_desconhecido_tem_fallback(self):
+        self.assertEqual(util.stage_label("xpto"), "Processando…")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

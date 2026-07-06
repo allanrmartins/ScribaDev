@@ -87,6 +87,9 @@ def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: Transc
     if loopback_wav is not None:
         from . import diarize as diarize_mod
 
+        # marca o estágio antes de carregar o pyannote: a UI mostra "Separando vozes…"
+        meta["status"] = "diarizing"
+        util_mod.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
         lb_segments = next((seg for st, _sp, seg, _off in pending if st == "loopback"), [])
         dz_result = diarize_mod.diarize(loopback_wav, cfg.diarization, num_speakers=num_speakers, meta=meta)
         if dz_result and dz_result.turns:

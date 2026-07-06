@@ -16,6 +16,46 @@ from scriba import notes, speakers, util  # noqa: E402
 from scriba.notes import split_header  # noqa: E402
 
 
+class ScanMeetingsByStatusTests(unittest.TestCase):
+    """A capa lê as reuniões EM ANDAMENTO das pastas (o índice só as ganha prontas)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="scriba_scan_"))
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _mk(self, name, status, **extra):
+        d = self.tmp / name
+        d.mkdir(parents=True)
+        (d / "meta.json").write_text(
+            json.dumps({"status": status, **extra}, ensure_ascii=False), encoding="utf-8")
+        return d
+
+    def test_filtra_por_status_e_anexa_folder(self):
+        self._mk("2026/07/06/09-31", "summarizing", started_at="2026-07-06T09:31:00")
+        self._mk("2026/07/06/10-24", "diarizing", started_at="2026-07-06T10:24:00")
+        self._mk("2026/07/05/08-00", "done", started_at="2026-07-05T08:00:00")
+        got = notes.scan_meetings_by_status(
+            self.tmp, ("recorded", "transcribing", "diarizing", "transcribed", "summarizing"))
+        self.assertEqual(len(got), 2)                       # só as em andamento
+        by_status = {m["status"] for m in got}
+        self.assertEqual(by_status, {"summarizing", "diarizing"})
+        self.assertTrue(all("folder" in m for m in got))    # caminho da pasta anexado
+
+    def test_meta_ilegivel_e_pulado_sem_levantar(self):
+        d = self.tmp / "quebrada"
+        d.mkdir()
+        (d / "meta.json").write_text("{ nao é json", encoding="utf-8")
+        self._mk("ok", "transcribing")
+        got = notes.scan_meetings_by_status(self.tmp, ("transcribing",))
+        self.assertEqual(len(got), 1)
+
+    def test_dir_inexistente_devolve_vazio(self):
+        self.assertEqual(notes.scan_meetings_by_status(self.tmp / "nao-existe", ("done",)), [])
+
+
 class SplitHeaderTests(unittest.TestCase):
     def test_caso_feliz(self):
         body, title, client = split_header("TITULO: Migração SAP\nCLIENTE: Acme\n\n## Resumo\nlinha")
