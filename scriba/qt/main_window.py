@@ -675,13 +675,23 @@ class MainWindow(QWidget):
 
         # "recording" fica fora: enquanto grava, o card de call já mostra "Gravando"; a
         # faixa só nasce quando o PROCESSAMENTO começa ("assim que a call termina").
+        # failed/no_audio ENTRAM (#90): sem eles a reunião que falha simplesmente
+        # sumia da capa - o estado vermelho de _live_item nunca renderizava.
         statuses = tuple(s for s in util.IN_PROGRESS_STATUSES if s != "recording")
+        statuses += ("failed", "no_audio")
         try:
             rec_dir = self.app.cfg.output.resolved_recordings_dir()
             items = notes.scan_meetings_by_status(rec_dir, statuses)
         except Exception as e:
             log.debug("scan de em-andamento falhou: %s", e)
             return
+        # erro terminal só aparece se RECENTE (24h): a capa mostra "o que está
+        # acontecendo"; falha antiga vive na janela de Notas, não vira banner eterno
+        from datetime import datetime, timedelta
+
+        cutoff = (datetime.now() - timedelta(hours=24)).isoformat()
+        items = [m for m in items
+                 if m.get("status") not in ("failed", "no_audio") or _started_within(m, cutoff)]
         items.sort(key=lambda m: (m.get("started_at") or ""), reverse=True)
         sig = {m["folder"]: m.get("status") for m in items}
         self.app.ui(lambda: self._apply_live(items, sig))
@@ -753,7 +763,8 @@ class MainWindow(QWidget):
         mid.addWidget(tl)
         mid.addWidget(st)
         rl.addLayout(mid, 1)
-        badge = QLabel("agora")
+        # linha de erro não é "agora": mostra a data curta da reunião que falhou
+        badge = QLabel(_short_date(m.get("started_at")) if err else "agora")
         badge.setStyleSheet(f"color:{t.faint}; font-size:{t.font_size_small}pt;")
         rl.addWidget(badge, 0, Qt.AlignVCenter)
         return row

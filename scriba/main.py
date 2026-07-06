@@ -400,6 +400,16 @@ class ScribaApp:
         """Mostra a janela principal (chamável de qualquer thread)."""
         self.ui(lambda: self.main_win.show() if self.main_win else None)
 
+    def _refresh_home_after_process(self) -> None:
+        """Re-atualiza a capa depois que o processamento terminou E o índice foi
+        reconciliado pós-rename (#90). Roda na thread da GUI. Janela fechada/oculta
+        não precisa: refresh_home roda no próximo show()."""
+        if self.main_win is not None and self.main_win.isVisible():
+            try:
+                self.main_win.refresh_home()
+            except Exception:
+                log.exception("refresh da capa pós-processamento falhou")
+
     def show_settings(self) -> None:
         """Abre a janela de Configurações (chamável de qualquer thread)."""
         self.ui(self._open_settings_ui)
@@ -861,6 +871,10 @@ class ScribaApp:
                 except Exception:
                     log.exception("índice: falha ao reconciliar rename de %s", folder.name)
                 folder = renamed
+        # o poll da faixa viva pode ter disparado refresh_home ANTES do rename +
+        # reindex_renamed acima (recentes/pendências com o path antigo, já morto):
+        # refresh autoritativo da capa DEPOIS do índice reconciliado (#90)
+        self.ui(self._refresh_home_after_process)
         log.info("concluído %s -> %s", folder.name, export_path)
 
     def _worker(self) -> None:
