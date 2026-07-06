@@ -391,6 +391,11 @@ def process_when_ready(folder: Path, poll_seconds: float = 2.0) -> int:
             status = None
         if status in ("recorded", "transcribed"):
             break
+        # preso no MEIO do processamento (crash/kill durante transcrição,
+        # diarização ou resumo): sem .lock ativo não há worker vivo - readota,
+        # espelhando o scan_pending do boot (process_folder re-checa o .lock)
+        if status in ("transcribing", "diarizing", "summarizing") and not util_mod.is_locked(folder):
+            break
         if status in ("discarded", "too_short", "done"):
             print(f"nada a processar (status: {status})")
             return 0

@@ -891,20 +891,23 @@ class ScribaApp:
                 continue
             status = meta.get("status")
             if status == "recording":
-                # gravação órfã de um crash: repara o header e adota
+                # gravação órfã de um crash: repara o header e adota; curta demais
+                # ganha status TERMINAL (too_short, como no caminho vivo) - senão
+                # ficava "recorded" eterna, virando "Na fila…" fantasma na capa
                 duration = repair_folder(meta_path.parent)
-                meta["status"] = "recorded"
+                too_short = duration < self.cfg.detection.min_call_seconds
+                meta["status"] = "too_short" if too_short else "recorded"
                 meta["duration_seconds"] = round(duration, 1)
                 meta["interrupted"] = True  # o notas.md avisa que a call foi cortada
                 util.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
                 log.info("gravação órfã adotada (%.0fs): %s", duration, meta_path.parent.name)
-                if duration < self.cfg.detection.min_call_seconds:
+                if too_short:
                     continue
                 status = "recorded"
             # além de recorded/transcribed, readota também quem morreu NO MEIO do
-            # processamento (transcribing/summarizing presos por crash ou kill) —
-            # "failed" é terminal e não volta sozinho (retry manual: scriba process)
-            if status in ("recorded", "transcribed", "transcribing", "summarizing"):
+            # processamento (transcribing/diarizing/summarizing presos por crash ou
+            # kill) - "failed" é terminal e não volta sozinho (retry: scriba process)
+            if status in ("recorded", "transcribed", "transcribing", "diarizing", "summarizing"):
                 # não readota pasta com .lock ativo (PID vivo/recente): pode haver
                 # um 'scriba process' manual em andamento sobre a mesma reunião
                 if util.is_locked(meta_path.parent):
