@@ -38,6 +38,7 @@ class LogWindow(QWidget):
         self._hits: list[QTextCursor] = []
         self._hit_idx = -1
         self._level_idx = 0
+        self._last_stat: tuple | None = None   # (mtime, size) do log no último _reload (#93)
 
         self.setWindowTitle("ScribaDev — Log")
         self.setMinimumSize(640, 380)
@@ -110,7 +111,19 @@ class LogWindow(QWidget):
 
     # -- dados ---------------------------------------------------------------
 
+    def _log_stat(self) -> tuple | None:
+        """(mtime, size) do arquivo de log, ou None se não dá p/ ler. Barato: usado pelo
+        tick p/ pular a releitura quando o arquivo não mudou (#93)."""
+        try:
+            st = diagnostics.LOG_FILE.stat()
+            return (st.st_mtime, st.st_size)
+        except OSError:
+            return None
+
     def _reload(self, stick_bottom: bool = False) -> None:
+        # registra o stat ANTES de ler: um append entre o stat e a leitura vira uma
+        # releitura extra no próximo tick (inofensivo), nunca uma atualização perdida
+        self._last_stat = self._log_stat()
         text = diagnostics.read_tail(diagnostics.LOG_FILE, _MAX_LINES)
         self._truncated = len(text.splitlines()) >= _MAX_LINES
         self._entries = diagnostics.parse_entries(text)
@@ -218,8 +231,18 @@ class LogWindow(QWidget):
         # auto-atualizar marcado: recarrega e acompanha o fim (tail) a cada tick, p/
         # sincronizar os eventos ao vivo. Pausa durante uma busca (posições estáveis).
         # Desmarcar o auto = scroll livre (para inspecionar o histórico sem ser puxado).
-        if self.isVisible() and self._auto.isChecked() and not self._find.text().strip():
-            self._reload(stick_bottom=True)
+        if not (self.isVisible() and self._auto.isChecked() and not self._find.text().strip()):
+            return
+        # não puxa o tapete de quem está selecionando texto p/ copiar (o setHtml zeraria
+        # a seleção): pausa enquanto há seleção ativa, como a busca pausa (#93)
+        if self._view.textCursor().hasSelection():
+            return
+        # só relê se o arquivo mudou: sem isto, o setHtml a cada 2s reconstruía um documento
+        # idêntico (CPU) e ainda assim apagava seleção/scroll mesmo com o log parado (#93)
+        stat = self._log_stat()
+        if stat == self._last_stat:
+            return
+        self._reload(stick_bottom=True)
 
     def _copy(self) -> None:
         from PySide6.QtWidgets import QApplication
@@ -249,7 +272,11 @@ class LogWindow(QWidget):
         self.raise_()
         self.activateWindow()
         widgets.enable_dark_titlebar(self)
-        self._reload(stick_bottom=self._auto.isChecked())   # abre no fim se seguindo ao vivo
+        # abre no fim se seguindo ao vivo, MAS não se há busca ativa (o campo persiste
+        # entre aberturas - closeEvent só esconde): grudar no fim jogaria o 1º hit p/
+        # fora da tela, deixando o contador "1/N" apontando p/ um match invisível (#93)
+        stick = self._auto.isChecked() and not self._find.text().strip()
+        self._reload(stick_bottom=stick)
         self._tick_timer.start()
 
     def closeEvent(self, event) -> None:

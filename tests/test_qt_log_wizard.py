@@ -70,10 +70,13 @@ class LogTests(unittest.TestCase):
         calls = []
         win._reload = lambda stick_bottom=False: calls.append(stick_bottom)
         win.isVisible = lambda: True
+        win._stat = 0
+        win._log_stat = lambda: win._stat        # controla a detecção de mudança
+        win._last_stat = None
         win._auto.setChecked(True)
         win._find.setText("")
         win._tick()
-        self.assertEqual(calls, [True])              # auto marcado: recarrega no fim
+        self.assertEqual(calls, [True])              # auto marcado + arquivo mudou: recarrega no fim
         calls.clear()
         win._find.setText("erro")                    # busca ativa: pausa (posições estáveis)
         win._tick()
@@ -83,6 +86,68 @@ class LogTests(unittest.TestCase):
         win._auto.setChecked(False)                  # auto desmarcado: scroll livre
         win._tick()
         self.assertEqual(calls, [])
+
+    def test_tick_pula_reload_se_log_nao_mudou(self):
+        # #93: sem mudança no arquivo, o tick NÃO relê (não reconstrói setHtml idêntico
+        # nem apaga seleção/scroll a cada 2s)
+        from scriba.qt.log_ui import LogWindow
+
+        win = LogWindow(_App())
+        calls = []
+        win._reload = lambda stick_bottom=False: calls.append(stick_bottom)
+        win.isVisible = lambda: True
+        win._auto.setChecked(True)
+        win._find.setText("")
+        win._log_stat = lambda: (111.0, 222)
+        win._last_stat = (111.0, 222)                # igual: nada a fazer
+        win._tick()
+        self.assertEqual(calls, [])
+        win._last_stat = (111.0, 999)                # tamanho mudou: relê
+        win._tick()
+        self.assertEqual(calls, [True])
+
+    def test_tick_pausa_com_selecao_ativa(self):
+        # #93: enquanto o usuário seleciona texto p/ copiar, o tick não puxa o tapete
+        from scriba.qt.log_ui import LogWindow
+        from PySide6.QtGui import QTextCursor
+
+        win = LogWindow(_App())
+        calls = []
+        win._reload = lambda stick_bottom=False: calls.append(stick_bottom)
+        win.isVisible = lambda: True
+        win._auto.setChecked(True)
+        win._find.setText("")
+        win._log_stat = lambda: object()             # sempre "mudou"
+        win._last_stat = None
+        win._view.setPlainText("linha um\nlinha dois\nlinha tres")
+        cur = win._view.textCursor()
+        cur.select(QTextCursor.Document)             # seleção ativa
+        win._view.setTextCursor(cur)
+        self.assertTrue(win._view.textCursor().hasSelection())
+        win._tick()
+        self.assertEqual(calls, [])                  # pausou por causa da seleção
+        win._view.setPlainText("x")                  # limpa a seleção
+        win._tick()
+        self.assertEqual(calls, [True])
+
+    def test_show_nao_gruda_no_fim_com_busca_ativa(self):
+        # #93: reabrir com um termo de busca persistido não pode grudar no fim (jogaria
+        # o 1º hit p/ fora da tela). O campo persiste porque closeEvent só esconde.
+        from scriba.qt.log_ui import LogWindow
+
+        win = LogWindow(_App())
+        sticks = []
+        win._reload = lambda stick_bottom=False: sticks.append(stick_bottom)
+        win._auto.setChecked(True)
+        win._find.setText("erro")
+        win.show()
+        self.assertEqual(sticks, [False])            # busca ativa: não grudou no fim
+        win.close()
+        sticks.clear()
+        win._find.setText("")
+        win.show()
+        self.assertEqual(sticks, [True])             # sem busca + auto: grudou no fim
+        win.close()
 
     def test_render_stick_bottom_move_cursor_ao_fim(self):
         from scriba import diagnostics
