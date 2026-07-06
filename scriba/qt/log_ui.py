@@ -110,11 +110,11 @@ class LogWindow(QWidget):
 
     # -- dados ---------------------------------------------------------------
 
-    def _reload(self) -> None:
+    def _reload(self, stick_bottom: bool = False) -> None:
         text = diagnostics.read_tail(diagnostics.LOG_FILE, _MAX_LINES)
         self._truncated = len(text.splitlines()) >= _MAX_LINES
         self._entries = diagnostics.parse_entries(text)
-        self._render()
+        self._render(stick_bottom=stick_bottom)
 
     def restyle_theme(self) -> None:
         """Troca a quente (#70): re-aplica os estilos com cor de tema (status + view) e
@@ -127,7 +127,7 @@ class LogWindow(QWidget):
             f" font-family:'{t.font_mono}','Consolas',monospace; border:none; }}")
         self._render()
 
-    def _render(self) -> None:
+    def _render(self, stick_bottom: bool = False) -> None:
         date_br = self._date.br()
         time_from = self._time.hhmm()
         level_min = _LEVELS_CYCLE[self._level_idx][1]
@@ -156,6 +156,11 @@ class LogWindow(QWidget):
             msg += f" · últimas {_MAX_LINES} linhas — log completo em Abrir pasta"
         self._status.setText(msg)
         self._apply_search()
+        if stick_bottom:
+            # auto-atualizar acompanha o fim (tail): setHtml zera o scroll p/ o topo, então
+            # rola tudo p/ baixo p/ os eventos mais novos ficarem à vista a cada atualização
+            self._view.moveCursor(QTextCursor.End)
+            self._view.ensureCursorVisible()
 
     # -- busca ---------------------------------------------------------------
 
@@ -210,10 +215,11 @@ class LogWindow(QWidget):
         self._render()
 
     def _tick(self) -> None:
+        # auto-atualizar marcado: recarrega e acompanha o fim (tail) a cada tick, p/
+        # sincronizar os eventos ao vivo. Pausa durante uma busca (posições estáveis).
+        # Desmarcar o auto = scroll livre (para inspecionar o histórico sem ser puxado).
         if self.isVisible() and self._auto.isChecked() and not self._find.text().strip():
-            bar = self._view.verticalScrollBar()
-            if bar.value() >= bar.maximum() - 4:
-                self._reload()
+            self._reload(stick_bottom=True)
 
     def _copy(self) -> None:
         from PySide6.QtWidgets import QApplication
@@ -243,7 +249,7 @@ class LogWindow(QWidget):
         self.raise_()
         self.activateWindow()
         widgets.enable_dark_titlebar(self)
-        self._reload()
+        self._reload(stick_bottom=self._auto.isChecked())   # abre no fim se seguindo ao vivo
         self._tick_timer.start()
 
     def closeEvent(self, event) -> None:

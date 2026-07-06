@@ -63,6 +63,39 @@ class LogTests(unittest.TestCase):
         self.assertGreaterEqual(len(win._hits), 2)
         self.assertIn("/", win._count.text())
 
+    def test_auto_follow_tick_segue_o_fim(self):
+        from scriba.qt.log_ui import LogWindow
+
+        win = LogWindow(_App())
+        calls = []
+        win._reload = lambda stick_bottom=False: calls.append(stick_bottom)
+        win.isVisible = lambda: True
+        win._auto.setChecked(True)
+        win._find.setText("")
+        win._tick()
+        self.assertEqual(calls, [True])              # auto marcado: recarrega no fim
+        calls.clear()
+        win._find.setText("erro")                    # busca ativa: pausa (posições estáveis)
+        win._tick()
+        self.assertEqual(calls, [])
+        calls.clear()
+        win._find.setText("")
+        win._auto.setChecked(False)                  # auto desmarcado: scroll livre
+        win._tick()
+        self.assertEqual(calls, [])
+
+    def test_render_stick_bottom_move_cursor_ao_fim(self):
+        from scriba import diagnostics
+        from scriba.qt.log_ui import LogWindow
+
+        win = LogWindow(_App())
+        text = "\n".join(f"06/07/2026 10:00:{i % 60:02d} INFO scriba: linha {i}" for i in range(60))
+        win._entries = diagnostics.parse_entries(text)
+        win._render(stick_bottom=True)
+        self.assertTrue(win._view.textCursor().atEnd())    # rolou p/ o fim (tail)
+        win._render(stick_bottom=False)                    # setHtml volta o cursor ao início
+        self.assertFalse(win._view.textCursor().atEnd())
+
     def test_crash_dialog_singleton(self):
         from scriba.qt import log_ui
 
