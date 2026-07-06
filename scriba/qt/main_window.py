@@ -19,9 +19,10 @@ from __future__ import annotations
 import logging
 import threading
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation
 from PySide6.QtWidgets import (
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QScrollArea,
@@ -38,6 +39,24 @@ log = logging.getLogger("scriba.qt.main_window")
 _LEVELS = {"ok": "ok", "warn": "warn", "off": "muted"}  # nível -> token de cor
 _RECENT_N = 5    # reuniões recentes mostradas na capa
 _PENDING_N = 4   # pendências abertas mostradas na capa
+# ícone Fluent por estágio da reunião em andamento (capa): troca conforme o pipeline
+# avança (Transcrevendo -> Separando vozes -> Gerando resumo). Ver util.PROCESSING_STAGES.
+_STAGE_ICON = {
+    "recorded": "hourglass",
+    "transcribing": "edit",
+    "diarizing": "people",
+    "transcribed": "checkmark",
+    "summarizing": "sparkle",
+    "failed": "warning",
+    "no_audio": "warning",
+}
+
+
+def _rgba(hexc: str, a: float) -> str:
+    """'#rrggbb' -> 'rgba(r,g,b,a)' para tingir levemente a linha em andamento com o acento."""
+    hexc = (hexc or "#000000").lstrip("#")
+    r, g, b = int(hexc[0:2], 16), int(hexc[2:4], 16), int(hexc[4:6], 16)
+    return f"rgba({r},{g},{b},{a})"
 
 
 def _fmt(seconds: float) -> str:
@@ -134,6 +153,9 @@ class MainWindow(QWidget):
         self._call_state_kind = "idle"   # idle | rec | call (p/ estilizar o card)
         self._home_data = None           # último payload de _render_home (re-tema #70)
         self._status_items = None        # últimos itens de _render_status (re-tema #70)
+        self._live_sig = None            # assinatura {pasta: status} das reuniões em andamento
+        self._live_cache: list = []      # último payload de _render_live (re-tema + poll)
+        self._live_anims: list = []      # animações de pulso ativas (mantém referência viva)
 
         self.setWindowTitle(f"ScribaDev v{__version__}")
         self.setMinimumSize(520, 560)
@@ -172,6 +194,11 @@ class MainWindow(QWidget):
         self._tick_timer = QTimer(self)
         self._tick_timer.timeout.connect(self._tick)
         self._tick_timer.start(1000)
+        # poll leve das reuniões em andamento (status vivo na capa): varre as pastas fora
+        # da GUI e só re-renderiza quando o estágio muda. Só corre com a capa visível.
+        self._live_timer = QTimer(self)
+        self._live_timer.timeout.connect(self._poll_live)
+        self._live_timer.start(1200)
 
     # ---- construção da UI ------------------------------------------------------
 
@@ -277,6 +304,14 @@ class MainWindow(QWidget):
         open_btn.setIcon(theme.qicon("chevron-right", color=theme.active().text))
         hdr.addWidget(open_btn)
         nl.addLayout(hdr)
+        # faixa "em andamento" (status vivo), ACIMA das reuniões prontas: nasce assim que
+        # a call termina e vira uma linha pronta quando o processamento acaba (polling leve)
+        self._live_box = QWidget()
+        self._live_lay = QVBoxLayout(self._live_box)
+        self._live_lay.setContentsMargins(0, 0, 0, 0)
+        self._live_lay.setSpacing(2)
+        self._live_box.setVisible(False)
+        nl.addWidget(self._live_box)
         self._recent_box = QWidget()
         self._recent_lay = QVBoxLayout(self._recent_box)
         self._recent_lay.setContentsMargins(0, 0, 0, 0)
@@ -353,6 +388,8 @@ class MainWindow(QWidget):
         self._style_call_card()
         if self._home_data is not None:
             self._render_home(self._home_data)
+        if self._live_cache:
+            self._render_live(self._live_cache)   # cores fixadas na criação (#70)
         if self._status_items is not None:
             self._render_status(self._status_items)
 
@@ -620,6 +657,108 @@ class MainWindow(QWidget):
         if n:
             parts.append(f"{n} part.")
         return "  ·  ".join(parts)
+
+    # ---- reuniões em andamento (status vivo na capa) --------------------------
+
+    def _poll_live(self) -> None:
+        """Timer (1,2s): varre as pastas em andamento fora da GUI e atualiza a faixa só
+        quando o estágio muda. Ocioso se a capa não está visível ou não há app real."""
+        if not self.isVisible() or getattr(self.app, "cfg", None) is None:
+            return
+        threading.Thread(target=self._collect_live, daemon=True, name="live").start()
+
+    def _collect_live(self) -> None:
+        from .. import notes
+
+        # "recording" fica fora: enquanto grava, o card de call já mostra "Gravando"; a
+        # faixa só nasce quando o PROCESSAMENTO começa ("assim que a call termina").
+        statuses = tuple(s for s in util.IN_PROGRESS_STATUSES if s != "recording")
+        try:
+            rec_dir = self.app.cfg.output.resolved_recordings_dir()
+            items = notes.scan_meetings_by_status(rec_dir, statuses)
+        except Exception as e:
+            log.debug("scan de em-andamento falhou: %s", e)
+            return
+        items.sort(key=lambda m: (m.get("started_at") or ""), reverse=True)
+        sig = {m["folder"]: m.get("status") for m in items}
+        self.app.ui(lambda: self._apply_live(items, sig))
+
+    def _apply_live(self, items: list, sig: dict) -> None:
+        if sig == self._live_sig:
+            return
+        prev = self._live_sig
+        # alguma reunião SAIU de "em andamento" (virou nota pronta ou falhou): atualiza os
+        # recentes p/ ela aparecer como nota — o índice já foi populado pelo build_notes.
+        completed = bool(prev) and any(f not in sig for f in prev)
+        self._live_sig = sig
+        self._render_live(items)
+        if completed:
+            self.refresh_home()
+
+    def _render_live(self, items: list) -> None:
+        self._live_cache = items
+        for a in self._live_anims:
+            a.stop()
+        self._live_anims = []
+        _clear_layout(self._live_lay)
+        if not items:
+            self._live_box.setVisible(False)
+            return
+        self._live_box.setVisible(True)
+        for m in items:
+            self._live_lay.addWidget(self._live_item(m))
+
+    def _live_item(self, m: dict) -> QWidget:
+        t = theme.active()
+        status = m.get("status") or ""
+        folder = (m.get("folder") or "").strip()
+        row = _ClickRow(lambda: self._open_live())
+        row.setObjectName("liveRow")
+        row.setStyleSheet(
+            f"#liveRow {{ background:{_rgba(t.accent, 0.11)};"
+            f" border-left:2px solid {t.accent}; border-radius:8px; }}")
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(8, 6, 8, 6)
+        rl.setSpacing(9)
+        ico = QLabel()
+        ico.setPixmap(theme.qicon(_STAGE_ICON.get(status, "hourglass"),
+                                  color=t.accent_hover).pixmap(15, 15))
+        rl.addWidget(ico, 0, Qt.AlignVCenter)
+        # pulso "respirando" no ícone (aproxima o shimmer do mockup, nativo do Qt)
+        if status not in ("failed", "no_audio"):
+            eff = QGraphicsOpacityEffect(ico)
+            ico.setGraphicsEffect(eff)
+            anim = QPropertyAnimation(eff, b"opacity", self)
+            anim.setDuration(1500)
+            anim.setStartValue(1.0)
+            anim.setKeyValueAt(0.5, 0.35)
+            anim.setEndValue(1.0)
+            anim.setLoopCount(-1)
+            anim.start()
+            self._live_anims.append(anim)
+        mid = QVBoxLayout()
+        mid.setSpacing(1)
+        title = m.get("meeting_title") or m.get("title") or "Processando reunião…"
+        tl = QLabel(_elide(title, 38))
+        tl.setStyleSheet("font-weight:bold;")
+        tl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        st = QLabel(util.stage_label(status))
+        err = status in ("failed", "no_audio")
+        st.setStyleSheet(f"color:{t.rec if err else t.accent_hover};"
+                         f" font-size:{t.font_size_small}pt; font-weight:600;")
+        st.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        mid.addWidget(tl)
+        mid.addWidget(st)
+        rl.addLayout(mid, 1)
+        badge = QLabel("agora")
+        badge.setStyleSheet(f"color:{t.faint}; font-size:{t.font_size_small}pt;")
+        rl.addWidget(badge, 0, Qt.AlignVCenter)
+        return row
+
+    def _open_live(self) -> None:
+        """Clique na linha em andamento: abre a janela de Notas (mostra o painel de
+        progresso da reunião que está processando)."""
+        self.app.show_notes()
 
     def _pending_group(self, header_it: dict, items: list) -> QWidget:
         """Um grupo de pendências da MESMA reunião: 1 cabeçalho compacto (título · data ·

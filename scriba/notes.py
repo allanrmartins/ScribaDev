@@ -477,6 +477,28 @@ def _integrity_warning(meta: dict) -> str:
     )
 
 
+def scan_meetings_by_status(recordings_dir, statuses) -> list[dict]:
+    """Varre as pastas de gravação e devolve o meta.json (com a chave 'folder' = caminho da
+    pasta) de cada reunião cujo `status` está em `statuses`. Fonte única da lista de
+    reuniões "em andamento" da capa (status vivo) e da janela de Notas — o índice de busca
+    só ganha a reunião quando ela fica pronta, então o estado intermediário vem das pastas
+    (fonte da verdade). Nunca levanta: pasta/meta ilegível é pulado."""
+    out: list[dict] = []
+    try:
+        metas = list(Path(recordings_dir).rglob("meta.json"))
+    except OSError:
+        return out
+    wanted = set(statuses)
+    for mp in metas:
+        try:
+            meta = json.loads(mp.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if meta.get("status") in wanted:
+            out.append({**meta, "folder": str(mp.parent)})
+    return out
+
+
 def build_notes(folder: Path) -> Path | None:
     """Monta o notas.md (frontmatter + resumo + transcrição) e exporta a cópia final."""
     folder = Path(folder)

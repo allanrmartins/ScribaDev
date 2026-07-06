@@ -63,16 +63,17 @@ def set_explicit_app_id(app_id: str = APP_AUMID) -> None:
 PROCESSING_STAGES = {
     "recording": ("Gravando…", 0.05),
     "recorded": ("Na fila…", 0.12),
-    "transcribing": ("Transcrevendo…", 0.45),
-    "transcribed": ("Transcrição pronta", 0.65),
-    "summarizing": ("Gerando resumo…", 0.85),
+    "transcribing": ("Transcrevendo…", 0.40),
+    "diarizing": ("Separando vozes…", 0.60),
+    "transcribed": ("Transcrição pronta", 0.72),
+    "summarizing": ("Gerando resumo…", 0.88),
     "done": ("Pronto", 1.0),
     # terminais de erro (não entram em IN_PROGRESS_STATUSES: nada de loop infinito)
     "failed": ("Falhou", 1.0),
     "no_audio": ("Sem áudio gravado", 1.0),
 }
 # status que ainda não viraram nota (aparecem como "em andamento" na lista)
-IN_PROGRESS_STATUSES = ("recording", "recorded", "transcribing", "transcribed", "summarizing")
+IN_PROGRESS_STATUSES = ("recording", "recorded", "transcribing", "diarizing", "transcribed", "summarizing")
 
 
 def stage_label(status: str | None) -> str:

@@ -601,5 +601,64 @@ class ChatSingleInstanceTests(unittest.TestCase):
         win._chat.close()
 
 
+@unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")
+class MainWindowLiveBandSmokeTests(unittest.TestCase):
+    """Faixa 'em andamento' na capa: nasce com o estágio vivo e some (vira nota) ao concluir."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def _win(self):
+        from scriba.qt.main_window import MainWindow
+
+        base = Path(tempfile.mkdtemp(prefix="scriba_qt_main_"))
+
+        class _Out:
+            def resolved_recordings_dir(_s): return base / "_rec"
+            def resolved_export_dir(_s): return base
+
+        class _App:
+            cfg = type("C", (), {"output": _Out(),
+                                 "ui": type("U", (), {"pending_window_days": 0})()})()
+            def ui(_s, fn): fn()
+            def is_recording(_s): return False
+            def current_call_app(_s): return None
+            def show_notes(_s, *a): pass
+
+        return MainWindow(_App())
+
+    def test_render_live_diarizing_mostra_estagio_e_pulso(self):
+        win = self._win()
+        win._render_live([{"folder": "C:/x/09-31", "status": "diarizing",
+                           "title": "Reunião", "started_at": "2026-07-06T09:31:00"}])
+        self.assertFalse(win._live_box.isHidden())     # faixa visível
+        self.assertEqual(win._live_lay.count(), 1)
+        self.assertEqual(len(win._live_anims), 1)      # pulso "respirando" ativo
+        win._render_live([])                           # sem em-andamento: some sem estourar
+        self.assertTrue(win._live_box.isHidden())
+        self.assertEqual(win._live_anims, [])          # animações paradas
+
+    def test_apply_live_conclusao_dispara_refresh_dos_recentes(self):
+        win = self._win()
+        calls = []
+        win.refresh_home = lambda: calls.append(1)
+        win._apply_live([{"folder": "C:/x/09-31", "status": "summarizing"}],
+                        {"C:/x/09-31": "summarizing"})
+        self.assertFalse(win._live_box.isHidden())
+        self.assertEqual(calls, [])                    # só apareceu: não mexe nos recentes
+        win._apply_live([], {})                        # saiu de andamento -> virou nota pronta
+        self.assertTrue(win._live_box.isHidden())
+        self.assertEqual(calls, [1])                   # recentes recarregados 1x
+
+    def test_falha_nao_pulsa_e_usa_cor_de_erro(self):
+        win = self._win()
+        win._render_live([{"folder": "C:/x/z", "status": "failed", "title": "X"}])
+        self.assertFalse(win._live_box.isHidden())
+        self.assertEqual(len(win._live_anims), 0)      # status terminal não pulsa
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
