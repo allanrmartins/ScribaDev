@@ -454,26 +454,24 @@ class NotesWindow(QWidget):
         util.open_path(self._notes_dir())
 
     def _pending_meetings(self) -> list[tuple[datetime, str, Path, str | None]]:
-        import json
+        # mesmo scanner da faixa "em andamento" da capa (notes.scan_meetings_by_status):
+        # um só filtro/leitura evita a divergência de antes (a capa e esta lista podiam
+        # aceitar status diferentes) (#94). Inclui também os terminais de erro.
+        from .. import notes
 
+        statuses = util.IN_PROGRESS_STATUSES + tuple(
+            s for s, st in util.STAGES.items() if st.is_error)
+        rec_dir = self.app.cfg.output.resolved_recordings_dir()
         out = []
-        try:
-            metas = list(self.app.cfg.output.resolved_recordings_dir().rglob("meta.json"))
-        except OSError:
-            return out
-        for mp in metas:
+        for m in notes.scan_meetings_by_status(rec_dir, statuses):
+            folder = Path(m["folder"])
+            started = m.get("started_at", "")
             try:
-                meta = json.loads(mp.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if meta.get("status") not in util.IN_PROGRESS_STATUSES + ("failed", "no_audio"):
-                continue
-            started = meta.get("started_at", "")
-            try:
-                dt = datetime.fromisoformat(started) if started else datetime.fromtimestamp(mp.stat().st_mtime)
+                dt = (datetime.fromisoformat(started) if started
+                      else datetime.fromtimestamp((folder / "meta.json").stat().st_mtime))
             except (ValueError, OSError):
                 dt = datetime.now()
-            out.append((dt, meta["status"], mp.parent, meta.get("title")))
+            out.append((dt, m["status"], folder, m.get("title")))
         return out
 
     def _index_search(self, q, participant, client, since, until) -> list:

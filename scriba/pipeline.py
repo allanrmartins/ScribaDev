@@ -12,6 +12,18 @@ from .config import load
 from .transcription import TranscriptionProvider, make_transcriber
 
 
+def _write_meta(meta_path: Path, meta: dict) -> None:
+    """Escrita atômica do meta.json (sem BOM, indent 2). O padrão se repetia por todo o
+    pipeline — centralizado p/ a convenção (encoding/indent/atomicidade) viver num lugar (#94)."""
+    util_mod.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
+
+
+def _set_status(meta: dict, meta_path: Path, status: str) -> None:
+    """Marca o estágio no meta e persiste (a pílula, a aba Notas e a capa leem o status daqui)."""
+    meta["status"] = status
+    _write_meta(meta_path, meta)
+
+
 def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: TranscriptionProvider | None = None,
                       num_speakers: int | None = None) -> int:
     folder = Path(folder)
@@ -43,8 +55,7 @@ def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: Transc
 
     # marca o estágio antes de carregar o modelo: a UI mostra "Transcrevendo…"
     # já durante a carga da GPU (que faz parte do tempo percebido)
-    meta["status"] = "transcribing"
-    util_mod.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
+    _set_status(meta, meta_path, "transcribing")
 
     cfg = load()
     tr = transcriber or make_transcriber(cfg.whisper, force_cpu=force_cpu)
@@ -88,8 +99,7 @@ def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: Transc
         from . import diarize as diarize_mod
 
         # marca o estágio antes de carregar o pyannote: a UI mostra "Separando vozes…"
-        meta["status"] = "diarizing"
-        util_mod.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
+        _set_status(meta, meta_path, "diarizing")
         lb_segments = next((seg for st, _sp, seg, _off in pending if st == "loopback"), [])
         dz_result = diarize_mod.diarize(loopback_wav, cfg.diarization, num_speakers=num_speakers, meta=meta)
         if dz_result and dz_result.turns:
@@ -111,8 +121,7 @@ def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: Transc
 
     if not by_speaker:
         print("nenhum áudio para transcrever")
-        meta["status"] = "no_audio"  # terminal: não fica "transcribing" eterno
-        util_mod.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
+        _set_status(meta, meta_path, "no_audio")  # terminal: não fica "transcribing" eterno
         return 1
 
     turns = merge_mod.merge(by_speaker)
@@ -127,7 +136,7 @@ def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: Transc
     _cloud = (cfg.whisper.engine or "local").strip().lower() == "cloud"
     meta["whisper_model"] = cfg.whisper.cloud_model if _cloud else cfg.whisper.model
     meta["whisper_device"] = final_device
-    util_mod.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
+    _write_meta(meta_path, meta)
     print(f"transcrição pronta: {len(turns)} turnos -> {folder / 'transcript.json'}")
     return 0
 
@@ -192,7 +201,7 @@ def _mark_failed(folder: Path, exc: BaseException) -> None:
         if meta.get("status") in util_mod.IN_PROGRESS_STATUSES:
             meta["status"] = "failed"
             meta["error"] = str(exc)[:300]
-            util_mod.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
+            _write_meta(meta_path, meta)
     except Exception:
         pass  # meta ilegível: o supervisor (app) ainda marca failed pelo rc
 
@@ -315,7 +324,7 @@ def archive_audio(folder: Path, cfg) -> None:
             meta["audio_removed"] = True
             for st in (meta.get("streams") or {}).values():
                 st["file"] = None  # ponteiro morto: o WAV não existe mais
-            util_mod.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
+            _write_meta(meta_path, meta)
         except Exception as e:
             print(f"AVISO: não marquei audio_removed no meta.json ({e})")
         print("áudio removido (keep_audio = false)")
@@ -368,7 +377,7 @@ def archive_audio(folder: Path, cfg) -> None:
                 st["rate"] = 16000
                 st["channels"] = 1
         meta["archive_format"] = fmt
-        util_mod.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
+        _write_meta(meta_path, meta)
     except Exception as e:
         print(f"AVISO: não atualizei o meta.json pós-compactação ({e})")
     print(f"áudio compactado para {fmt}: ~{saved / 1e6:.0f} MB economizados")

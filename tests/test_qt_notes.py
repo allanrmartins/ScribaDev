@@ -268,6 +268,35 @@ class NotesWindowSmokeTests(unittest.TestCase):
         self.assertEqual(upd.call_args.kwargs.get("extra_targets"), [note])
         self.assertEqual(upd.call_args.kwargs.get("title"), "Título Novo 92")
 
+    def test_pending_meetings_usa_scanner_unico(self):
+        # #94: _pending_meetings usa notes.scan_meetings_by_status (mesmo scanner da capa),
+        # incluindo os terminais de erro; 'done' NÃO entra (já virou nota)
+        import json
+
+        from scriba.qt.notes_ui import NotesWindow
+
+        base = Path(tempfile.mkdtemp(prefix="scriba_qt_pend_"))
+        rec = base / "_rec"
+        for name, status in [("a", "summarizing"), ("b", "failed"),
+                             ("c", "no_audio"), ("d", "done")]:
+            d = rec / name
+            d.mkdir(parents=True)
+            (d / "meta.json").write_text(
+                json.dumps({"status": status, "started_at": f"2026-07-06T10:0{ord(name)-96}:00"}),
+                encoding="utf-8")
+
+        class _Out:
+            def resolved_export_dir(_self): return base
+            def resolved_recordings_dir(_self): return rec
+
+        class _App:
+            cfg = type("C", (), {"output": _Out()})()
+            def ui(_self, fn): fn()
+
+        win = NotesWindow(_App())
+        statuses = {status for _dt, status, _f, _t in win._pending_meetings()}
+        self.assertEqual(statuses, {"summarizing", "failed", "no_audio"})   # 'done' fora
+
     def test_filtros_colapsaveis_com_badge(self):
         win = self._win()
         win._refresh_list()
@@ -707,11 +736,10 @@ class MainWindowLiveBandSmokeTests(unittest.TestCase):
         win = self._win()
         calls = []
         win.refresh_home = lambda: calls.append(1)
-        win._apply_live([{"folder": "C:/x/09-31", "status": "summarizing"}],
-                        {"C:/x/09-31": "summarizing"})
+        win._apply_live([{"folder": "C:/x/09-31", "status": "summarizing"}])
         self.assertFalse(win._live_box.isHidden())
         self.assertEqual(calls, [])                    # só apareceu: não mexe nos recentes
-        win._apply_live([], {})                        # saiu de andamento -> virou nota pronta
+        win._apply_live([])                            # saiu de andamento -> virou nota pronta
         self.assertTrue(win._live_box.isHidden())
         self.assertEqual(calls, [1])                   # recentes recarregados 1x
 

@@ -304,7 +304,7 @@ class LiveStripErrorTests(unittest.TestCase):
             "falhou": {"status": "failed", "started_at": agora, "meeting_title": "Weekly"},
         })
         win._collect_live()   # _FakeApp.ui é síncrono: aplica e renderiza já
-        self.assertEqual(list(win._live_sig.values()), ["failed"])
+        self.assertEqual([m.get("status") for m in win._live_cache], ["failed"])
         self.assertEqual(win._live_lay.count(), 1)
         self.assertTrue(win._live_box.isVisibleTo(win))
 
@@ -317,7 +317,7 @@ class LiveStripErrorTests(unittest.TestCase):
             "presa_velha": {"status": "summarizing", "started_at": velho},
         })
         win._collect_live()
-        self.assertEqual(list(win._live_sig.values()), ["summarizing"])
+        self.assertEqual([m.get("status") for m in win._live_cache], ["summarizing"])
 
     def test_no_audio_recente_aparece(self):
         from datetime import datetime
@@ -326,7 +326,7 @@ class LiveStripErrorTests(unittest.TestCase):
             "muda": {"status": "no_audio", "started_at": datetime.now().isoformat()},
         })
         win._collect_live()
-        self.assertEqual(list(win._live_sig.values()), ["no_audio"])
+        self.assertEqual([m.get("status") for m in win._live_cache], ["no_audio"])
 
     def test_badge_de_erro_mostra_data_nao_agora(self):
         from PySide6.QtWidgets import QLabel
@@ -380,9 +380,9 @@ class LivePollRobustnessTests(unittest.TestCase):
 
     def test_backoff_ocioso_e_rapido_com_trabalho(self):
         win = self._win()
-        win._apply_live([{"folder": "x", "status": "summarizing"}], {"x": "summarizing"})
+        win._apply_live([{"folder": "x", "status": "summarizing"}])
         self.assertEqual(win._live_timer.interval(), 1200)
-        win._apply_live([], {})
+        win._apply_live([])
         self.assertEqual(win._live_timer.interval(), 10_000)
 
     def test_display_title_precedencia(self):

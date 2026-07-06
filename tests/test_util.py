@@ -129,6 +129,32 @@ class ProcessingStagesTests(unittest.TestCase):
 
     def test_status_desconhecido_tem_fallback(self):
         self.assertEqual(util.stage_label("xpto"), "Processando…")
+        self.assertEqual(util.stage("xpto").icon, "hourglass")
+        self.assertFalse(util.stage("xpto").is_error)
+
+    def test_in_progress_deriva_da_tabela(self):
+        # #94: IN_PROGRESS_STATUSES é DERIVADO de STAGES (não uma lista à parte que
+        # pode ficar pra trás - foi o que causou o #89 do 'diarizing')
+        self.assertEqual(
+            util.IN_PROGRESS_STATUSES,
+            tuple(s for s, st in util.STAGES.items() if st.in_progress))
+        for terminal in ("done", "failed", "no_audio"):
+            self.assertNotIn(terminal, util.IN_PROGRESS_STATUSES)
+
+    def test_terminais_de_erro(self):
+        # #94: is_error marca os terminais de erro (a capa os mostra em vermelho, sem pulso)
+        self.assertTrue(util.stage("failed").is_error)
+        self.assertTrue(util.stage("no_audio").is_error)
+        self.assertFalse(util.stage("summarizing").is_error)
+        self.assertFalse(util.stage("done").is_error)
+
+    def test_icones_por_estagio(self):
+        # #94: ícone Fluent de cada estágio que aparece na faixa da capa (era _STAGE_ICON)
+        esperado = {"recorded": "hourglass", "transcribing": "edit", "diarizing": "people",
+                    "transcribed": "checkmark", "summarizing": "sparkle",
+                    "failed": "warning", "no_audio": "warning"}
+        for status, icon in esperado.items():
+            self.assertEqual(util.stage(status).icon, icon)
 
 
 if __name__ == "__main__":

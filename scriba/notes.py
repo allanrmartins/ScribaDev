@@ -522,10 +522,10 @@ def build_notes(folder: Path) -> Path | None:
         from . import ai
 
         if ai.last_error == ai.ERR_LOGGED_OUT:
-            summary = ('> Resumo indisponível — a CLI `claude` não está logada. '
+            summary = ('> Resumo indisponível - a CLI `claude` não está logada. '
                        f'Rode `claude`, faça `/login` e então: scriba summarize "{folder}"')
         else:
-            summary = f'> Resumo indisponível — rode: scriba summarize "{folder}"'
+            summary = f'> Resumo indisponível - rode: scriba summarize "{folder}"'
 
     started = meta.get("started_at", "")
     duration_min = int(float(meta.get("duration_seconds", 0)) // 60)
@@ -640,6 +640,28 @@ def set_note_client(md_path: Path, new_client: str) -> None:
     util.atomic_write_text(md_path, "\n".join(_apply_client(lines, new_client.strip())) + "\n")
 
 
+def _note_targets(folder: Path, meta: dict) -> list[Path]:
+    """Os .md de uma reunião a manter em sincronia: notas.md (na pasta) + a cópia exportada
+    (meta['export_path'], se houver). Fonte única usada por update_note_meta e
+    relabel_speakers (#94)."""
+    targets = [folder / "notas.md"]
+    export = meta.get("export_path")
+    if export:
+        targets.append(Path(export))
+    return targets
+
+
+def _reindex_quiet(folder: Path) -> None:
+    """Reindexa a reunião (a capa e a busca leem do índice) sem propagar erro: o índice é
+    cache derivado/reconstruível, então uma falha aqui não pode abortar a edição (#94)."""
+    try:
+        from . import meetings_index
+
+        meetings_index.index_meeting(folder)
+    except Exception:
+        pass
+
+
 def update_note_meta(folder, *, title: str | None = None, client: str | None = None,
                      extra_targets=None) -> bool:
     """Edita título e/ou cliente de uma reunião JÁ processada mantendo TUDO em sincronia:
@@ -659,10 +681,7 @@ def update_note_meta(folder, *, title: str | None = None, client: str | None = N
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
-    targets = [folder / "notas.md"]
-    export = meta.get("export_path")
-    if export:
-        targets.append(Path(export))
+    targets = _note_targets(folder, meta)
     for t in (extra_targets or []):
         targets.append(Path(t))
     if title:
@@ -689,12 +708,7 @@ def update_note_meta(folder, *, title: str | None = None, client: str | None = N
             lines = _apply_client(lines, client)
         util.atomic_write_text(md, "\n".join(lines) + "\n")
     util.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
-    try:
-        from . import meetings_index
-
-        meetings_index.index_meeting(folder)
-    except Exception:
-        pass
+    _reindex_quiet(folder)
     return True
 
 
@@ -740,13 +754,11 @@ def relabel_speakers(folder: Path, renames: dict[str, str]) -> bool:
     # 3) markdown (nota local + exportada): "Participante N" → Nome, com \b para
     # não casar "Participante 1" dentro de "Participante 12"
     subs = [(re.compile(r"\b" + re.escape(label) + r"\b"), name) for label, name in renames.items()]
-    targets = [folder / "notas.md"]
     try:
-        exp = json.loads((folder / "meta.json").read_text(encoding="utf-8")).get("export_path")
-        if exp:
-            targets.append(Path(exp))
+        meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        pass
+        meta = {}
+    targets = _note_targets(folder, meta)
     for md in targets:
         try:
             text = md.read_text(encoding="utf-8")
@@ -769,12 +781,7 @@ def relabel_speakers(folder: Path, renames: dict[str, str]) -> bool:
         except OSError:
             pass
     # re-indexa (#10): nomes de participantes mudaram → atualiza a busca
-    try:
-        from . import meetings_index
-
-        meetings_index.index_meeting(folder)
-    except Exception:
-        pass
+    _reindex_quiet(folder)
     return True
 
 
