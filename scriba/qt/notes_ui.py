@@ -869,15 +869,20 @@ class NotesWindow(QWidget):
         new_client = self._client.text().strip()
         from .. import notes
 
+        # título vazio não salva: a nota (e o nome do arquivo/pasta) precisa de um título.
+        # Sem esta guarda, título esvaziado era ignorado em silêncio e o "✓ Salvo" mentia.
+        if not new_title:
+            QMessageBox.warning(self, "Título obrigatório",
+                                "A nota precisa de um título. Preencha o campo antes de salvar.")
+            return
         # Fonte da verdade é a pasta da gravação (meta.json + notas.md), de onde o índice
-        # lê — update_note_meta sincroniza os três (meta/notas/.md exportado) + reindexa,
-        # p/ a capa e a busca por cliente refletirem a edição. Fallback (pasta sumiu, só o
-        # .md exportado sobrou): edita só o .md.
+        # lê — update_note_meta sincroniza meta/notas/.md exportado (e o .md EXIBIDO, passado
+        # como alvo extra: pode divergir do export_path se este ficou obsoleto) + reindexa,
+        # p/ a capa e a busca por cliente refletirem. Fallback (pasta sumiu): edita só o .md.
         folder = self._recording_folder_for(path)
         if not (folder.exists() and notes.update_note_meta(
-                folder, title=new_title or None, client=new_client)):
-            if new_title:
-                notes.set_note_title(path, new_title)
+                folder, title=new_title, client=new_client, extra_targets=[path])):
+            notes.set_note_title(path, new_title)
             notes.set_note_client(path, new_client)
         self._header_orig = (new_title, new_client)   # salvo agora -> volta a limpo
         self._update_save_state()

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -109,6 +110,50 @@ class UpdateNoteMetaTests(unittest.TestCase):
 
     def test_pasta_inexistente_devolve_false(self):
         self.assertFalse(notes.update_note_meta(self.rec / "nao-existe", client="x"))
+
+    def test_extra_target_sincroniza_md_exibido_com_export_obsoleto(self):
+        # regressão #92: export_path aponta p/ um .md que não existe mais (pasta de
+        # export trocada / arquivo movido); o .md realmente EXIBIDO na lista é outro.
+        # Sem extra_targets, ele não era tocado e o "✓ Salvo" mentia.
+        folder, _ = self._make(client="")
+        meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
+        meta["export_path"] = str(self.tmp / "sumiu" / "antigo.md")   # obsoleto: não existe
+        (folder / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        exibido = self.tmp / "novo-local" / "2026-07-06_10-24_reuniao.md"
+        exibido.parent.mkdir()
+        exibido.write_text((folder / "notas.md").read_text(encoding="utf-8"), encoding="utf-8")
+
+        ok = notes.update_note_meta(folder, title="Renomeada", client="abaco",
+                                    extra_targets=[exibido])
+        self.assertTrue(ok)
+        conteudo = exibido.read_text(encoding="utf-8")
+        self.assertIn("# Renomeada", conteudo)          # o arquivo EXIBIDO reflete
+        self.assertIn("Cliente: abaco", conteudo)
+
+    def test_uma_escrita_por_alvo_quando_exibido_e_o_export(self):
+        # caso comum: o .md exibido É o export_path -> dedup evita ler/reescrever 2x
+        folder, export = self._make(client="")
+        writes: list[str] = []
+        orig = util.atomic_write_text
+
+        def _spy(p, data):
+            writes.append(str(p))
+            return orig(p, data)
+
+        with mock.patch.object(util, "atomic_write_text", _spy):
+            notes.update_note_meta(folder, title="X", client="acme", extra_targets=[export])
+        # export aparece 1x só (não duplicado), e cada .md foi escrito 1x (título+cliente juntos)
+        self.assertEqual(writes.count(str(export)), 1)
+        self.assertEqual(writes.count(str(folder / "notas.md")), 1)
+
+    def test_titulo_e_cliente_numa_passada(self):
+        folder, export = self._make(client="")
+        self.assertTrue(notes.update_note_meta(folder, title="Novo Título", client="acme"))
+        for md in (folder / "notas.md", export):
+            txt = md.read_text(encoding="utf-8")
+            self.assertIn("# Novo Título", txt)
+            self.assertIn("titulo: Novo Título", txt)
+            self.assertIn("Cliente: acme", txt)
 
 
 class SplitHeaderTests(unittest.TestCase):

@@ -213,6 +213,61 @@ class NotesWindowSmokeTests(unittest.TestCase):
         self.assertFalse(win._save_btn.isEnabled())
         self.assertEqual(win._title.text(), "")
 
+    def test_salvar_titulo_vazio_avisa_e_nao_salva(self):
+        from unittest import mock
+
+        win = self._win()
+        win._refresh_list()
+        win._tree.setCurrentItem(next(iter(win._items)))
+        win._show_selected()
+        win._title.setText("")                 # esvazia o título -> dirty, Salvar habilita
+        self.assertTrue(win._save_btn.isEnabled())
+        with mock.patch("scriba.qt.notes_ui.QMessageBox.warning") as warn, \
+                mock.patch("scriba.notes.update_note_meta") as upd:
+            win._save_header()
+            self.assertTrue(warn.called)       # avisou "Título obrigatório"
+            upd.assert_not_called()            # não salvou nada
+        self.assertTrue(win._save_btn.isEnabled())   # segue dirty (não marcou como salvo)
+
+    def test_salvar_passa_arquivo_exibido_como_alvo_extra(self):
+        # regressão #92: a pasta existe mas o export_path pode estar obsoleto -> a UI passa
+        # o .md EXIBIDO como alvo extra p/ ele nunca ficar dessincronizado do "✓ Salvo"
+        import json
+        from unittest import mock
+
+        from scriba.qt.notes_ui import NotesWindow
+
+        base = Path(tempfile.mkdtemp(prefix="scriba_qt_extra_"))
+        note = base / "2026-07-02_15-30_reuniao.md"
+        note.write_text(_NOTE_MD, encoding="utf-8")
+        rec = base / "_rec"
+        folder = rec / "2026-07-02_15-30"          # caminho legado plano que _recording_folder_for acha
+        folder.mkdir(parents=True)
+        (folder / "notas.md").write_text(_NOTE_MD, encoding="utf-8")
+        (folder / "meta.json").write_text(
+            json.dumps({"status": "done", "export_path": str(base / "sumiu.md")}),  # obsoleto
+            encoding="utf-8")
+
+        class _Out:
+            def resolved_export_dir(_self): return base
+            def resolved_recordings_dir(_self): return rec
+
+        class _App:
+            cfg = type("C", (), {"output": _Out()})()
+            main_win = None
+            def ui(_self, fn): fn()
+
+        win = NotesWindow(_App())
+        win._refresh_list()
+        win._tree.setCurrentItem(next(iter(win._items)))
+        win._show_selected()
+        win._title.setText("Título Novo 92")
+        with mock.patch("scriba.notes.update_note_meta", return_value=True) as upd:
+            win._save_header()
+        upd.assert_called_once()
+        self.assertEqual(upd.call_args.kwargs.get("extra_targets"), [note])
+        self.assertEqual(upd.call_args.kwargs.get("title"), "Título Novo 92")
+
     def test_filtros_colapsaveis_com_badge(self):
         win = self._win()
         win._refresh_list()
