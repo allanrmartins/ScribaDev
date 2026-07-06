@@ -266,5 +266,110 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual(win._rows_lay.count(), 2)
 
 
+@unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")
+class LiveStripErrorTests(unittest.TestCase):
+    """Faixa ao vivo mostra falhas (#90): failed/no_audio recentes entram (o estado
+    vermelho de _live_item era inalcançável e a reunião que falhava sumia da capa);
+    falha ANTIGA (>24h) fica fora - não vira banner eterno."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def _win_com_pastas(self, metas: dict):
+        """MainWindow com cfg fake apontando p/ um tmpdir com uma pasta por meta."""
+        import json
+        import tempfile
+        from types import SimpleNamespace
+
+        from scriba.qt.main_window import MainWindow
+
+        root = Path(tempfile.mkdtemp(prefix="scriba_live_"))
+        for name, meta in metas.items():
+            d = root / name
+            d.mkdir()
+            (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        win = MainWindow(_FakeApp())
+        win.app.cfg = SimpleNamespace(
+            output=SimpleNamespace(resolved_recordings_dir=lambda: root))
+        return win
+
+    def test_failed_recente_aparece_na_faixa(self):
+        from datetime import datetime
+
+        agora = datetime.now().isoformat()
+        win = self._win_com_pastas({
+            "falhou": {"status": "failed", "started_at": agora, "meeting_title": "Weekly"},
+        })
+        win._collect_live()   # _FakeApp.ui é síncrono: aplica e renderiza já
+        self.assertEqual(list(win._live_sig.values()), ["failed"])
+        self.assertEqual(win._live_lay.count(), 1)
+        self.assertTrue(win._live_box.isVisibleTo(win))
+
+    def test_failed_antiga_fica_fora_mas_em_andamento_antiga_entra(self):
+        from datetime import datetime, timedelta
+
+        velho = (datetime.now() - timedelta(days=3)).isoformat()
+        win = self._win_com_pastas({
+            "falhou_velha": {"status": "failed", "started_at": velho},
+            "presa_velha": {"status": "summarizing", "started_at": velho},
+        })
+        win._collect_live()
+        self.assertEqual(list(win._live_sig.values()), ["summarizing"])
+
+    def test_no_audio_recente_aparece(self):
+        from datetime import datetime
+
+        win = self._win_com_pastas({
+            "muda": {"status": "no_audio", "started_at": datetime.now().isoformat()},
+        })
+        win._collect_live()
+        self.assertEqual(list(win._live_sig.values()), ["no_audio"])
+
+    def test_badge_de_erro_mostra_data_nao_agora(self):
+        from PySide6.QtWidgets import QLabel
+
+        from scriba.qt.main_window import MainWindow
+
+        win = MainWindow(_FakeApp())
+        erro = win._live_item({"status": "failed", "started_at": "2026-07-06T10:00:00"})
+        textos = [lb.text() for lb in erro.findChildren(QLabel)]
+        self.assertIn("06/07", textos)
+        self.assertNotIn("agora", textos)
+        vivo = win._live_item({"status": "summarizing", "started_at": "2026-07-06T10:00:00"})
+        self.assertIn("agora", [lb.text() for lb in vivo.findChildren(QLabel)])
+
+
+class RefreshHomeAfterProcessTests(unittest.TestCase):
+    """#90 (corrida rename x refresh): o worker agenda um refresh autoritativo da capa
+    DEPOIS do reindex_renamed; o helper só toca a janela se ela existe e está visível."""
+
+    def _app(self, main_win):
+        from scriba.main import ScribaApp
+
+        app = ScribaApp.__new__(ScribaApp)
+        app.main_win = main_win
+        return app
+
+    def test_refresh_quando_visivel(self):
+        from unittest import mock
+
+        win = mock.Mock()
+        win.isVisible.return_value = True
+        self._app(win)._refresh_home_after_process()
+        win.refresh_home.assert_called_once()
+
+    def test_nao_refresca_oculta_nem_inexistente(self):
+        from unittest import mock
+
+        win = mock.Mock()
+        win.isVisible.return_value = False
+        self._app(win)._refresh_home_after_process()
+        win.refresh_home.assert_not_called()
+        self._app(None)._refresh_home_after_process()   # não estoura
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
