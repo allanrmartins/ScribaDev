@@ -184,6 +184,27 @@ class MeetingsIndexTests(unittest.TestCase):
         self.assertEqual(mi.search(query="Reunião"), [])
         self.assertFalse(mi.remove_meeting(f))  # já não existe
 
+    def test_reindex_renamed_reconcilia_pasta_renomeada(self):
+        # main.py renomeia HH-MM → HH-MM_Título DEPOIS que o build_notes já indexou sob o
+        # nome antigo. Sem reconciliar sobra 1 linha órfã (pasta inexistente) e a capa
+        # duplica a reunião; reindex_renamed remove a antiga e indexa o path novo.
+        old = self._make_meeting("09-31", started_at="2026-07-06T09:31:00", title="Reunião 09:31")
+        mi.index_meeting(old)
+        new = old.with_name("09-31_Reuniao 0931")
+        old.rename(new)
+        self.assertTrue(mi.reindex_renamed(old, new))
+        self.assertEqual(mi.count(), 1)                        # não duplicou
+        rows = mi.search(query="Reunião")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["folder"], str(new))          # aponta p/ o path novo
+
+    def test_reindex_renamed_no_op_quando_nome_igual(self):
+        # rename foi no-op (mesmo path): não remove nada, só reindexa idempotente.
+        f = self._make_meeting("a", started_at="2026-06-10T09:00:00", title="V1")
+        mi.index_meeting(f)
+        self.assertTrue(mi.reindex_renamed(f, f))
+        self.assertEqual(mi.count(), 1)
+
     # -- extração ------------------------------------------------------------
     def test_extract_sem_meta_e_none(self):
         (self.rec / "vazia").mkdir()
