@@ -631,15 +631,22 @@ class MainWindowLiveBandSmokeTests(unittest.TestCase):
         return MainWindow(_App())
 
     def test_render_live_diarizing_mostra_estagio_e_pulso(self):
+        from PySide6.QtCore import QCoreApplication, QEvent, QPropertyAnimation
+
         win = self._win()
         win._render_live([{"folder": "C:/x/09-31", "status": "diarizing",
                            "title": "Reunião", "started_at": "2026-07-06T09:31:00"}])
         self.assertFalse(win._live_box.isHidden())     # faixa visível
         self.assertEqual(win._live_lay.count(), 1)
-        self.assertEqual(len(win._live_anims), 1)      # pulso "respirando" ativo
+        anims = win._live_box.findChildren(QPropertyAnimation)
+        self.assertEqual(len(anims), 1)                # pulso "respirando" ativo
+        # #91: a animação é FILHA do effect que ela anima (morre junto com a linha
+        # no _clear_layout) - nada de QObject órfão acumulando na janela
+        self.assertIs(anims[0].parent(), anims[0].targetObject())
         win._render_live([])                           # sem em-andamento: some sem estourar
         self.assertTrue(win._live_box.isHidden())
-        self.assertEqual(win._live_anims, [])          # animações paradas
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        self.assertEqual(win._live_box.findChildren(QPropertyAnimation), [])
 
     def test_apply_live_conclusao_dispara_refresh_dos_recentes(self):
         win = self._win()
@@ -654,10 +661,12 @@ class MainWindowLiveBandSmokeTests(unittest.TestCase):
         self.assertEqual(calls, [1])                   # recentes recarregados 1x
 
     def test_falha_nao_pulsa_e_usa_cor_de_erro(self):
+        from PySide6.QtCore import QPropertyAnimation
+
         win = self._win()
         win._render_live([{"folder": "C:/x/z", "status": "failed", "title": "X"}])
         self.assertFalse(win._live_box.isHidden())
-        self.assertEqual(len(win._live_anims), 0)      # status terminal não pulsa
+        self.assertEqual(win._live_box.findChildren(QPropertyAnimation), [])  # terminal não pulsa
 
     def test_recente_mostra_titulo_da_nota_e_reflete_rename(self):
         from PySide6.QtWidgets import QLabel

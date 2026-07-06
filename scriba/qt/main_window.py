@@ -101,6 +101,14 @@ def _short_date(iso: str) -> str:
     return f"{iso[8:10]}/{iso[5:7]}" if len(iso) >= 10 else ""
 
 
+def _display_title(m: dict, default: str = "(sem título)") -> str:
+    """Título de exibição de uma reunião, único p/ TODAS as linhas da capa: o TÍTULO
+    da nota (gerado pela IA ou renomeado à mão) vence; cai no meeting_title (título
+    da janela do Teams) só se a nota ainda não tem título (78ad752). Centralizado
+    aqui p/ a linha viva e os recentes nunca divergirem de precedência (#91)."""
+    return m.get("title") or m.get("meeting_title") or default
+
+
 def _started_within(m: dict, cutoff_iso: str) -> bool:
     """True se a reunião começou em `cutoff_iso` ou depois (dentro do recorte da capa, #79).
     Data ausente/corrompida → False (vai p/ o backlog: degradação segura, nunca infla ativas)."""
@@ -155,7 +163,7 @@ class MainWindow(QWidget):
         self._status_items = None        # últimos itens de _render_status (re-tema #70)
         self._live_sig = None            # assinatura {pasta: status} das reuniões em andamento
         self._live_cache: list = []      # último payload de _render_live (re-tema + poll)
-        self._live_anims: list = []      # animações de pulso ativas (mantém referência viva)
+        self._live_busy = False          # 1 scan em voo por vez (#91): I/O lento não empilha
 
         self.setWindowTitle(f"ScribaDev v{__version__}")
         self.setMinimumSize(520, 560)
@@ -624,11 +632,7 @@ class MainWindow(QWidget):
         rl.addWidget(ico, 0, Qt.AlignTop)
         mid = QVBoxLayout()
         mid.setSpacing(1)
-        # o TÍTULO da nota (gerado pela IA ou editado à mão) vem primeiro — é o que a lista
-        # de Notas mostra e o que o usuário renomeia; cai no meeting_title (título da janela
-        # do Teams) só se a nota não tem título. Antes era o contrário: renomear não refletia.
-        title = m.get("title") or m.get("meeting_title") or "(sem título)"
-        tl = QLabel(_elide(title, 38))
+        tl = QLabel(_elide(_display_title(m), 38))
         tl.setStyleSheet("font-weight:bold;")
         tl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)  # encolhe, não empurra o chip
         meta = self._recent_meta(m)
@@ -664,37 +668,45 @@ class MainWindow(QWidget):
     # ---- reuniões em andamento (status vivo na capa) --------------------------
 
     def _poll_live(self) -> None:
-        """Timer (1,2s): varre as pastas em andamento fora da GUI e atualiza a faixa só
-        quando o estágio muda. Ocioso se a capa não está visível ou não há app real."""
+        """Timer (1,2s ativo / 10s ocioso): varre as pastas em andamento fora da GUI e
+        atualiza a faixa só quando o estágio muda. Ocioso se a capa não está visível
+        ou não há app real. `_live_busy` serializa: no máximo 1 scan em voo - I/O
+        lento (OneDrive) não empilha threads nem aplica snapshot fora de ordem (#91)."""
         if not self.isVisible() or getattr(self.app, "cfg", None) is None:
             return
+        if self._live_busy:
+            return
+        self._live_busy = True
         threading.Thread(target=self._collect_live, daemon=True, name="live").start()
 
     def _collect_live(self) -> None:
-        from .. import notes
-
-        # "recording" fica fora: enquanto grava, o card de call já mostra "Gravando"; a
-        # faixa só nasce quando o PROCESSAMENTO começa ("assim que a call termina").
-        # failed/no_audio ENTRAM (#90): sem eles a reunião que falha simplesmente
-        # sumia da capa - o estado vermelho de _live_item nunca renderizava.
-        statuses = tuple(s for s in util.IN_PROGRESS_STATUSES if s != "recording")
-        statuses += ("failed", "no_audio")
         try:
-            rec_dir = self.app.cfg.output.resolved_recordings_dir()
-            items = notes.scan_meetings_by_status(rec_dir, statuses)
-        except Exception as e:
-            log.debug("scan de em-andamento falhou: %s", e)
-            return
-        # erro terminal só aparece se RECENTE (24h): a capa mostra "o que está
-        # acontecendo"; falha antiga vive na janela de Notas, não vira banner eterno
-        from datetime import datetime, timedelta
+            from .. import notes
 
-        cutoff = (datetime.now() - timedelta(hours=24)).isoformat()
-        items = [m for m in items
-                 if m.get("status") not in ("failed", "no_audio") or _started_within(m, cutoff)]
-        items.sort(key=lambda m: (m.get("started_at") or ""), reverse=True)
-        sig = {m["folder"]: m.get("status") for m in items}
-        self.app.ui(lambda: self._apply_live(items, sig))
+            # "recording" fica fora: enquanto grava, o card de call já mostra "Gravando"; a
+            # faixa só nasce quando o PROCESSAMENTO começa ("assim que a call termina").
+            # failed/no_audio ENTRAM (#90): sem eles a reunião que falha simplesmente
+            # sumia da capa - o estado vermelho de _live_item nunca renderizava.
+            statuses = tuple(s for s in util.IN_PROGRESS_STATUSES if s != "recording")
+            statuses += ("failed", "no_audio")
+            try:
+                rec_dir = self.app.cfg.output.resolved_recordings_dir()
+                items = notes.scan_meetings_by_status(rec_dir, statuses)
+            except Exception as e:
+                log.debug("scan de em-andamento falhou: %s", e)
+                return
+            # erro terminal só aparece se RECENTE (24h): a capa mostra "o que está
+            # acontecendo"; falha antiga vive na janela de Notas, não vira banner eterno
+            from datetime import datetime, timedelta
+
+            cutoff = (datetime.now() - timedelta(hours=24)).isoformat()
+            items = [m for m in items
+                     if m.get("status") not in ("failed", "no_audio") or _started_within(m, cutoff)]
+            items.sort(key=lambda m: (m.get("started_at") or ""), reverse=True)
+            sig = {m["folder"]: m.get("status") for m in items}
+            self.app.ui(lambda: self._apply_live(items, sig))
+        finally:
+            self._live_busy = False
 
     def _apply_live(self, items: list, sig: dict) -> None:
         if sig == self._live_sig:
@@ -704,15 +716,16 @@ class MainWindow(QWidget):
         # recentes p/ ela aparecer como nota — o índice já foi populado pelo build_notes.
         completed = bool(prev) and any(f not in sig for f in prev)
         self._live_sig = sig
+        # com trabalho em andamento o poll acompanha o estágio (1,2s); ocioso, relaxa
+        # p/ 10s - a varredura (rglob + parse de todos os meta.json) não precisa rodar
+        # quase-contínua com zero reuniões processando (#91)
+        self._live_timer.setInterval(1200 if sig else 10_000)
         self._render_live(items)
         if completed:
             self.refresh_home()
 
     def _render_live(self, items: list) -> None:
         self._live_cache = items
-        for a in self._live_anims:
-            a.stop()
-        self._live_anims = []
         _clear_layout(self._live_lay)
         if not items:
             self._live_box.setVisible(False)
@@ -737,21 +750,22 @@ class MainWindow(QWidget):
         ico.setPixmap(theme.qicon(_STAGE_ICON.get(status, "hourglass"),
                                   color=t.accent_hover).pixmap(15, 15))
         rl.addWidget(ico, 0, Qt.AlignVCenter)
-        # pulso "respirando" no ícone (aproxima o shimmer do mockup, nativo do Qt)
+        # pulso "respirando" no ícone (aproxima o shimmer do mockup, nativo do Qt);
+        # a animação é FILHA do effect: morre junto com a linha no _clear_layout -
+        # sem lista de bookkeeping nem QObjects órfãos acumulando na janela (#91)
         if status not in ("failed", "no_audio"):
             eff = QGraphicsOpacityEffect(ico)
             ico.setGraphicsEffect(eff)
-            anim = QPropertyAnimation(eff, b"opacity", self)
+            anim = QPropertyAnimation(eff, b"opacity", eff)
             anim.setDuration(1500)
             anim.setStartValue(1.0)
             anim.setKeyValueAt(0.5, 0.35)
             anim.setEndValue(1.0)
             anim.setLoopCount(-1)
             anim.start()
-            self._live_anims.append(anim)
         mid = QVBoxLayout()
         mid.setSpacing(1)
-        title = m.get("meeting_title") or m.get("title") or "Processando reunião…"
+        title = _display_title(m, "Processando reunião…")
         tl = QLabel(_elide(title, 38))
         tl.setStyleSheet("font-weight:bold;")
         tl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)

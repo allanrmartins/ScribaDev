@@ -342,6 +342,70 @@ class LiveStripErrorTests(unittest.TestCase):
         self.assertIn("agora", [lb.text() for lb in vivo.findChildren(QLabel)])
 
 
+@unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")
+class LivePollRobustnessTests(unittest.TestCase):
+    """#91: poll serializado (1 scan em voo por vez), backoff quando ocioso e
+    precedência de título unificada entre linha viva e recentes."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def _win(self):
+        from scriba.qt.main_window import MainWindow
+
+        return MainWindow(_FakeApp())
+
+    def test_poll_nao_empilha_scans(self):
+        from types import SimpleNamespace
+        from unittest import mock
+
+        win = self._win()
+        win.app.cfg = SimpleNamespace()   # passa o guard de "app real"
+        win.show()                        # offscreen: isVisible() vira True
+        self.addCleanup(win.hide)
+        with mock.patch("scriba.qt.main_window.threading.Thread") as th:
+            win._poll_live()              # 1º tick: dispara e marca busy
+            win._poll_live()              # 2º tick com scan "em voo": não empilha
+            self.assertEqual(th.call_count, 1)
+        self.assertTrue(win._live_busy)
+
+    def test_collect_libera_busy_mesmo_com_erro(self):
+        win = self._win()                 # cfg None: o scan estoura e é engolido
+        win._live_busy = True
+        win._collect_live()
+        self.assertFalse(win._live_busy)
+
+    def test_backoff_ocioso_e_rapido_com_trabalho(self):
+        win = self._win()
+        win._apply_live([{"folder": "x", "status": "summarizing"}], {"x": "summarizing"})
+        self.assertEqual(win._live_timer.interval(), 1200)
+        win._apply_live([], {})
+        self.assertEqual(win._live_timer.interval(), 10_000)
+
+    def test_display_title_precedencia(self):
+        from scriba.qt.main_window import _display_title
+
+        self.assertEqual(_display_title({"title": "A", "meeting_title": "B"}), "A")
+        self.assertEqual(_display_title({"meeting_title": "B"}), "B")
+        self.assertEqual(_display_title({}), "(sem título)")
+        self.assertEqual(_display_title({}, "Processando…"), "Processando…")
+
+    def test_live_item_usa_titulo_da_nota_primeiro(self):
+        from PySide6.QtWidgets import QLabel
+
+        # regressão do 78ad752 na linha VIVA: reunião renomeada e reprocessada
+        # mostrava o meeting_title velho do Teams e "mudava de nome" ao concluir
+        win = self._win()
+        row = win._live_item({"status": "summarizing", "title": "Renomeada",
+                              "meeting_title": "Meeting join | Teams"})
+        textos = [lb.text() for lb in row.findChildren(QLabel)]
+        self.assertTrue(any("Renomeada" in t for t in textos))
+        self.assertFalse(any("Teams" in t for t in textos))
+
+
 class RefreshHomeAfterProcessTests(unittest.TestCase):
     """#90 (corrida rename x refresh): o worker agenda um refresh autoritativo da capa
     DEPOIS do reindex_renamed; o helper só toca a janela se ela existe e está visível."""
