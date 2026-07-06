@@ -591,15 +591,12 @@ def build_notes(folder: Path) -> Path | None:
     return export_path
 
 
-def set_note_client(md_path: Path, new_client: str) -> None:
-    """Atualiza o cliente de uma nota: linha `cliente:` do frontmatter + linha de
-    metadados sob o título (`*data · N min · Cliente: X*`). Vazio remove o cliente."""
+def _apply_client(lines: list[str], new_client: str) -> list[str]:
+    """Núcleo (lines->lines) de set_note_client: linha `cliente:` do frontmatter +
+    linha de metadados sob o título (`*data · N min · Cliente: X*`). Puro, sem I/O,
+    p/ compor com _apply_title numa única leitura/escrita por arquivo (#92)."""
     import re
 
-    new_client = new_client.strip()
-    if not md_path.exists():
-        return
-    lines = md_path.read_text(encoding="utf-8").splitlines()
     out: list[str] = []
     in_front = bool(lines and lines[0].strip() == "---")
     front_closed = not in_front
@@ -631,16 +628,31 @@ def set_note_client(md_path: Path, new_client: str) -> None:
                     continue
                 meta_done = True
         out.append(line)
-    util.atomic_write_text(md_path, "\n".join(out) + "\n")
+    return out
 
 
-def update_note_meta(folder, *, title: str | None = None, client: str | None = None) -> bool:
+def set_note_client(md_path: Path, new_client: str) -> None:
+    """Atualiza o cliente de uma nota: linha `cliente:` do frontmatter + linha de
+    metadados sob o título (`*data · N min · Cliente: X*`). Vazio remove o cliente."""
+    if not md_path.exists():
+        return
+    lines = md_path.read_text(encoding="utf-8").splitlines()
+    util.atomic_write_text(md_path, "\n".join(_apply_client(lines, new_client.strip())) + "\n")
+
+
+def update_note_meta(folder, *, title: str | None = None, client: str | None = None,
+                     extra_targets=None) -> bool:
     """Edita título e/ou cliente de uma reunião JÁ processada mantendo TUDO em sincronia:
     `meta.json` (a FONTE que o índice lê para título/cliente), `notas.md` (fonte da verdade
     da pasta) e a cópia `.md` exportada; depois reindexa — a capa e a busca por cliente leem
     do índice, então sem isto a edição só ficava no `.md` exportado e nunca refletia. `title`/
     `client` = None não mexe naquele campo; `client=""` remove o cliente. False se a pasta/
-    meta sumiu (o chamador cai no fallback de editar só o `.md`)."""
+    meta sumiu (o chamador cai no fallback de editar só o `.md`).
+
+    `extra_targets`: .md adicionais a sincronizar - a UI passa o arquivo que está EXIBINDO,
+    que pode divergir de `export_path` se este ficou obsoleto (pasta de export trocada, .md
+    movido); sem isto o "✓ Salvo" mentia e a lista seguia com o valor antigo (#92). Cada
+    alvo é lido e reescrito UMA vez (título+cliente na mesma passada), não 2x por campo."""
     folder = Path(folder)
     meta_path = folder / "meta.json"
     try:
@@ -651,16 +663,31 @@ def update_note_meta(folder, *, title: str | None = None, client: str | None = N
     export = meta.get("export_path")
     if export:
         targets.append(Path(export))
+    for t in (extra_targets or []):
+        targets.append(Path(t))
     if title:
         title = title.strip()
         meta["title"] = title
-        for md in targets:
-            set_note_title(md, title)
     if client is not None:
         client = client.strip()
         meta["client"] = client
-        for md in targets:
-            set_note_client(md, client)
+    # dedup por caminho resolvido (o .md exibido costuma SER o export_path): evita ler e
+    # reescrever o mesmo arquivo duas vezes
+    seen: set = set()
+    for md in targets:
+        try:
+            key = md.resolve()
+        except OSError:
+            key = md
+        if key in seen or not md.exists():
+            continue
+        seen.add(key)
+        lines = md.read_text(encoding="utf-8").splitlines()
+        if title:
+            lines = _apply_title(lines, title)
+        if client is not None:
+            lines = _apply_client(lines, client)
+        util.atomic_write_text(md, "\n".join(lines) + "\n")
     util.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
     try:
         from . import meetings_index
@@ -1033,12 +1060,9 @@ def archive_old_action_items(meetings: list[dict], older_than_days: int = 30,
     return n
 
 
-def set_note_title(md_path: Path, new_title: str) -> None:
-    """Atualiza o título de uma nota: linha `titulo:` do frontmatter + primeiro H1."""
-    new_title = new_title.strip()
-    if not new_title or not md_path.exists():
-        return
-    lines = md_path.read_text(encoding="utf-8").splitlines()
+def _apply_title(lines: list[str], new_title: str) -> list[str]:
+    """Núcleo (lines->lines) de set_note_title: linha `titulo:` do frontmatter +
+    primeiro H1. Puro, sem I/O. Pressupõe new_title não-vazio."""
     out: list[str] = []
     in_front = bool(lines and lines[0].strip() == "---")
     front_closed = not in_front
@@ -1060,4 +1084,13 @@ def set_note_title(md_path: Path, new_title: str) -> None:
             h1_done = True
             continue
         out.append(line)
-    util.atomic_write_text(md_path, "\n".join(out) + "\n")
+    return out
+
+
+def set_note_title(md_path: Path, new_title: str) -> None:
+    """Atualiza o título de uma nota: linha `titulo:` do frontmatter + primeiro H1."""
+    new_title = new_title.strip()
+    if not new_title or not md_path.exists():
+        return
+    lines = md_path.read_text(encoding="utf-8").splitlines()
+    util.atomic_write_text(md_path, "\n".join(_apply_title(lines, new_title)) + "\n")
