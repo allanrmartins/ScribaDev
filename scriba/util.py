@@ -14,6 +14,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import NamedTuple
 
 log = logging.getLogger("scriba.util")
 
@@ -58,30 +59,46 @@ def set_explicit_app_id(app_id: str = APP_AUMID) -> None:
     except Exception:
         pass
 
-# Estágios do processamento pós-call (status do meta.json) → (rótulo, fração 0..1).
-# Fonte única usada pela pílula e pela barra de progresso da aba Notas.
-PROCESSING_STAGES = {
-    "recording": ("Gravando…", 0.05),
-    "recorded": ("Na fila…", 0.12),
-    "transcribing": ("Transcrevendo…", 0.40),
-    "diarizing": ("Separando vozes…", 0.60),
-    "transcribed": ("Transcrição pronta", 0.72),
-    "summarizing": ("Gerando resumo…", 0.88),
-    "done": ("Pronto", 1.0),
-    # terminais de erro (não entram em IN_PROGRESS_STATUSES: nada de loop infinito)
-    "failed": ("Falhou", 1.0),
-    "no_audio": ("Sem áudio gravado", 1.0),
+class Stage(NamedTuple):
+    """Um estágio do processamento pós-call (status do meta.json)."""
+    label: str          # rótulo p/ a UI (pílula, barra de progresso, faixa da capa)
+    fraction: float     # progresso 0..1 (a barra nunca anda p/ trás)
+    icon: str           # ícone Fluent na faixa "em andamento" da capa
+    in_progress: bool   # ainda não virou nota (aparece como "em andamento")
+    is_error: bool = False   # terminal de erro (não pulsa; cor de erro)
+
+
+# TABELA ÚNICA de estágios: rótulo, progresso, ícone e flags. Adicionar um estágio é
+# editar SÓ aqui — as demais estruturas (IN_PROGRESS_STATUSES, ícones, rótulos) derivam
+# desta tabela, então nenhum lugar fica pra trás (#94). Ordem = ordem do progresso.
+STAGES: dict[str, Stage] = {
+    "recording":    Stage("Gravando…",         0.05, "hourglass",  in_progress=True),
+    "recorded":     Stage("Na fila…",           0.12, "hourglass",  in_progress=True),
+    "transcribing": Stage("Transcrevendo…",     0.40, "edit",       in_progress=True),
+    "diarizing":    Stage("Separando vozes…",   0.60, "people",     in_progress=True),
+    "transcribed":  Stage("Transcrição pronta", 0.72, "checkmark",  in_progress=True),
+    "summarizing":  Stage("Gerando resumo…",    0.88, "sparkle",    in_progress=True),
+    "done":         Stage("Pronto",             1.00, "checkmark",  in_progress=False),
+    # terminais de erro: in_progress=False (não entram em IN_PROGRESS_STATUSES: nada de
+    # loop infinito) mas is_error=True (a capa os mostra em vermelho, sem pulso)
+    "failed":       Stage("Falhou",             1.00, "warning",    in_progress=False, is_error=True),
+    "no_audio":     Stage("Sem áudio gravado",  1.00, "warning",    in_progress=False, is_error=True),
 }
+_STAGE_FALLBACK = Stage("Processando…", 0.3, "hourglass", in_progress=False)
 # status que ainda não viraram nota (aparecem como "em andamento" na lista)
-IN_PROGRESS_STATUSES = ("recording", "recorded", "transcribing", "diarizing", "transcribed", "summarizing")
+IN_PROGRESS_STATUSES = tuple(s for s, st in STAGES.items() if st.in_progress)
+
+
+def stage(status: str | None) -> Stage:
+    return STAGES.get(status or "", _STAGE_FALLBACK)
 
 
 def stage_label(status: str | None) -> str:
-    return PROCESSING_STAGES.get(status or "", ("Processando…", 0.3))[0]
+    return stage(status).label
 
 
 def stage_fraction(status: str | None) -> float:
-    return PROCESSING_STAGES.get(status or "", ("", 0.3))[1]
+    return stage(status).fraction
 
 _FILETIME_EPOCH = datetime(1601, 1, 1, tzinfo=timezone.utc)
 

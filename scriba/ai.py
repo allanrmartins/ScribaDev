@@ -118,7 +118,7 @@ def _claude_cli(cfg, system_prompt, user_payload, *, timeout, cwd, hidden_window
         if _looks_logged_out(combined):
             global last_error
             last_error = ERR_LOGGED_OUT
-            print(f"resumo: claude CLI não está logada — rode `claude` e faça /login "
+            print(f"resumo: claude CLI não está logada - rode `claude` e faça /login "
                   f"(retornou {proc.returncode})")
         else:
             tail = combined.strip().splitlines()

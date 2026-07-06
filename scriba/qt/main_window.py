@@ -39,26 +39,6 @@ log = logging.getLogger("scriba.qt.main_window")
 _LEVELS = {"ok": "ok", "warn": "warn", "off": "muted"}  # nível -> token de cor
 _RECENT_N = 5    # reuniões recentes mostradas na capa
 _PENDING_N = 4   # pendências abertas mostradas na capa
-# ícone Fluent por estágio da reunião em andamento (capa): troca conforme o pipeline
-# avança (Transcrevendo -> Separando vozes -> Gerando resumo). Ver util.PROCESSING_STAGES.
-_STAGE_ICON = {
-    "recorded": "hourglass",
-    "transcribing": "edit",
-    "diarizing": "people",
-    "transcribed": "checkmark",
-    "summarizing": "sparkle",
-    "failed": "warning",
-    "no_audio": "warning",
-}
-
-
-def _rgba(hexc: str, a: float) -> str:
-    """'#rrggbb' -> 'rgba(r,g,b,a)' para tingir levemente a linha em andamento com o acento."""
-    hexc = (hexc or "#000000").lstrip("#")
-    r, g, b = int(hexc[0:2], 16), int(hexc[2:4], 16), int(hexc[4:6], 16)
-    return f"rgba({r},{g},{b},{a})"
-
-
 def _fmt(seconds: float) -> str:
     s = max(0, int(seconds))
     return f"{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60:02d}:{s % 60:02d}"
@@ -161,8 +141,8 @@ class MainWindow(QWidget):
         self._call_state_kind = "idle"   # idle | rec | call (p/ estilizar o card)
         self._home_data = None           # último payload de _render_home (re-tema #70)
         self._status_items = None        # últimos itens de _render_status (re-tema #70)
-        self._live_sig = None            # assinatura {pasta: status} das reuniões em andamento
-        self._live_cache: list = []      # último payload de _render_live (re-tema + poll)
+        self._live_cache: list = []      # reuniões em andamento exibidas (re-tema + poll +
+                                         # deteção de mudança: a assinatura deriva daqui, #94)
         self._live_busy = False          # 1 scan em voo por vez (#91): I/O lento não empilha
 
         self.setWindowTitle(f"ScribaDev v{__version__}")
@@ -620,37 +600,48 @@ class MainWindow(QWidget):
             old.linkActivated.connect(lambda _=None: self._open_pending_hub())
             self._pending_lay.addWidget(old)
 
-    def _recent_item(self, m: dict) -> QWidget:
-        t = theme.active()
-        note_path = (m.get("export_path") or "").strip()
-        row = _ClickRow(lambda p=note_path: self._open_recent(p))
+    def _meeting_row(self, on_click, ico: QLabel, title: str, subtitle: QWidget,
+                     trailing: QWidget | None = None, *, icon_align=Qt.AlignVCenter) -> QWidget:
+        """Esqueleto comum das linhas de reunião da capa (recentes e em andamento): linha
+        clicável + ícone 15px + (título bold elidido a 38 / subtítulo) + widget à direita
+        opcional, com as mesmas margens/espaçamento e o SizePolicy.Ignored que segura o
+        chip no lugar. Só o que DIVERGE (ícone, cor do subtítulo, pulso, chip/badge, estilo
+        da linha) fica nos chamadores — um ajuste de layout muda os dois de uma vez (#94)."""
+        row = _ClickRow(on_click)
         rl = QHBoxLayout(row)
         rl.setContentsMargins(8, 6, 8, 6)
         rl.setSpacing(9)
-        ico = QLabel()
-        ico.setPixmap(theme.qicon("folder", color=t.muted).pixmap(15, 15))
-        rl.addWidget(ico, 0, Qt.AlignTop)
+        rl.addWidget(ico, 0, icon_align)
         mid = QVBoxLayout()
         mid.setSpacing(1)
-        tl = QLabel(_elide(_display_title(m), 38))
+        tl = QLabel(_elide(title, 38))
         tl.setStyleSheet("font-weight:bold;")
         tl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)  # encolhe, não empurra o chip
-        meta = self._recent_meta(m)
-        ml = QLabel(meta)
+        subtitle.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        mid.addWidget(tl)
+        mid.addWidget(subtitle)
+        rl.addLayout(mid, 1)
+        if trailing is not None:
+            rl.addWidget(trailing, 0, Qt.AlignVCenter)
+        return row
+
+    def _recent_item(self, m: dict) -> QWidget:
+        t = theme.active()
+        note_path = (m.get("export_path") or "").strip()
+        ico = QLabel()
+        ico.setPixmap(theme.qicon("folder", color=t.muted).pixmap(15, 15))
+        ml = QLabel(self._recent_meta(m))
         ml.setProperty("role", "muted")
         ml.setStyleSheet(f"color:{t.muted}; font-size:{t.font_size_small}pt;")
-        ml.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        mid.addWidget(tl)
-        mid.addWidget(ml)
-        rl.addLayout(mid, 1)
+        chip = None
         client = (m.get("client") or "").strip()
         if client:
             chip = QLabel(_elide(client, 18))
             chip.setStyleSheet(
                 f"background:{t.field}; color:{t.muted}; border-radius:9px;"
                 f" padding:1px 8px; font-size:{t.font_size_small}pt;")
-            rl.addWidget(chip, 0, Qt.AlignVCenter)
-        return row
+        return self._meeting_row(lambda p=note_path: self._open_recent(p), ico,
+                                 _display_title(m), ml, chip, icon_align=Qt.AlignTop)
 
     def _recent_meta(self, m: dict) -> str:
         parts = []
@@ -685,10 +676,11 @@ class MainWindow(QWidget):
 
             # "recording" fica fora: enquanto grava, o card de call já mostra "Gravando"; a
             # faixa só nasce quando o PROCESSAMENTO começa ("assim que a call termina").
-            # failed/no_audio ENTRAM (#90): sem eles a reunião que falha simplesmente
-            # sumia da capa - o estado vermelho de _live_item nunca renderizava.
-            statuses = tuple(s for s in util.IN_PROGRESS_STATUSES if s != "recording")
-            statuses += ("failed", "no_audio")
+            # Os terminais de ERRO entram (#90): sem eles a reunião que falha simplesmente
+            # sumia da capa - o estado vermelho de _live_item nunca renderizava. Tudo deriva
+            # da tabela util.STAGES (#94): novo estágio não precisa tocar aqui.
+            statuses = tuple(s for s, st in util.STAGES.items()
+                             if (st.in_progress and s != "recording") or st.is_error)
             try:
                 rec_dir = self.app.cfg.output.resolved_recordings_dir()
                 items = notes.scan_meetings_by_status(rec_dir, statuses)
@@ -701,21 +693,26 @@ class MainWindow(QWidget):
 
             cutoff = (datetime.now() - timedelta(hours=24)).isoformat()
             items = [m for m in items
-                     if m.get("status") not in ("failed", "no_audio") or _started_within(m, cutoff)]
+                     if not util.stage(m.get("status")).is_error or _started_within(m, cutoff)]
             items.sort(key=lambda m: (m.get("started_at") or ""), reverse=True)
-            sig = {m["folder"]: m.get("status") for m in items}
-            self.app.ui(lambda: self._apply_live(items, sig))
+            self.app.ui(lambda: self._apply_live(items))
         finally:
             self._live_busy = False
 
-    def _apply_live(self, items: list, sig: dict) -> None:
-        if sig == self._live_sig:
+    @staticmethod
+    def _live_signature(items: list) -> dict:
+        """Assinatura {pasta: status} p/ detectar mudança. Derivada dos itens (não é estado
+        armazenado à parte): o cache é a única fonte, sem risco de dessincronizar (#94)."""
+        return {m["folder"]: m.get("status") for m in items}
+
+    def _apply_live(self, items: list) -> None:
+        sig = self._live_signature(items)
+        prev = self._live_signature(self._live_cache)
+        if sig == prev:
             return
-        prev = self._live_sig
         # alguma reunião SAIU de "em andamento" (virou nota pronta ou falhou): atualiza os
         # recentes p/ ela aparecer como nota — o índice já foi populado pelo build_notes.
         completed = bool(prev) and any(f not in sig for f in prev)
-        self._live_sig = sig
         # com trabalho em andamento o poll acompanha o estágio (1,2s); ocioso, relaxa
         # p/ 10s - a varredura (rglob + parse de todos os meta.json) não precisa rodar
         # quase-contínua com zero reuniões processando (#91)
@@ -736,24 +733,14 @@ class MainWindow(QWidget):
 
     def _live_item(self, m: dict) -> QWidget:
         t = theme.active()
-        status = m.get("status") or ""
-        folder = (m.get("folder") or "").strip()
-        row = _ClickRow(lambda: self._open_live())
-        row.setObjectName("liveRow")
-        row.setStyleSheet(
-            f"#liveRow {{ background:{_rgba(t.accent, 0.11)};"
-            f" border-left:2px solid {t.accent}; border-radius:8px; }}")
-        rl = QHBoxLayout(row)
-        rl.setContentsMargins(8, 6, 8, 6)
-        rl.setSpacing(9)
+        st_info = util.stage(m.get("status"))
         ico = QLabel()
-        ico.setPixmap(theme.qicon(_STAGE_ICON.get(status, "hourglass"),
-                                  color=t.accent_hover).pixmap(15, 15))
-        rl.addWidget(ico, 0, Qt.AlignVCenter)
+        ico.setPixmap(theme.qicon(st_info.icon, color=t.accent_hover).pixmap(15, 15))
         # pulso "respirando" no ícone (aproxima o shimmer do mockup, nativo do Qt);
         # a animação é FILHA do effect: morre junto com a linha no _clear_layout -
-        # sem lista de bookkeeping nem QObjects órfãos acumulando na janela (#91)
-        if status not in ("failed", "no_audio"):
+        # sem lista de bookkeeping nem QObjects órfãos acumulando na janela (#91).
+        # Erro terminal não pulsa.
+        if not st_info.is_error:
             eff = QGraphicsOpacityEffect(ico)
             ico.setGraphicsEffect(eff)
             anim = QPropertyAnimation(eff, b"opacity", eff)
@@ -763,24 +750,18 @@ class MainWindow(QWidget):
             anim.setEndValue(1.0)
             anim.setLoopCount(-1)
             anim.start()
-        mid = QVBoxLayout()
-        mid.setSpacing(1)
-        title = _display_title(m, "Processando reunião…")
-        tl = QLabel(_elide(title, 38))
-        tl.setStyleSheet("font-weight:bold;")
-        tl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        st = QLabel(util.stage_label(status))
-        err = status in ("failed", "no_audio")
-        st.setStyleSheet(f"color:{t.rec if err else t.accent_hover};"
-                         f" font-size:{t.font_size_small}pt; font-weight:600;")
-        st.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        mid.addWidget(tl)
-        mid.addWidget(st)
-        rl.addLayout(mid, 1)
+        sub = QLabel(st_info.label)
+        sub.setStyleSheet(f"color:{t.rec if st_info.is_error else t.accent_hover};"
+                          f" font-size:{t.font_size_small}pt; font-weight:600;")
         # linha de erro não é "agora": mostra a data curta da reunião que falhou
-        badge = QLabel(_short_date(m.get("started_at")) if err else "agora")
+        badge = QLabel(_short_date(m.get("started_at")) if st_info.is_error else "agora")
         badge.setStyleSheet(f"color:{t.faint}; font-size:{t.font_size_small}pt;")
-        rl.addWidget(badge, 0, Qt.AlignVCenter)
+        row = self._meeting_row(lambda: self._open_live(), ico,
+                                _display_title(m, "Processando reunião…"), sub, badge)
+        row.setObjectName("liveRow")
+        row.setStyleSheet(
+            f"#liveRow {{ background:{theme._rgba(t.accent, 0.11)};"
+            f" border-left:2px solid {t.accent}; border-radius:8px; }}")
         return row
 
     def _open_live(self) -> None:
