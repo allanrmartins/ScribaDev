@@ -851,6 +851,15 @@ class ScribaApp:
             renamed = util.rename_recording_folder(folder, title)
             if renamed != folder:
                 log.info("pasta renomeada: %s", renamed.name)
+                # o build_notes indexou a nota sob o nome ANTIGO da pasta; o índice é
+                # chaveado pelo path, então reconcilia (remove a órfã, indexa o path novo)
+                # senão a capa mostra a reunião com pasta quebrada / duplicada
+                try:
+                    from . import meetings_index
+
+                    meetings_index.reindex_renamed(folder, renamed)
+                except Exception:
+                    log.exception("índice: falha ao reconciliar rename de %s", folder.name)
                 folder = renamed
         log.info("concluído %s -> %s", folder.name, export_path)
 

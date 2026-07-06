@@ -286,6 +286,18 @@ def remove_meeting(folder) -> bool:
         return False
 
 
+def reindex_renamed(old_folder, new_folder) -> bool:
+    """Reconcilia o índice quando a pasta da gravação é renomeada DEPOIS de indexada
+    (main.py renomeia HH-MM → HH-MM_Título no pós-processo, após o build_notes já ter
+    indexado sob o nome antigo). Como o índice é chaveado pelo PATH da pasta, sem isto
+    fica uma linha órfã apontando p/ a pasta que não existe mais — some no próximo
+    `reindex`, mas até lá a capa mostra a reunião com path quebrado (e duplicada se
+    houver um re-summarize sob o path novo). Remove a entrada antiga e indexa a nova."""
+    if str(old_folder) != str(new_folder):
+        remove_meeting(old_folder)
+    return index_meeting(new_folder)
+
+
 def set_action_state(folder, key: str, state: str) -> bool:
     """Atualiza no índice o `state` de UMA pendência (snapshot), sem reindexar a nota.
     Chamado por `notes.set_action_done` logo após gravar o `.actions.json` (que segue
