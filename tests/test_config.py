@@ -13,6 +13,24 @@ from scriba import config, util  # noqa: E402
 _TRUNCATED = '[detection]\napps = "isto nao fecha aspas'
 
 
+class OutputConfigTests(unittest.TestCase):
+    def setUp(self):
+        self._app0 = util.APP_DIR
+
+    def tearDown(self):
+        util.APP_DIR = self._app0
+
+    def test_export_dir_default_e_local_em_appdir(self):
+        # default (export_dir vazio) = %LOCALAPPDATA%\ScribaDev\Notas, fora do OneDrive
+        util.APP_DIR = Path(r"C:\Users\X\AppData\Local\ScribaDev")
+        self.assertEqual(config.Output(export_dir="").resolved_export_dir(),
+                         util.APP_DIR / "Notas")
+
+    def test_export_dir_explicito_vence(self):
+        self.assertEqual(config.Output(export_dir=r"D:\minhas notas").resolved_export_dir(),
+                         Path(r"D:\minhas notas"))
+
+
 class ConfigLoadTests(unittest.TestCase):
     def setUp(self):
         self.d = Path(tempfile.mkdtemp(prefix="scriba_cfg_"))

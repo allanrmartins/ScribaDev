@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 from pathlib import Path
@@ -10,6 +11,8 @@ from pathlib import Path
 from . import merge as merge_mod
 from . import util
 from .config import load
+
+log = logging.getLogger("scriba.notes")
 
 SYSTEM_PROMPT = """\
 Você é um gerador de registros técnicos a partir de transcrições automáticas de \
@@ -591,6 +594,102 @@ def build_notes(folder: Path) -> Path | None:
     return export_path
 
 
+# Antigo default de export (pré-migração): Documentos\<nome>, que na maioria das máquinas
+# cai no OneDrive. "Scriba" é o nome pré-fork (notas bem antigas ainda apontam p/ lá).
+_LEGACY_EXPORT_NAMES = ("ScribaDev", "Scriba")
+
+
+def migrate_export_dir() -> int:
+    """Migração one-time: tira as notas .md do antigo default (Documentos\\<nome>, que
+    normalmente fica no OneDrive) e leva p/ o novo default LOCAL (%LOCALAPPDATA%\\
+    ScribaDev\\Notas), reescrevendo o `export_path` dos meta.json e reindexando a busca.
+
+    Só age quando o usuário NÃO definiu `output.export_dir` à mão (senão respeita a
+    escolha dele). Idempotente: grava `export_migrated_v1` no state e vira no-op depois.
+    Devolve o nº de notas movidas. NUNCA levanta — falha aqui não pode impedir o app de
+    abrir (o índice/notas são reconstruíveis das pastas de gravação)."""
+    try:
+        if util.read_state().get("export_migrated_v1"):
+            return 0
+        cfg = load()
+        if cfg.output.export_dir:            # usuário escolheu a pasta → não migra
+            util.update_state(export_migrated_v1=True)
+            return 0
+        new_dir = cfg.output.resolved_export_dir()
+        old_dirs = [util.documents_dir() / name for name in _LEGACY_EXPORT_NAMES]
+        old_dirs = [d for d in old_dirs if d.is_dir() and d.resolve() != new_dir.resolve()]
+
+        moved: set[str] = set()
+        for old in old_dirs:
+            for src in sorted(old.glob("*.md")):
+                dest = new_dir / src.name
+                try:
+                    new_dir.mkdir(parents=True, exist_ok=True)
+                    if dest.exists():
+                        # colisão de nome entre as pastas antigas (ex.: Scriba x ScribaDev):
+                        # a 1ª (primária) já está no destino; ARQUIVA esta duplicata numa
+                        # subpasta local (fora do OneDrive; glob não-recursivo da lista a
+                        # ignora) em vez de deixá-la para trás no OneDrive ou sobrescrever.
+                        shutil.move(str(src), str(_dedup_archive(new_dir, old.name, src.name)))
+                    else:
+                        shutil.move(str(src), str(dest))
+                    moved.add(src.name)
+                except OSError:
+                    log.exception("migração: falha ao mover %s", src)
+
+        if moved:
+            _rewrite_export_paths(cfg, new_dir, moved)
+            try:
+                from . import meetings_index
+
+                meetings_index.reindex(cfg.output.resolved_recordings_dir())
+            except Exception:
+                log.exception("migração: reindex falhou")
+            log.info("migração de notas: %d nota(s) movida(s) para %s", len(moved), new_dir)
+
+        util.update_state(export_migrated_v1=True)
+        return len(moved)
+    except Exception:
+        log.exception("migração de export_dir falhou")
+        return 0
+
+
+def _dedup_archive(new_dir: Path, old_name: str, filename: str) -> Path:
+    """Caminho de arquivamento para uma nota duplicada (mesmo nome em duas pastas
+    antigas): `new_dir/_duplicados_migrados/<pasta_antiga>__<arquivo>`, com sufixo
+    numérico se ainda assim colidir. Fica fora do OneDrive e fora da lista (subpasta)."""
+    arch = new_dir / "_duplicados_migrados"
+    arch.mkdir(parents=True, exist_ok=True)
+    stem, suffix = Path(filename).stem, Path(filename).suffix
+    cand = arch / f"{old_name}__{filename}"
+    i = 2
+    while cand.exists():
+        cand = arch / f"{old_name}__{stem}-{i}{suffix}"
+        i += 1
+    return cand
+
+
+def _rewrite_export_paths(cfg, new_dir: Path, moved: set[str]) -> None:
+    """Aponta o `export_path` dos meta.json das gravações para as notas já movidas p/
+    `new_dir` (casa pelo nome do arquivo, tolerando o dir antigo Scriba/ScribaDev)."""
+    rec_dir = cfg.output.resolved_recordings_dir()
+    for meta_path in rec_dir.rglob("meta.json"):
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        exp = (meta.get("export_path") or "").strip()
+        if not exp or Path(exp).name not in moved:
+            continue
+        if Path(exp).parent.resolve() == new_dir.resolve():
+            continue                          # já aponta p/ o destino
+        meta["export_path"] = str(new_dir / Path(exp).name)
+        try:
+            util.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
+        except OSError:
+            log.exception("migração: falha ao reescrever export_path em %s", meta_path)
+
+
 def _apply_client(lines: list[str], new_client: str) -> list[str]:
     """Núcleo (lines->lines) de set_note_client: linha `cliente:` do frontmatter +
     linha de metadados sob o título (`*data · N min · Cliente: X*`). Puro, sem I/O,
@@ -785,6 +884,59 @@ def relabel_speakers(folder: Path, renames: dict[str, str]) -> bool:
     return True
 
 
+def remove_speakers(folder: Path, labels) -> bool:
+    """Remove vozes fantasma de uma reunião já processada (a diarização às vezes
+    quebra 1 pessoa em várias): a voz sai do `voices.json` (some do diálogo "Quem é
+    cada voz?") e o participante sai da lista `## Participantes / Presentes` da nota
+    (some do painel Presentes e do contador de participantes na capa/índice).
+
+    NÃO mexe na transcrição: sem saber quem a voz realmente era, reescrever as falas
+    perderia texto — o backup de rastreabilidade fica intacto. `labels`: rótulos a
+    remover (ex.: {"Participante 2", "Participante 3"}). Retorna True se algo mudou.
+    """
+    folder = Path(folder)
+    labels = {str(l).strip() for l in labels if str(l).strip()}
+    if not labels:
+        return False
+    changed = False
+
+    # 1) voices.json: descarta as chaves removidas
+    voices_path = folder / "voices.json"
+    try:
+        voices = json.loads(voices_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        voices = {}
+    if isinstance(voices, dict) and voices:
+        dropped = [k for k in list(voices) if k in labels]
+        for k in dropped:
+            voices.pop(k, None)
+        if dropped:
+            try:
+                util.atomic_write_text(voices_path, json.dumps(voices, ensure_ascii=False))
+                changed = True
+            except OSError:
+                pass
+
+    # 2) markdown (nota local + exportada): remove o bullet do participante da seção
+    try:
+        meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        meta = {}
+    for md in _note_targets(folder, meta):
+        try:
+            text = md.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        new_text = _strip_participants(text, labels)
+        if new_text != text:
+            util.atomic_write_text(md, new_text)
+            changed = True
+
+    if changed:
+        _reindex_quiet(folder)
+    return changed
+
+
 _PART_HEADER = re.compile(r"(?i)^\s*##\s+participantes\s*$")
 # sub-blocos: a IA escreve tanto "**Presentes:**" quanto "### Presentes" (sub-cabeçalho)
 _PRES_MARK = re.compile(r"(?i)^(?:#{3,6}\s+|\*\*)\s*presentes")
@@ -846,6 +998,38 @@ def parse_participants(md: str) -> tuple[dict[str, str], list[str]]:
     return presentes, mencionados
 
 
+def _strip_participants(md: str, labels: set[str]) -> str:
+    """Remove os bullets da seção `## Participantes` cujo rótulo está em `labels`
+    (casando também a forma com nome embutido "Participante 1 (Fulano)"). Só mexe
+    dentro da seção; preserva o resto do markdown byte a byte, inclusive o \\n final."""
+    lines = md.splitlines()
+    out: list[str] = []
+    in_section = False
+    for ln in lines:
+        s = ln.strip()
+        if _PART_HEADER.match(s):
+            in_section = True
+            out.append(ln)
+            continue
+        if in_section:
+            if _SECTION_END.match(s):  # próximo H1/H2 encerra a seção
+                in_section = False
+            else:
+                mb = _PART_BULLET.match(s)
+                if mb:
+                    label = mb.group(1).strip()
+                    nm = _LABEL_NAME.match(label)
+                    if nm:
+                        label = nm.group(1).strip()
+                    if label in labels:
+                        continue  # descarta o bullet do participante removido
+        out.append(ln)
+    new = "\n".join(out)
+    if md.endswith("\n"):
+        new += "\n"
+    return new
+
+
 def guess_voice_name(label: str, desc: str) -> str:
     """Palpite de nome para uma voz, a partir da descrição da IA em Presentes.
 
@@ -899,7 +1083,13 @@ def parse_action_items(md: str) -> list[dict]:
 
     `label` = rótulo entre **[…]** no início (tag/responsável, ex.: "BLOQUEANTE — Eu"),
     "" se não houver; `text` = o resto. Ignora 'Nada identificado.' e linhas que não são
-    bullets (a IA às vezes escreve um parágrafo)."""
+    bullets (a IA às vezes escreve um parágrafo).
+
+    Tolerante às variações de negrito da IA: tanto `**[X]** texto` (canônica) quanto
+    `**[X] frase em negrito** resto` (o fechamento vem depois). `label` e `text` são
+    exibidos como TEXTO PURO (chips/QLabel da capa e do hub), então os marcadores `**`
+    residuais saem do `text`; o `raw` fica intacto (é dele que vem a `key` — estados
+    salvos em .actions.json não podem invalidar)."""
     body = _section_body(md, _ACTIONS_TITLE)
     if not body:
         return []
@@ -911,8 +1101,10 @@ def parse_action_items(md: str) -> list[dict]:
         raw = s[2:].strip()
         if not raw or raw.lower().startswith("nada identificad"):
             continue
-        m = re.match(r"^\*\*\[([^\]]+)\]\*\*\s*(.*)$", raw)
+        m = re.match(r"^\*\*\[([^\]]+)\]\*{0,2}\s*(.*)$", raw)
         label, text = (m.group(1).strip(), m.group(2).strip()) if m else ("", raw)
+        label = label.strip("\"'“”‘’")          # a IA às vezes cita o rótulo: ["Eu"]
+        text = text.replace("**", "").strip()   # negrito não renderiza em QLabel puro
         items.append({"raw": raw, "label": label, "text": text, "key": action_item_key(raw)})
     return items
 

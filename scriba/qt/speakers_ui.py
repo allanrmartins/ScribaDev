@@ -202,7 +202,8 @@ class LabelSpeakersDialog(QWidget):
         self._folder = Path(folder)
         self._on_saved = on_saved
         self._closed = False
-        self._rows: list[tuple[str, QLineEdit, QCheckBox]] = []
+        self._rows: list[tuple[str, QLineEdit, QCheckBox, QWidget]] = []
+        self._removed: set[str] = set()
         guesses = guesses or {}
 
         self.setWindowTitle("ScribaDev — Quem é cada voz?")
@@ -223,7 +224,9 @@ class LabelSpeakersDialog(QWidget):
         title.setStyleSheet("font-size:12pt; font-weight:bold;")
         lay.addWidget(title)
         sub = QLabel("Revise o nome de cada voz e MARQUE o check só nas que tiver certeza — só as "
-                     "marcadas são salvas. O ScribaDev aprende as marcadas e corrige esta nota na hora.")
+                     "marcadas são salvas. O ScribaDev aprende as marcadas e corrige esta nota na hora. "
+                     "Uma voz que não era ninguém (a separação às vezes divide uma pessoa em várias) "
+                     "pode ser removida no × à direita.")
         sub.setProperty("role", "muted"); sub.setWordWrap(True); sub.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
         lay.addWidget(sub)
 
@@ -245,7 +248,8 @@ class LabelSpeakersDialog(QWidget):
             else:
                 base, color = "○ confirmar", t.muted
 
-            row = QHBoxLayout()
+            row_w = QWidget()
+            row = QHBoxLayout(row_w); row.setContentsMargins(0, 0, 0, 0)
             name_lbl = QLabel(slabel); name_lbl.setFixedWidth(120); name_lbl.setStyleSheet("font-weight:bold;")
             row.addWidget(name_lbl)
             entry = QLineEdit(prefill)
@@ -261,8 +265,12 @@ class LabelSpeakersDialog(QWidget):
             chk.toggled.connect(lambda on, f=_sync: f(on))
             _sync(chk.isChecked())
             row.addWidget(chk)
-            lay.addLayout(row)
-            self._rows.append((slabel, entry, chk))
+            rm = widgets.icon_button("dismiss", "Remover esta voz (não era ninguém)",
+                                     color=t.muted, size=15)
+            rm.clicked.connect(lambda _=False, lab=slabel, w=row_w: self._remove_row(lab, w))
+            row.addWidget(rm)
+            lay.addWidget(row_w)
+            self._rows.append((slabel, entry, chk, row_w))
 
         self._status = QLabel(""); self._status.setWordWrap(True); self._status.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
         lay.addWidget(self._status)
@@ -273,26 +281,54 @@ class LabelSpeakersDialog(QWidget):
         btns.addWidget(widgets.ModernButton("Salvar", self._save, kind="primary"))
         lay.addLayout(btns)
 
+    def _remove_row(self, label: str, row_w: QWidget) -> None:
+        """Marca uma voz para remoção: some da UI e entra no lote a aplicar no Salvar
+        (nada é persistido antes disso; Cancelar descarta). Voz removida não conta mais
+        como marcada nem exige nome."""
+        if self._closed:
+            return
+        self._removed.add(label)
+        row_w.setVisible(False)
+        t = theme.active()
+        n = len(self._removed)
+        self._status.setStyleSheet(f"color:{t.warn}; font-size:{t.font_size_small}pt;")
+        self._status.setText(
+            f"{n} voz{'es serão removidas' if n != 1 else ' será removida'} ao salvar.")
+
     def _save(self) -> None:
         if self._closed:
             return
         t = theme.active()
-        if any(chk.isChecked() and not entry.text().strip() for _l, entry, chk in self._rows):
+        active = [(label, entry, chk) for label, entry, chk, _w in self._rows
+                  if label not in self._removed]
+        if any(chk.isChecked() and not entry.text().strip() for _l, entry, chk in active):
             self._status.setStyleSheet(f"color:{t.warn}; font-size:{t.font_size_small}pt;")
             self._status.setText("Dê um nome às vozes marcadas antes de salvar (ou desmarque-as).")
             return
-        renames = {label: entry.text().strip() for label, entry, chk in self._rows
+        renames = {label: entry.text().strip() for label, entry, chk in active
                    if chk.isChecked() and entry.text().strip() and entry.text().strip() != label}
-        if renames:
-            from .. import notes
 
+        from .. import notes
+
+        msgs: list[str] = []
+        if self._removed:
+            try:
+                notes.remove_speakers(self._folder, self._removed)
+            except Exception:
+                log.exception("falha ao remover vozes")
+            r = len(self._removed)
+            msgs.append(f"Removi {r} voz{'es' if r != 1 else ''}.")
+        if renames:
             try:
                 notes.relabel_speakers(self._folder, renames)
             except Exception:
                 log.exception("falha ao rotular vozes")
             n = len(renames)
+            msgs.append(f"✓ Aprendi {n} voz{'es' if n != 1 else ''} para as próximas reuniões.")
+
+        if msgs:
             self._status.setStyleSheet(f"color:{t.ok}; font-size:{t.font_size_small}pt;")
-            self._status.setText(f"✓ Aprendi {n} voz{'es' if n != 1 else ''} para as próximas reuniões.")
+            self._status.setText("  ".join(msgs))
             QTimer.singleShot(1400, self._close)
         else:
             self._close()

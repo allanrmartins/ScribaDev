@@ -182,6 +182,13 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual(_short_date("2026-07-04T09:15:00"), "04/07")
         self.assertEqual(_short_date(""), "")
 
+    def test_fmt_started_br(self):
+        from scriba.qt.main_window import _fmt_started_br
+        self.assertEqual(_fmt_started_br("2026-07-07T09:30:00"), "07/07/2026 - 09:30")
+        self.assertEqual(_fmt_started_br("2026-07-06 14:03"), "06/07/2026 - 14:03")
+        self.assertEqual(_fmt_started_br("2026-07-07"), "07/07/2026")   # só data
+        self.assertEqual(_fmt_started_br(""), "")
+
     def test_render_home_agrupa_por_reuniao(self):
         win = self._win()
         data = {"total": 3, "seconds": 0, "clients": 2, "recent": [], "pending": [

@@ -108,12 +108,17 @@ def _note_info(path: Path) -> tuple[datetime, int | None, str | None]:
     return dt, dur, title
 
 
+def _client_from_text(md: str) -> str:
+    """Cliente do frontmatter a partir do TEXTO já lido (evita reler o arquivo)."""
+    m = _FRONT_CLIENT.search(md[:500])
+    return m.group(1).strip() if m else ""
+
+
 def _client_of(path: Path) -> str:
     try:
-        m = _FRONT_CLIENT.search(path.read_text(encoding="utf-8", errors="replace")[:500])
+        return _client_from_text(path.read_text(encoding="utf-8", errors="replace"))
     except OSError:
         return ""
-    return m.group(1).strip() if m else ""
 
 
 def _group_label(d: date) -> str:
@@ -136,6 +141,10 @@ def has_labelable_voices(folder: Path) -> bool:
 class NotesWindow(QWidget):
     _refresh_sig = Signal()   # marshaling p/ reconstruir a lista a partir de thread
 
+    # Testes: True roda os workers de I/O inline (fluxo inteiro síncrono e determinístico,
+    # já que o app fake tem ui(fn)=fn()). No app real fica False = thread de verdade.
+    _inline_bg = False
+
     def __init__(self, app):
         super().__init__()
         self.app = app
@@ -143,6 +152,13 @@ class NotesWindow(QWidget):
         self._items: dict[QTreeWidgetItem, tuple[Path, str | None, str | None]] = {}
         self._pending_sig: dict[str, str] = {}
         self._current_key: Path | None = None
+        # I/O fora da GUI (freeze de 2026-07-08: .md desidratado pelo OneDrive bloqueava a
+        # thread da GUI). Flags mutadas SÓ na thread da GUI (o worker recebe cópias):
+        self._list_gen = 0        # nº do pedido de lista; render de pedido velho é descartado
+        self._list_busy = False   # 1 coleta em voo por vez (I/O lento não empilha threads)
+        self._list_dirty = False  # pedido chegou durante a coleta → re-coleta ao terminar
+        self._show_gen = 0        # nº da seleção; leitura de nota antiga não sobrepõe a nova
+        self._poll_busy = False   # idem p/ a varredura do timer de progresso
         self._transcript_md: str | None = None
         self._transcript_shown = False
         self._hits: list[QTextCursor] = []
@@ -523,30 +539,63 @@ class NotesWindow(QWidget):
             out.append((dt, "note", (f, dur, title)))
         return out
 
+    def _bg(self, fn) -> None:
+        """Roda `fn` num worker (I/O de arquivo NUNCA na thread da GUI — o freeze de
+        2026-07-08). Nos testes `_inline_bg=True` roda inline: com o app fake síncrono,
+        o fluxo coleta→render vira determinístico."""
+        if self._inline_bg:
+            fn()
+        else:
+            threading.Thread(target=fn, daemon=True, name="notes-io").start()
+
     def _refresh_list(self) -> None:
+        """Reconstrói a lista de reuniões. Os filtros são lidos AQUI (widgets só na thread
+        da GUI); a COLETA (glob + frontmatter dos .md + varredura de pendentes) vai p/ um
+        worker e o render volta pela GUI (_render_list). Serializado: 1 coleta em voo;
+        pedido no meio marca dirty e re-coleta ao terminar (com os filtros mais novos)."""
         self._search_timer.stop()
-        q = self._search.text().strip()
-        participant = self._f_participant.text().strip()
-        client = self._f_client.text().strip()
-        since = self._f_since.br()
-        until = self._f_until.br()
+        params = (self._search.text().strip(), self._f_participant.text().strip(),
+                  self._f_client.text().strip(), self._f_since.br(), self._f_until.br())
+        self._list_gen += 1
+        if self._list_busy:
+            self._list_dirty = True
+            return
+        self._list_busy = True
+        self._bg(lambda gen=self._list_gen: self._collect_list(params, gen))
+
+    def _collect_list(self, params: tuple, gen: int) -> None:
+        """(worker) Coleta as entradas da lista e marshala o render p/ a GUI."""
+        q, participant, client, since, until = params
         searching = bool(q or participant or client or since or until)
         entries: list[tuple[datetime, str, tuple]] = []
         pending: list = []
-        if searching:
-            entries.extend(self._index_search(q, participant, client, since, until))
-        else:
-            try:
-                files = list(self._notes_dir().glob("*.md"))
-            except OSError:
-                files = []
-            for f in files:
-                dt, dur, title = _note_info(f)
-                entries.append((dt, "note", (f, dur, title)))
-            pending = self._pending_meetings()
-            for dt, status, folder, title in pending:
-                entries.append((dt, "pending", (folder, status, title)))
-        entries.sort(key=lambda x: x[0], reverse=True)
+        try:
+            if searching:
+                entries.extend(self._index_search(q, participant, client, since, until))
+            else:
+                try:
+                    files = list(self._notes_dir().glob("*.md"))
+                except OSError:
+                    files = []
+                for f in files:
+                    dt, dur, title = _note_info(f)
+                    entries.append((dt, "note", (f, dur, title)))
+                pending = self._pending_meetings()
+                for dt, status, folder, title in pending:
+                    entries.append((dt, "pending", (folder, status, title)))
+            entries.sort(key=lambda x: x[0], reverse=True)
+        except Exception:
+            log.exception("coleta da lista de notas falhou")
+        self.app.ui(lambda: self._render_list(entries, pending, searching, gen))
+
+    def _render_list(self, entries: list, pending: list, searching: bool, gen: int) -> None:
+        """(GUI) Renderiza a lista coletada. Descarta resultado de pedido velho (os
+        filtros mudaram durante a coleta) e re-coleta se ficou pedido pendente."""
+        self._list_busy = False
+        if self._list_dirty or gen != self._list_gen:
+            self._list_dirty = False
+            self._refresh_list()
+            return
         self._pending_sig = {str(f): st for _dt, st, f, _t in pending}
 
         prev_key = self._current_key
@@ -603,12 +652,31 @@ class NotesWindow(QWidget):
     # -- progresso -----------------------------------------------------------
 
     def _poll_progress(self) -> None:
+        """Timer 1,5s: varre as reuniões em processamento num WORKER (I/O fora da GUI,
+        mesmo padrão do _poll_live da capa, #91) e só re-lista quando o estado muda.
+        `_poll_busy` serializa: no máximo 1 varredura em voo."""
         if not self.isVisible():
             self._poll.stop()
             return
-        cur = {str(f): st for _dt, st, f, _t in self._pending_meetings()}
-        if cur != self._pending_sig:
-            self._refresh_list()
+        if self._poll_busy:
+            return
+        self._poll_busy = True
+
+        def work() -> None:
+            cur = None
+            try:
+                cur = {str(f): st for _dt, st, f, _t in self._pending_meetings()}
+            except Exception:
+                log.exception("varredura de progresso falhou")
+
+            def apply() -> None:
+                self._poll_busy = False
+                if cur is not None and cur != self._pending_sig:
+                    self._refresh_list()
+
+            self.app.ui(apply)
+
+        self._bg(work)
 
     def _show_note_pane(self) -> None:
         self._progress.hide()
@@ -667,6 +735,9 @@ class NotesWindow(QWidget):
             return None
 
     def _show_selected(self) -> None:
+        """Seleção mudou: a LEITURA do .md vai p/ um worker (era o read na thread da GUI
+        que congelava o app quando o OneDrive desidratava a nota); o render volta pela
+        GUI (_render_note). `_show_gen` descarta a leitura de uma seleção já trocada."""
         sel = self._selected()
         if sel is None:
             return
@@ -675,20 +746,35 @@ class NotesWindow(QWidget):
             self._render_progress(path, status)
             return
         self._show_note_pane()
-        title_text, client_text = title or "", _client_of(path)
+        self._set_note_actions(True)
+        self._update_voice_button(path)   # voices.json fica nas gravações (disco local)
+        self._find_bar.setVisible(True)
+        self._show_gen += 1
+
+        def work(gen=self._show_gen) -> None:
+            md, err = None, None
+            try:
+                md = path.read_text(encoding="utf-8")
+            except OSError as e:
+                err = str(e)
+            self.app.ui(lambda: self._render_note(path, title, md, err, gen))
+
+        self._bg(work)
+
+    def _render_note(self, path: Path, title: str | None, md: str | None,
+                     err: str | None, gen: int) -> None:
+        """(GUI) Renderiza a nota lida no worker; ignora se a seleção já mudou."""
+        if gen != self._show_gen:
+            return
+        if md is None:
+            self._presentes.setVisible(False)
+            self._view.setMarkdown(f"# Erro\n\nNão consegui ler {path.name}: {err}")
+            return
+        title_text, client_text = title or "", _client_from_text(md)
         self._header_orig = (title_text, client_text)   # baseline do dirty-tracking do Salvar
         self._title.setText(title_text)
         self._client.setText(client_text)
         self._update_save_state()   # começa limpo (Salvar desabilitado)
-        self._set_note_actions(True)
-        self._update_voice_button(path)
-        self._find_bar.setVisible(True)
-        try:
-            md = path.read_text(encoding="utf-8")
-        except OSError as e:
-            self._presentes.setVisible(False)
-            self._view.setMarkdown(f"# Erro\n\nNão consegui ler {path.name}: {e}")
-            return
         self._current_key = path
         self._build_presentes(md)
         summary, self._transcript_md = _summary_and_transcript(md)

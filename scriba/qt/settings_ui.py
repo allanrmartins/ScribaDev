@@ -498,7 +498,8 @@ class SettingsWindow(QWidget):
 
     def _build_dirs_tab(self) -> None:
         f = self._tab("Pastas")
-        self._dir_row(f, "Notas (.md)", "output", "export_dir", placeholder="Documentos\\ScribaDev (padrão)")
+        self._dir_row(f, "Notas (.md)", "output", "export_dir",
+                      placeholder="%LOCALAPPDATA%\\ScribaDev\\Notas (padrão, local)")
         self._dir_row(f, "Gravações", "output", "recordings_dir", placeholder="C:\\temp\\scribadev\\gravacoes (padrão)")
 
     def _dir_row(self, form, label, section, attr, placeholder="", tooltip="") -> None:

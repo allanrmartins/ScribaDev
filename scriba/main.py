@@ -953,11 +953,21 @@ class ScribaApp:
         if self._app is not None and not self.stop_event.is_set():
             self._after(6 * 3600 * 1000, self._purge_loop)
 
-    def _reindex_search_index(self) -> None:
-        """Boot (#12): reconstrói o índice de busca das reuniões se estiver vazio
-        (index.db ausente/recriado/nunca indexado). Em thread — não bloqueia a
-        bandeja; no-op se já populado. Falha aqui nunca derruba o app."""
+    def _migrate_export_dir_boot(self) -> None:
+        """Boot: migração one-time das notas .md do antigo default (Documentos, que na
+        maioria das máquinas fica no OneDrive) para o novo default LOCAL. Em thread —
+        mover arquivos do OneDrive pode hidratar (lento), então nunca na thread da GUI.
+        No-op depois da 1ª vez. Ao mover algo, atualiza a capa/notas."""
         def work() -> None:
+            try:
+                from . import notes
+
+                n = notes.migrate_export_dir()   # faz o reindex completo se mover algo
+                if n and self.main_win is not None:
+                    self.ui(self.main_win.refresh_home)
+            except Exception:
+                log.exception("migração de notas no boot falhou")
+            # só DEPOIS da migração (sem corrida no index.db): reconstrói se vazio (#12)
             try:
                 from . import meetings_index
 
@@ -966,7 +976,7 @@ class ScribaApp:
             except Exception:
                 log.exception("reindex de boot do índice de busca falhou")
 
-        threading.Thread(target=work, daemon=True, name="reindex").start()
+        threading.Thread(target=work, daemon=True, name="migrate-notes").start()
 
     def _show_window_listener(self) -> None:
         """Espera o sinal de uma 2ª instância (atalho clicado) e mostra a janela."""
@@ -1017,6 +1027,19 @@ class ScribaApp:
         self._pump.queue = self.ui_queue   # a pump drena a MESMA fila do self.ui(fn)
         self._pump.start()
 
+        # Watchdog da GUI (freeze de 2026-07-08): heartbeat de 1s na thread da GUI; se
+        # ela ficar >10s sem bater, o monitor despeja a pilha de TODAS as threads em
+        # logs/hang.log — o próximo "não está respondendo" já nasce diagnosticado.
+        from PySide6.QtCore import QTimer as _QTimer
+
+        from .watchdog import GuiWatchdog
+
+        self._watchdog = GuiWatchdog()
+        self._wd_timer = _QTimer()
+        self._wd_timer.timeout.connect(self._watchdog.beat)
+        self._wd_timer.start(1000)
+        self._watchdog.start()
+
         from .qt.main_window import MainWindow
 
         self.main_win = MainWindow(self)   # nasce oculta; abre pela bandeja/atalho
@@ -1043,7 +1066,8 @@ class ScribaApp:
         self.scan_pending()
         self._after(8000, self._purge_loop)  # limpeza de gravações antigas (e a cada 6 h)
         self._after(2500, self._maybe_offer_wizard)  # 1º uso: assistente de perfil
-        self._after(5000, self._reindex_search_index)  # índice de busca (#12), só se vazio
+        # migração one-time das notas p/ pasta local + índice de busca (#12) encadeado
+        self._after(5000, self._migrate_export_dir_boot)
         self._after(9000, self._check_updates_boot)    # aviso de nova versão (#19)
 
         if not self.start_hidden:
@@ -1055,6 +1079,9 @@ class ScribaApp:
         # antes de qualquer passo lento (salvar gravação), para ele não cortar o save.
         if self._quit_watchdog is not None:
             self._quit_watchdog.cancel()
+        # o heartbeat (QTimer) morreu junto com o loop: para o monitor da GUI antes do
+        # save final, senão ele registraria um falso "hang" durante a saída.
+        self._watchdog.stop()
         # saída: salva gravação em andamento; pendências ficam para o próximo start
         if self.is_recording():
             self.stop_recording(False)

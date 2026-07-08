@@ -81,6 +81,17 @@ def _short_date(iso: str) -> str:
     return f"{iso[8:10]}/{iso[5:7]}" if len(iso) >= 10 else ""
 
 
+def _fmt_started_br(iso: str) -> str:
+    """'YYYY-MM-DDTHH:MM…' -> 'dd/mm/aaaa - HH:MM' (data/hora BR da linha da capa).
+    Cai só na data se não houver hora; '' se vazio/curto."""
+    iso = (iso or "").strip()
+    if len(iso) < 10:
+        return ""
+    date_br = f"{iso[8:10]}/{iso[5:7]}/{iso[0:4]}"
+    hm = iso[11:16].strip()
+    return f"{date_br} - {hm}" if len(hm) == 5 else date_br
+
+
 def _display_title(m: dict, default: str = "(sem título)") -> str:
     """Título de exibição de uma reunião, único p/ TODAS as linhas da capa: o TÍTULO
     da nota (gerado pela IA ou renomeado à mão) vence; cai no meeting_title (título
@@ -645,9 +656,9 @@ class MainWindow(QWidget):
 
     def _recent_meta(self, m: dict) -> str:
         parts = []
-        started = (m.get("started_at") or "").strip()
+        started = _fmt_started_br(m.get("started_at") or "")
         if started:
-            parts.append(started[:16].replace("T", " "))
+            parts.append(started)
         dur = m.get("duration_s")
         if dur:
             parts.append(_fmt_hours(dur))

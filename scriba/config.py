@@ -111,7 +111,8 @@ hotkey = ""              # atalho global gravar/parar (ex.: "ctrl+alt+r"); vazio
 hotkey_split = ""        # atalho global "nova call" (divide a gravação, #38); vazio desativa
 
 [output]
-# Pasta para onde o notas.md final é copiado. Vazio = Documentos\\ScribaDev
+# Pasta para onde o notas.md final é copiado. Vazio = %LOCALAPPDATA%\\ScribaDev\\Notas
+# (local, fora do OneDrive — evita congelamento por hidratação de arquivo na thread da GUI)
 export_dir = ""
 # Pasta das gravações (áudio + transcrição de cada reunião). Vazio = C:\\temp\\scribadev\\gravacoes
 recordings_dir = ""
@@ -220,7 +221,11 @@ class Output:
     def resolved_export_dir(self) -> Path:
         if self.export_dir:
             return Path(self.export_dir).expanduser()
-        return util.documents_dir() / "ScribaDev"
+        # Default LOCAL (ao lado de config/index/logs): não sincroniza com o OneDrive,
+        # então ler .md na thread da GUI nunca bloqueia por hidratação. O default ANTIGO
+        # era Documentos\ScribaDev, que na maioria das máquinas cai no OneDrive — a
+        # migração one-time (notes.migrate_export_dir) traz as notas de lá p/ cá.
+        return util.APP_DIR / "Notas"
 
     def resolved_recordings_dir(self) -> Path:
         """Pasta das gravações, criada na hora se não existir."""

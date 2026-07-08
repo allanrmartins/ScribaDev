@@ -291,6 +291,158 @@ class RelabelSpeakersTests(unittest.TestCase):
         self.assertIn("Ana e Participante 12 aqui", txt)
 
 
+class _FakeOutput:
+    def __init__(self, new_dir: Path, rec_dir: Path, export_dir: str = ""):
+        self.export_dir = export_dir
+        self._new, self._rec = new_dir, rec_dir
+
+    def resolved_export_dir(self) -> Path:
+        return Path(self.export_dir) if self.export_dir else self._new
+
+    def resolved_recordings_dir(self) -> Path:
+        return self._rec
+
+
+class _FakeCfg:
+    def __init__(self, output):
+        self.output = output
+
+
+class MigrateExportDirTests(unittest.TestCase):
+    """notes.migrate_export_dir: tira as notas do antigo default (Documentos/OneDrive)
+    e leva p/ a pasta local, reescrevendo export_path dos meta.json. One-time."""
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp(prefix="scriba_migr_"))
+        self.docs = self.d / "Documents"          # "Documentos" (no OneDrive na vida real)
+        self.old = self.docs / "ScribaDev"
+        self.old.mkdir(parents=True)
+        self.new = self.d / "local" / "Notas"     # novo default LOCAL
+        self.rec = self.d / "rec"
+        self.rec.mkdir()
+        # 2 notas no antigo default
+        (self.old / "2026-06-10_19-01_reuniao.md").write_text("# A", encoding="utf-8")
+        (self.old / "2026-07-08_09-30_reuniao.md").write_text("# B", encoding="utf-8")
+        # uma gravação cujo meta aponta p/ a nota antiga
+        folder = self.rec / "2026" / "07" / "08" / "09-30"
+        folder.mkdir(parents=True)
+        (folder / "meta.json").write_text(json.dumps(
+            {"export_path": str(self.old / "2026-07-08_09-30_reuniao.md")}), encoding="utf-8")
+        self.meta_path = folder / "meta.json"
+        self._state0 = util.STATE_PATH
+        util.STATE_PATH = self.d / "state.json"
+
+    def tearDown(self):
+        util.STATE_PATH = self._state0
+
+    def _run(self, export_dir: str = ""):
+        cfg = _FakeCfg(_FakeOutput(self.new, self.rec, export_dir))
+        with mock.patch("scriba.notes.load", return_value=cfg), \
+             mock.patch("scriba.util.documents_dir", return_value=self.docs), \
+             mock.patch("scriba.meetings_index.reindex") as reindex:
+            n = notes.migrate_export_dir()
+        return n, reindex
+
+    def test_move_reescreve_meta_e_reindexa(self):
+        n, reindex = self._run()
+        self.assertEqual(n, 2)
+        self.assertTrue((self.new / "2026-06-10_19-01_reuniao.md").exists())
+        self.assertTrue((self.new / "2026-07-08_09-30_reuniao.md").exists())
+        self.assertEqual(list(self.old.glob("*.md")), [])          # esvaziou o antigo
+        meta = json.loads(self.meta_path.read_text(encoding="utf-8"))
+        self.assertEqual(meta["export_path"], str(self.new / "2026-07-08_09-30_reuniao.md"))
+        reindex.assert_called_once()
+        self.assertTrue(util.read_state().get("export_migrated_v1"))
+
+    def test_idempotente(self):
+        self._run()
+        n2, reindex2 = self._run()                                  # 2ª vez: nada a fazer
+        self.assertEqual(n2, 0)
+        reindex2.assert_not_called()
+
+    def test_colisao_arquiva_duplicata_e_esvazia_onedrive(self):
+        scriba_old = self.docs / "Scriba"                          # pasta pré-fork
+        scriba_old.mkdir()
+        # nome que JÁ existe em ScribaDev (colisão) + um exclusivo do Scriba
+        (scriba_old / "2026-06-10_19-01_reuniao.md").write_text("# dup", encoding="utf-8")
+        (scriba_old / "2020-01-01_08-00_reuniao.md").write_text("# so scriba", encoding="utf-8")
+        n, _ = self._run()
+        self.assertEqual(n, 3)                                     # 2 do ScribaDev + 1 exclusivo
+        self.assertTrue((self.new / "2026-06-10_19-01_reuniao.md").exists())   # primária
+        self.assertTrue((self.new / "2020-01-01_08-00_reuniao.md").exists())   # exclusiva migrou
+        arch = list((self.new / "_duplicados_migrados").glob("*.md"))
+        self.assertEqual(len(arch), 1)                            # a duplicata foi arquivada
+        self.assertEqual(list(self.old.glob("*.md")), [])         # nada sobrou no OneDrive
+        self.assertEqual(list(scriba_old.glob("*.md")), [])
+
+    def test_respeita_export_dir_manual(self):
+        custom = self.d / "escolha_do_usuario"
+        n, reindex = self._run(export_dir=str(custom))
+        self.assertEqual(n, 0)
+        reindex.assert_not_called()
+        self.assertEqual(len(list(self.old.glob("*.md"))), 2)       # não mexeu nas notas
+        self.assertTrue(util.read_state().get("export_migrated_v1"))
+
+
+class RemoveSpeakersTests(unittest.TestCase):
+    """notes.remove_speakers (voz fantasma): tira a voz do voices.json E o participante
+    da seção Presentes da nota (some do painel e do contador da capa)."""
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp(prefix="scriba_rmspk_"))
+        # index isolado: remove_speakers re-indexa → sem isolar mi.DB_PATH gravaria no real.
+        self._app0, self._logs0, self._db0 = (util.APP_DIR, util.LOGS_DIR, mi.DB_PATH)
+        util.APP_DIR = self.d / "app"
+        util.LOGS_DIR = util.APP_DIR / "logs"
+        mi.DB_PATH = util.APP_DIR / "index.db"
+        self.rec = self.d / "rec"
+        self.rec.mkdir(parents=True)
+        self.export = self.d / "2026-06-10_20-00_reuniao.md"
+        (self.rec / "voices.json").write_text(json.dumps({
+            "Richard": {"embedding": [1.0], "auto": True},
+            "Participante 2": {"embedding": [0.0, 1.0], "auto": False},
+            "Participante 3": {"embedding": [0.0, 0.0, 1.0], "auto": False},
+        }), encoding="utf-8")
+        nota = ("# Reunião\n\n## Participantes\n\n### Presentes\n"
+                "- **Eu** — desenvolvedor\n"
+                "- **Richard** — cliente\n"
+                "- **Participante 2** — voz não identificada\n"
+                "- **Participante 3** — voz não identificada\n\n"
+                "## Transcrição completa\n**[00:00] Participante 2:** oi\n")
+        (self.rec / "notas.md").write_text(nota, encoding="utf-8")
+        self.export.write_text(nota, encoding="utf-8")
+        (self.rec / "meta.json").write_text(
+            json.dumps({"export_path": str(self.export)}), encoding="utf-8")
+
+    def tearDown(self):
+        util.APP_DIR, util.LOGS_DIR, mi.DB_PATH = (self._app0, self._logs0, self._db0)
+
+    def test_remove_tira_do_voices_e_da_nota(self):
+        ok = notes.remove_speakers(self.rec, {"Participante 2", "Participante 3"})
+        self.assertTrue(ok)
+        voices = json.loads((self.rec / "voices.json").read_text(encoding="utf-8"))
+        self.assertEqual(set(voices), {"Richard"})
+        for md in (self.rec / "notas.md", self.export):
+            pres, _ = notes.parse_participants(md.read_text(encoding="utf-8"))
+            self.assertEqual(set(pres), {"Eu", "Richard"})
+        # a transcrição NÃO é tocada (backup de rastreabilidade intacto)
+        self.assertIn("Participante 2:", (self.rec / "notas.md").read_text(encoding="utf-8"))
+
+    def test_remove_nome_embutido_no_rotulo(self):
+        (self.rec / "notas.md").write_text(
+            "# R\n\n## Participantes\n\n### Presentes\n"
+            "- **Participante 2 (Fulano)** — voz\n- **Richard** — cliente\n", encoding="utf-8")
+        notes.remove_speakers(self.rec, {"Participante 2"})
+        pres, _ = notes.parse_participants((self.rec / "notas.md").read_text(encoding="utf-8"))
+        self.assertEqual(set(pres), {"Richard"})
+
+    def test_remove_vazio_e_desconhecido_e_noop(self):
+        self.assertFalse(notes.remove_speakers(self.rec, set()))
+        self.assertFalse(notes.remove_speakers(self.rec, {"Participante 99"}))
+        voices = json.loads((self.rec / "voices.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(voices), 3)
+
+
 class ParseParticipantsTests(unittest.TestCase):
     """notes.parse_participants: extrai a seção Participantes do resumo."""
 
@@ -488,6 +640,27 @@ class ActionItemsTests(unittest.TestCase):
     def test_nao_vaza_proxima_secao(self):
         items = notes.parse_action_items(self._MD)
         self.assertNotIn("dev", " ".join(i["text"] for i in items))  # "## Participantes" não entra
+
+    def test_negrito_envolvendo_rotulo_e_frase(self):
+        # variação real da IA (2026-07-08): o ** fecha DEPOIS da frase, não após o rótulo —
+        # e o texto exibido não pode vazar asteriscos (capa/hub renderizam texto puro)
+        md = ("## Pendências e Ações\n"
+              '- **["Eu"] Aplicar as 6 notas no DEV hoje à tarde** e avisar no grupo. [00:15:43]\n'
+              "- **[Wisney / Guilherme Lima] Solicitar a Célio Soares** que envie "
+              "**ainda na tarde** a documentação. [00:33:58]\n")
+        items = notes.parse_action_items(md)
+        self.assertEqual(items[0]["label"], "Eu")                    # aspas da IA removidas
+        self.assertEqual(items[1]["label"], "Wisney / Guilherme Lima")
+        for it in items:
+            self.assertNotIn("**", it["text"])
+        self.assertTrue(items[0]["text"].startswith("Aplicar as 6 notas"))
+        self.assertIn("Solicitar a Célio Soares que envie ainda na tarde", items[1]["text"])
+
+    def test_key_estavel_apos_tolerancia_de_negrito(self):
+        # a key vem do raw (intacto): estados salvos no .actions.json não podem invalidar
+        raw = '**["Eu"] Aplicar as 6 notas no DEV** e avisar. [00:15:43]'
+        items = notes.parse_action_items(f"## Pendências e Ações\n- {raw}\n")
+        self.assertEqual(items[0]["key"], notes.action_item_key(raw))
 
     def test_key_ignora_timestamp(self):
         self.assertEqual(notes.action_item_key("faz X [00:01:02]"), notes.action_item_key("faz X [12:34:56]"))

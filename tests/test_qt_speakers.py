@@ -95,7 +95,7 @@ class SpeakersTests(unittest.TestCase):
         from scriba.qt.speakers_ui import LabelSpeakersDialog
 
         dlg = LabelSpeakersDialog(self._folder_with_voices())
-        label, entry, chk = dlg._rows[1]       # "Participante 2", vazio
+        label, entry, chk, _w = dlg._rows[1]   # "Participante 2", vazio
         entry.setText("")
         chk.setChecked(True)
         dlg._save()
@@ -106,11 +106,43 @@ class SpeakersTests(unittest.TestCase):
 
         saved = []
         dlg = LabelSpeakersDialog(self._folder_with_voices(), on_saved=lambda: saved.append(1))
-        _l, entry, chk = dlg._rows[1]
+        _l, entry, chk, _w = dlg._rows[1]
         entry.setText("Bruno")
         chk.setChecked(True)
         dlg._save()                            # relabel_speakers é tolerante a falha
         self.assertIn("Aprendi", dlg._status.text())
+
+    def test_dialog_remove_voz_some_da_linha_e_chama_remove(self):
+        from unittest import mock
+
+        from scriba.qt.speakers_ui import LabelSpeakersDialog
+
+        dlg = LabelSpeakersDialog(self._folder_with_voices())
+        label, _entry, _chk, row_w = dlg._rows[2]   # "Participante 3"
+        dlg._remove_row(label, row_w)
+        self.assertIn(label, dlg._removed)
+        self.assertFalse(row_w.isVisible())
+        self.assertIn("removida", dlg._status.text())
+        with mock.patch("scriba.notes.remove_speakers") as rm:
+            dlg._save()
+        rm.assert_called_once()
+        self.assertEqual(rm.call_args[0][1], {"Participante 3"})
+        self.assertIn("Removi", dlg._status.text())
+
+    def test_dialog_voz_removida_nao_exige_nome_no_save(self):
+        # voz marcada mas removida não deve travar o save por "sem nome"
+        from unittest import mock
+
+        from scriba.qt.speakers_ui import LabelSpeakersDialog
+
+        dlg = LabelSpeakersDialog(self._folder_with_voices())
+        label, entry, chk, row_w = dlg._rows[1]     # "Participante 2"
+        chk.setChecked(True); entry.setText("")
+        dlg._remove_row(label, row_w)
+        with mock.patch("scriba.notes.remove_speakers"), \
+             mock.patch("scriba.notes.relabel_speakers"):
+            dlg._save()
+        self.assertNotIn("Dê um nome", dlg._status.text())
 
 
 if __name__ == "__main__":

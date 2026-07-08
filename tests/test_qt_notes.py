@@ -41,6 +41,11 @@ def setUpModule():
     _util.APP_DIR = tmp / "app"
     _util.LOGS_DIR = _util.APP_DIR / "logs"
     _mi.DB_PATH = None   # None = resolve de util.APP_DIR (agora o tmp isolado)
+    # Workers de I/O da NotesWindow rodam INLINE nos testes: com o app fake síncrono
+    # (ui(fn)=fn()), _refresh_list/_show_selected viram determinísticos (sem threads).
+    if _HAS_PYSIDE:
+        from scriba.qt.notes_ui import NotesWindow
+        NotesWindow._inline_bg = True
 
 
 def tearDownModule():
@@ -52,6 +57,9 @@ def tearDownModule():
     app0, logs0, db0, tmp = _MODULE_ISO
     _util.APP_DIR, _util.LOGS_DIR, _mi.DB_PATH = app0, logs0, db0
     shutil.rmtree(tmp, ignore_errors=True)
+    if _HAS_PYSIDE:
+        from scriba.qt.notes_ui import NotesWindow
+        NotesWindow._inline_bg = False
 
 
 @unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")

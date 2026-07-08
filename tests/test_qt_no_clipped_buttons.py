@@ -106,6 +106,7 @@ class NoClippedButtonsTests(unittest.TestCase):
             def ui(_s, fn): fn()
 
         win = NotesWindow(_App())
+        win._inline_bg = True                 # worker de I/O inline: lista pronta já no return
         win._refresh_list()
         for it in win._items:                 # seleciona a nota -> command bar ativa
             win._tree.setCurrentItem(it)
