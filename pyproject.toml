@@ -10,21 +10,25 @@ readme = "README.md"
 license = "Elastic-2.0"
 authors = [{ name = "Allan Martins" }]
 requires-python = ">=3.12"
-keywords = ["teams", "meeting", "transcription", "whisper", "notes", "recorder", "windows"]
+keywords = ["teams", "meeting", "transcription", "whisper", "notes", "recorder", "windows", "linux", "macos"]
 classifiers = [
     "Operating System :: Microsoft :: Windows :: Windows 11",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
     "Programming Language :: Python :: 3 :: Only",
     "Natural Language :: Portuguese (Brazilian)",
     "Topic :: Multimedia :: Sound/Audio :: Capture/Recording",
     "Topic :: Office/Business",
 ]
 dependencies = [
-    "pyaudiowpatch==0.2.12.8",
+    # captura WASAPI loopback e toasts WinRT: só existem (e só têm wheel) no Windows.
+    # Fora dele o pip os ignora (épico #104); a captura POSIX vem em marcos futuros.
+    "pyaudiowpatch==0.2.12.8 ; sys_platform == 'win32'",
     "faster-whisper==1.2.1",
     "ctranslate2~=4.8",
     "pystray==0.19.5",
     "Pillow>=11",
-    "windows-toasts==1.3.1",
+    "windows-toasts==1.3.1 ; sys_platform == 'win32'",
     # UI: PySide6 virou dependência principal no corte para Qt (#53); antes era o extra `qt`.
     # 6.7 = piso com High-DPI por padrão + QSS estável.
     "PySide6>=6.7",
