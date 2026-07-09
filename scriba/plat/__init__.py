@@ -20,4 +20,5 @@ else:
 
 app_data_dir = _backend.app_data_dir
 default_recordings_dir = _backend.default_recordings_dir
+has_nvidia_gpu = _backend.has_nvidia_gpu
 open_path = _backend.open_path

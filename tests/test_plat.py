@@ -63,11 +63,26 @@ class TestBackendPosix(unittest.TestCase):
             )
 
 
+class TestHasNvidiaGpu(unittest.TestCase):
+    def test_win_devolve_bool(self):
+        # sonda real no runner (com ou sem GPU): o contrato é não levantar
+        self.assertIsInstance(_win.has_nvidia_gpu(), bool)
+
+    def test_posix_linux_devolve_bool(self):
+        with mock.patch.object(sys, "platform", "linux"):
+            self.assertIsInstance(_posix.has_nvidia_gpu(), bool)
+
+    def test_posix_macos_sempre_false(self):
+        with mock.patch.object(sys, "platform", "darwin"):
+            self.assertIs(_posix.has_nvidia_gpu(), False)
+
+
 class TestDespacho(unittest.TestCase):
     def test_backend_casa_com_o_so_atual(self):
         esperado = _win if sys.platform == "win32" else _posix
         self.assertIs(plat.app_data_dir, esperado.app_data_dir)
         self.assertIs(plat.default_recordings_dir, esperado.default_recordings_dir)
+        self.assertIs(plat.has_nvidia_gpu, esperado.has_nvidia_gpu)
         self.assertIs(plat.open_path, esperado.open_path)
 
     def test_util_app_dir_vem_da_camada(self):

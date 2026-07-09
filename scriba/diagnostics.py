@@ -88,14 +88,11 @@ def environment_report() -> str:
     """Resumo do ambiente (versão, Python, SO, GPU, diarização) — o que o suporte precisa."""
     from . import __version__, updates
 
-    gpu = "nao"
-    try:
-        import ctypes
+    # via camada de plataforma: ctypes.WinDLL nem existe fora do Windows e o
+    # except OSError antigo não pegaria o AttributeError no Linux/macOS (#98)
+    from . import plat
 
-        ctypes.WinDLL("nvcuda.dll")
-        gpu = "sim (NVIDIA)"
-    except OSError:
-        pass
+    gpu = "sim (NVIDIA)" if plat.has_nvidia_gpu() else "nao"
     try:
         import importlib.util as ilu
 

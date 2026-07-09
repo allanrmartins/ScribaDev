@@ -29,6 +29,19 @@ def default_recordings_dir() -> Path:
     return app_data_dir() / "gravacoes"
 
 
+def has_nvidia_gpu() -> bool:
+    """Driver NVIDIA presente? Linux: libcuda.so.1 carrega; macOS: não existe CUDA."""
+    if sys.platform == "darwin":
+        return False
+    import ctypes
+
+    try:
+        ctypes.CDLL("libcuda.so.1")
+        return True
+    except OSError:
+        return False
+
+
 def open_path(path) -> None:
     """Abre arquivo ou pasta no gerenciador do SO (xdg-open no Linux, open no macOS)."""
     import subprocess

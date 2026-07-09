@@ -20,6 +20,17 @@ def default_recordings_dir() -> Path:
     return Path(r"C:\temp\scribadev\gravacoes")
 
 
+def has_nvidia_gpu() -> bool:
+    """Driver NVIDIA presente? (nvcuda.dll carrega — sonda histórica do diagnóstico)."""
+    import ctypes
+
+    try:
+        ctypes.WinDLL("nvcuda.dll")
+        return True
+    except OSError:
+        return False
+
+
 def open_path(path) -> None:
     """Abre arquivo ou pasta no Explorer (substituto do os.startfile).
 
