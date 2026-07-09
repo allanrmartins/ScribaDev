@@ -8,7 +8,7 @@ import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from . import util
+from . import plat, util
 
 log = logging.getLogger("scriba.config")
 
@@ -228,8 +228,12 @@ class Output:
         return util.APP_DIR / "Notas"
 
     def resolved_recordings_dir(self) -> Path:
-        """Pasta das gravações, criada na hora se não existir."""
-        d = Path(self.recordings_dir).expanduser() if self.recordings_dir else Path(r"C:\temp\scribadev\gravacoes")
+        """Pasta das gravações, criada na hora se não existir.
+
+        Default por SO via camada de plataforma (#104): no Windows segue o
+        C:\\temp\\scribadev\\gravacoes histórico; no POSIX cai sob o app_data_dir.
+        """
+        d = Path(self.recordings_dir).expanduser() if self.recordings_dir else plat.default_recordings_dir()
         d.mkdir(parents=True, exist_ok=True)
         return d
 
