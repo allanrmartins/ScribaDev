@@ -10,7 +10,6 @@ A UI é PySide6 (scriba/qt/); qualquer thread agenda trabalho na GUI por self.ui
 
 from __future__ import annotations
 
-import ctypes
 import logging
 import logging.handlers
 import os
@@ -19,60 +18,16 @@ import sys
 import threading
 import time
 
-from . import util
+from . import plat, util
 from .config import load
 from .detector import Detector
 from .recorder import Recording
 
 log = logging.getLogger("scriba")
 
-_mutex_handle = None  # mantém o handle vivo durante o processo
-
-
-_MUTEX_NAME = "Local\\ScribaDevSingleInstance"
-
-
-def _single_instance(retries: int = 0, delay: float = 0.4, name: str = _MUTEX_NAME) -> bool:
-    """True se esta é a única instância (adquiriu o mutex nomeado `name`).
-
-    Se o mutex já existe e `retries` > 0, FECHA o handle e tenta de novo após `delay` s
-    até `retries` vezes. Isso conserta o reinício pós-update intermitente (#74): o
-    relançamento pode chegar enquanto a instância ANTERIOR ainda está no teardown
-    (encerra por `os._exit` em até 3 s) segurando o mutex — sem o retry a nova instância
-    via ERROR_ALREADY_EXISTS e abortava calada, então o app "não reabria sozinho".
-
-    Importante: quando o mutex já existe, CreateMutexW devolve um handle para o mutex
-    EXISTENTE; segurá-lo manteria o objeto vivo e o retry nunca veria a liberação — por
-    isso fechamos o handle antes de reesperar."""
-    global _mutex_handle
-    k32 = ctypes.windll.kernel32
-    for attempt in range(retries + 1):
-        _mutex_handle = k32.CreateMutexW(None, False, name)
-        if k32.GetLastError() != 183:  # != ERROR_ALREADY_EXISTS → adquirimos
-            return True
-        if _mutex_handle:
-            k32.CloseHandle(_mutex_handle)
-            _mutex_handle = None
-        if attempt < retries:
-            time.sleep(delay)
-    return False
-
-
-# Evento nomeado que a 2ª instância usa para pedir "mostre a janela" à 1ª —
-# sem isso, clicar no atalho com o app já na bandeja não fazia nada visível.
-_SHOW_EVENT_NAME = "Local\\ScribaDevShowWindow"
-
-
-def _signal_show_window() -> bool:
-    """Acorda a instância que já está rodando (True se conseguiu sinalizar)."""
-    EVENT_MODIFY_STATE = 0x0002
-    k32 = ctypes.windll.kernel32
-    handle = k32.OpenEventW(EVENT_MODIFY_STATE, False, _SHOW_EVENT_NAME)
-    if not handle:
-        return False
-    k32.SetEvent(handle)
-    k32.CloseHandle(handle)
-    return True
+# Instância única + sinal "mostre a janela" + relaunch: por SO, na camada de
+# plataforma (plat._win = mutex/evento/PowerShell históricos; plat._posix =
+# flock/socket/Popen). O retry pós-update (#74) vive lá.
 
 
 def _setup_logging() -> None:
@@ -546,34 +501,13 @@ class ScribaApp:
         gracioso travar. Sem o 'forçar', um cleanup preso (tray/thread) segura o mutex,
         a nova instância aborta no single-instance e o app 'não reinicia sozinho'.
         Auto-restart do update (#19)."""
-        import subprocess
-        from pathlib import Path
-
         from PySide6.QtWidgets import QMessageBox
 
-        pyw = Path(sys.executable)
-        if pyw.name.lower() == "python.exe":
-            pyw = pyw.with_name("pythonw.exe")  # sem janela de console
-        # PS que espera este processo sair (libera o mutex) e sobe a nova instância.
-        # Marca SCRIBA_RELAUNCHED p/ a nova instância dar retry no single-instance (#74),
-        # e LOGA cada passo — antes a falha do Start-Process era 100% silenciosa.
-        ps = ("$ErrorActionPreference='Continue'; "
-              f"Write-Output ('[' + (Get-Date -Format s) + '] relaunch: aguardando pid {os.getpid()} sair'); "
-              f"Wait-Process -Id {os.getpid()} -Timeout 60 -ErrorAction SilentlyContinue; "
-              "$env:SCRIBA_RELAUNCHED='1'; "
-              "Write-Output 'relaunch: subindo nova instancia'; "
-              f"try {{ Start-Process '{pyw}' -ArgumentList '-m','scriba.cli','run' -ErrorAction Stop; "
-              "Write-Output 'relaunch: Start-Process OK' } "
-              "catch { Write-Output ('relaunch: Start-Process FALHOU - ' + $_.Exception.Message) }")
+        # o COMO relançar é por SO (plat._win = PowerShell Wait-Process/Start-Process;
+        # plat._posix = Popen detached + retry no lock); o fluxo de UX fica aqui
         try:
             util.ensure_app_dirs()
-            logf = open(util.LOGS_DIR / "relaunch.log", "a", encoding="utf-8")
-            subprocess.Popen(
-                ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps],
-                stdout=logf, stderr=subprocess.STDOUT,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                | getattr(subprocess, "DETACHED_PROCESS", 0),
-            )
+            plat.spawn_relaunch(os.getpid(), util.LOGS_DIR / "relaunch.log")
             scheduled = True
         except Exception:
             log.exception("falha ao agendar o relançamento")
@@ -980,15 +914,12 @@ class ScribaApp:
 
     def _show_window_listener(self) -> None:
         """Espera o sinal de uma 2ª instância (atalho clicado) e mostra a janela."""
-        handle = ctypes.windll.kernel32.CreateEventW(None, False, False, _SHOW_EVENT_NAME)
-        if not handle:
-            log.warning("não consegui criar o evento de ativação")
-            return
-        while not self.stop_event.is_set():
-            # timeout de 1 s para reavaliar o stop_event; 0 = WAIT_OBJECT_0 (sinalizado)
-            if ctypes.windll.kernel32.WaitForSingleObject(handle, 1000) == 0:
-                log.info("ativado por uma 2ª instância (atalho) — mostrando a janela")
-                self.show_main()
+
+        def on_signal() -> None:
+            log.info("ativado por uma 2ª instância (atalho) — mostrando a janela")
+            self.show_main()
+
+        plat.show_window_listener(self.stop_event, on_signal)
 
     # ----------------------------------------------------------------- run --
 
@@ -1112,10 +1043,10 @@ def run_app(minimized: bool = False) -> int:
     # o mutex; damos alguns retries p/ ela liberar (o 2º-launch normal, do atalho, segue
     # instantâneo — sem retry). Marcado pela env var setada no PS do relaunch.
     relaunched = os.environ.get("SCRIBA_RELAUNCHED") == "1"
-    if not _single_instance(retries=10 if relaunched else 0):
+    if not plat.single_instance(retries=10 if relaunched else 0):
         # clique no atalho com o app já vivo: pede à instância ativa que abra a
         # janela principal (antes a 2ª instância morria muda e "nada acontecia")
-        if _signal_show_window():
+        if plat.signal_show_window():
             print("ScribaDev já está rodando — abrindo a janela da instância ativa.")
         else:
             print("ScribaDev já está rodando (ícone na bandeja).")
