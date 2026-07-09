@@ -64,6 +64,7 @@ class TestBackendPosix(unittest.TestCase):
 
 
 class TestHasNvidiaGpu(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "win32", "sonda o nvcuda.dll real (WinDLL)")
     def test_win_devolve_bool(self):
         # sonda real no runner (com ou sem GPU): o contrato é não levantar
         self.assertIsInstance(_win.has_nvidia_gpu(), bool)

@@ -276,7 +276,10 @@ class DetectorStateMachineTests(unittest.TestCase):
     def test_excecao_no_poll_logada_uma_vez_por_minuto(self):
         det = self._make()
         det._mic_sessions = mock.Mock(side_effect=RuntimeError("registro falhou"))
-        with self.assertLogs("scriba.detector", "ERROR") as cm:
+        # a lógica do loop é agnóstica de SO; o guard POSIX do run() (#102) sai
+        # antes do loop — força win32 p/ exercitar o throttle em qualquer SO
+        with mock.patch.object(sys, "platform", "win32"), \
+                self.assertLogs("scriba.detector", "ERROR") as cm:
             det.run(_StopAfter(2))  # 2 polls no MESMO instante
         falhas = [line for line in cm.output if "falha no poll" in line]
         self.assertEqual(len(falhas), 1)  # o segundo poll (< 60s) é suprimido
@@ -284,11 +287,13 @@ class DetectorStateMachineTests(unittest.TestCase):
     def test_excecao_no_poll_volta_a_logar_apos_60s(self):
         det = self._make()
         det._mic_sessions = mock.Mock(side_effect=RuntimeError("registro falhou"))
-        with self.assertLogs("scriba.detector", "ERROR") as cm:
+        with mock.patch.object(sys, "platform", "win32"), \
+                self.assertLogs("scriba.detector", "ERROR") as cm:
             det.run(_StopAfter(1))
         self.assertEqual(len(cm.output), 1)
         self.clock.advance(61.0)
-        with self.assertLogs("scriba.detector", "ERROR") as cm:
+        with mock.patch.object(sys, "platform", "win32"), \
+                self.assertLogs("scriba.detector", "ERROR") as cm:
             det.run(_StopAfter(1))  # já passou 1 min -> loga de novo
         self.assertEqual(len(cm.output), 1)
 

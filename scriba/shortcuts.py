@@ -56,8 +56,14 @@ _IID_IPropertyStore = "{886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99}"
 _PKEY_AppUserModel_ID = ("{9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}", 5)
 
 
-def _com_method(obj: c_void_p, index: int, *argtypes, restype=ctypes.HRESULT):
-    """Resolve o método `index` da vtable de `obj` (COM cru, sem comtypes)."""
+def _com_method(obj: c_void_p, index: int, *argtypes, restype=None):
+    """Resolve o método `index` da vtable de `obj` (COM cru, sem comtypes).
+
+    restype default = ctypes.HRESULT, resolvido em TEMPO DE CHAMADA: como default
+    de parâmetro (import-time) quebrava o import do módulo no POSIX, onde
+    ctypes.HRESULT não existe (#102)."""
+    if restype is None:
+        restype = ctypes.HRESULT
     vtbl = ctypes.cast(obj, POINTER(POINTER(c_void_p))).contents
     proto = ctypes.WINFUNCTYPE(restype, c_void_p, *argtypes)
     return proto(vtbl[index])
