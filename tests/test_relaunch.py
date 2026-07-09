@@ -8,6 +8,7 @@ Nada real roda aqui: subprocess, QMessageBox, os._exit e threading.Timer são st
 então o teste não abre janela (o QMessageBox é modal), não relança processo nem encerra o runner.
 """
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -18,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scriba.main import ScribaApp  # noqa: E402
 
 
+@unittest.skipUnless(sys.platform == "win32", "asserta o relançador PowerShell (plat._win)")
 class RelaunchTests(unittest.TestCase):
     def _app(self):
         # __new__ sem __init__: não cria Tk root nem threads; só queremos o método
@@ -81,48 +83,107 @@ class RelaunchTests(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == "win32", "mutex nomeado é específico do Windows")
 class SingleInstanceRetryTests(unittest.TestCase):
-    """_single_instance com retry: conserta o reinício pós-update intermitente (#74) —
-    a nova instância espera a antiga liberar o mutex em vez de abortar de cara."""
+    """single_instance (plat._win) com retry: conserta o reinício pós-update
+    intermitente (#74) — a nova instância espera a antiga liberar o mutex em vez
+    de abortar de cara. Código movido de main.py para a camada na #100."""
 
     def setUp(self):
         import ctypes
         import os
-        from scriba import main
-        self.main = main
+        from scriba.plat import _win
+        self.win = _win
         self.k32 = ctypes.windll.kernel32
         # nome ÚNICO por processo: não colide com o mutex do app real que pode estar vivo
         self.name = f"Local\\ScribaDevTest_{os.getpid()}"
-        main._mutex_handle = None
+        _win._mutex_handle = None
 
     def tearDown(self):
-        if self.main._mutex_handle:
-            self.k32.CloseHandle(self.main._mutex_handle)
-            self.main._mutex_handle = None
+        if self.win._mutex_handle:
+            self.k32.CloseHandle(self.win._mutex_handle)
+            self.win._mutex_handle = None
 
     def test_sem_retry_falha_de_cara_com_mutex_preso(self):
         held = self.k32.CreateMutexW(None, False, self.name)  # simula instância anterior
         try:
-            self.assertFalse(self.main._single_instance(retries=0, name=self.name))
+            self.assertFalse(self.win.single_instance(retries=0, name=self.name))
         finally:
             self.k32.CloseHandle(held)
 
     def test_retry_espera_mas_falha_se_nunca_libera(self):
         held = self.k32.CreateMutexW(None, False, self.name)
         try:
-            self.assertFalse(self.main._single_instance(retries=3, delay=0.01, name=self.name))
+            self.assertFalse(self.win.single_instance(retries=3, delay=0.01, name=self.name))
         finally:
             self.k32.CloseHandle(held)
 
     def test_adquire_quando_livre(self):
-        self.assertTrue(self.main._single_instance(retries=2, delay=0.01, name=self.name))
-        self.assertIsNotNone(self.main._mutex_handle)  # segura o handle no sucesso
+        self.assertTrue(self.win.single_instance(retries=2, delay=0.01, name=self.name))
+        self.assertIsNotNone(self.win._mutex_handle)  # segura o handle no sucesso
 
     def test_retry_adquire_apos_liberacao(self):
         # a instância anterior segura o mutex e o solta durante os retries → adquire
         import threading
         held = self.k32.CreateMutexW(None, False, self.name)
         threading.Timer(0.05, lambda: self.k32.CloseHandle(held)).start()
-        self.assertTrue(self.main._single_instance(retries=30, delay=0.02, name=self.name))
+        self.assertTrue(self.win.single_instance(retries=30, delay=0.02, name=self.name))
+
+
+class PosixSpawnRelaunchTests(unittest.TestCase):
+    """spawn_relaunch POSIX (mockado — roda em qualquer SO): Popen detached com
+    SCRIBA_RELAUNCHED=1; a espera pela instância antiga é o retry no flock."""
+
+    def test_popen_detached_com_env_de_relaunch(self):
+        from scriba.plat import _posix
+
+        with mock.patch("subprocess.Popen") as popen, \
+                mock.patch("builtins.open", mock.mock_open()):
+            _posix.spawn_relaunch(1234, Path("relaunch.log"))
+
+        argv = popen.call_args[0][0]
+        self.assertEqual(argv, [sys.executable, "-m", "scriba.cli", "run"])
+        kwargs = popen.call_args.kwargs
+        self.assertTrue(kwargs["start_new_session"])  # sobrevive à morte do pai
+        self.assertEqual(kwargs["env"]["SCRIBA_RELAUNCHED"], "1")  # retry no lock (#74)
+
+
+@unittest.skipUnless(os.name == "posix", "flock/AF_UNIX são POSIX")
+class PosixSingleInstanceTests(unittest.TestCase):
+    """flock real: mesmo contrato do mutex do Windows (roda no CI Linux, #103)."""
+
+    def setUp(self):
+        import tempfile
+        from scriba.plat import _posix
+        self.posix = _posix
+        self.tmp = tempfile.TemporaryDirectory()
+        self.lock = str(Path(self.tmp.name) / "instance.lock")
+        _posix._lock_file = None
+
+    def tearDown(self):
+        if self.posix._lock_file:
+            self.posix._lock_file.close()
+            self.posix._lock_file = None
+        self.tmp.cleanup()
+
+    def test_adquire_quando_livre(self):
+        self.assertTrue(self.posix.single_instance(name=self.lock))
+        self.assertIsNotNone(self.posix._lock_file)
+
+    def test_segunda_instancia_falha_com_lock_preso(self):
+        import fcntl
+        held = open(self.lock, "w")
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)  # simula instância anterior
+        try:
+            self.assertFalse(self.posix.single_instance(retries=0, name=self.lock))
+        finally:
+            held.close()
+
+    def test_retry_adquire_apos_liberacao(self):
+        import fcntl
+        import threading
+        held = open(self.lock, "w")
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        threading.Timer(0.05, held.close).start()  # fechar o fd solta o flock
+        self.assertTrue(self.posix.single_instance(retries=30, delay=0.02, name=self.lock))
 
 
 if __name__ == "__main__":
