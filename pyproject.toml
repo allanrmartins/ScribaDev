@@ -59,7 +59,9 @@ scribadev = "scriba.cli:main"
 scribadev-tray = "scriba.cli:main_tray"
 
 [tool.setuptools]
-packages = ["scriba"]
+# subpacotes listados explicitamente: sem eles um build NÃO-editável (wheel/sdist)
+# omitiria scriba.qt/scriba.plat em silêncio (o editable de hoje mascara isso)
+packages = ["scriba", "scriba.plat", "scriba.qt"]
 
 # versão = fonte única em scriba/__init__.py (__version__); bump = editar lá só
 [tool.setuptools.dynamic]

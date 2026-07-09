@@ -16,9 +16,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
 
+from . import plat
+
 log = logging.getLogger("scriba.util")
 
-APP_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ScribaDev"
+# Diretório de dados por SO via camada de plataforma (#104). No Windows é o
+# %LOCALAPPDATA%\ScribaDev de sempre (plat._win); Linux/macOS em plat._posix.
+APP_DIR = plat.app_data_dir()
 LOGS_DIR = APP_DIR / "logs"
 CONFIG_PATH = APP_DIR / "config.toml"
 STATE_PATH = APP_DIR / "state.json"
@@ -197,15 +201,12 @@ def bootstrap_cuda_dlls() -> None:
 
 
 def open_path(path) -> None:
-    """Abre arquivo ou pasta no Explorer (substituto do os.startfile).
+    """Abre arquivo ou pasta no gerenciador do SO (Explorer / xdg-open / open).
 
-    O winrt (toasts) inicializa o COM do processo em MTA, e o ShellExecute do
-    os.startfile falha em abrir pastas nesse modo ("o local não está
-    disponível"). O explorer.exe em processo próprio não tem esse problema.
+    O porquê do explorer.exe em processo próprio no Windows (COM em MTA do
+    winrt) vive em plat._win.open_path (#104).
     """
-    import subprocess
-
-    subprocess.Popen(["explorer.exe", str(path)])
+    plat.open_path(path)
 
 
 def console_python() -> Path:
