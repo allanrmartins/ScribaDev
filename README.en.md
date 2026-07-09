@@ -13,7 +13,7 @@
 <p align="center">
   <img src="docs/pilula.png" alt="Recording pill" width="300">
   <br><br>
-  <img src="docs/janela.png" alt="ScribaDev — main window with service status" width="480">
+  <img src="docs/janela.png" alt="ScribaDev — main window with recent meetings, action items and service status" width="480">
   <br><br>
   <img src="docs/notas.png" alt="ScribaDev — notes reader with titles" width="780">
 </p>
@@ -39,7 +39,7 @@ local pyannote (optional) ──► splits voices into Participante 1/2/3
 claude -p (optional) ──► meeting title + client + structured summary
         │
         ▼
-notas.md ──► exported to Documents\ScribaDev\
+notas.md ──► exported to %LOCALAPPDATA%\ScribaDev\Notas\
         │
         ▼
 audio archived as Opus (~20 MB/h) ──► folder renamed with the note's title
@@ -82,7 +82,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 
 | What | Where (default) | Configurable? |
 |---|---|---|
-| Final notes (`.md`) | `Documents\ScribaDev\` | ✅ Settings window |
+| Final notes (`.md`) | `%LOCALAPPDATA%\ScribaDev\Notas\` | ✅ Settings window |
 | Recordings (one folder per meeting, in a date tree named after the note's title: `2026\06\12\16-34_Boleto não gerado em produção\`) | `C:\temp\scribadev\gravacoes\` | ✅ Settings window |
 | Summary prompt (`prompt.md`) | `%LOCALAPPDATA%\ScribaDev\prompt.md` | ✅ Summary tab (built-in editor) |
 | Config, logs and Python environment | `%LOCALAPPDATA%\ScribaDev\` | — |
@@ -120,17 +120,19 @@ Join a Teams call (or a Meet in the browser) and the pill shows up at the top of
 
 The pill only disappears when the call ends. With `auto_record` off (Settings), nothing is recorded until you click ⏺. When you leave the call: a "Transcribing…" toast, then "Notes ready" with a button that opens the `.md`.
 
-**Double-click the tray icon** to open the **main window**: status of every service (detection, audio, Whisper/GPU, Claude, diarization, autostart), the **live call with duration** and the **⏺ Record** button. Minimizing keeps the app in the taskbar; closing (X) removes it from the taskbar while monitoring continues in the tray.
+**Double-click the tray icon** to open the **main window** - the antechamber to your notes: **recent meetings** (click to open the note), a summary in numbers (**how many meetings, total time recorded, clients**), the **open action items** across all notes with a counter, the **live call in progress with a running duration** and the **⏺ Record** button, and a prominent **Notas** button. Service diagnostics (detection, audio, Whisper/GPU, Claude, diarization, autostart) live in a collapsible **Serviços** section. Minimizing keeps the app in the taskbar; closing (X) removes it from the taskbar while monitoring continues in the tray.
 
-The **Notas** button opens the **Notes window**: a built-in reader for the generated notes (rendered markdown, grouped by day, with **AI-identified, editable title and client** — when the client can't be inferred from the conversation, the field is left blank for you to type), **content search** that highlights matches, and a **live progress bar** for meetings still transcribing/summarizing. Notes are split into **collapsible blocks** (click a section title): the full transcript starts collapsed and tables (e.g. **SAP objects**) render as **real tables**, each with its own **⧉ copy (Excel)** button — TSV that pastes straight into cells. Independent copy actions: **"Copiar p/ Claude"** (just the activity context — the transcript is already summarized) and **"Copiar transcrição"**.
+The **Notas** button opens the **Notes window** - the heart of the app: on the left, meetings **grouped by day** with **content search** (highlights matches) and **collapsible filters** (date, client, participant); on the right, the markdown reader, with **AI-identified, editable title and client** (when the client can't be inferred from the conversation, the field is left blank for you to type) and a **live progress bar** for meetings still transcribing/summarizing. An **action bar** offers generating the context prompt, copying, **"ask the meeting"** (a chat that searches the transcript), labeling speakers and deleting. Tables (e.g. **SAP objects**) render as **real tables** with **⧉ copy (Excel)** next to them - TSV that pastes straight into cells; the **full transcript** sits behind a link at the end of the document (show/hide without "jumping" your reading). Also: **keyboard shortcuts** and a **context menu** on the meeting list.
 
-The **⚙** button opens **Settings**, with **Gravação / Pastas / Resumo** tabs — settings grouped by category, including a **global record/stop hotkey** (capture the combo with the "Gravar atalho" button); in the **Resumo** tab, a `prompt.md` editor: the markdown instructions that drive the minutes (sections, rules, vocabulary) — customize freely, restore the default anytime.
+The **⚙** button opens **Settings**, with **Gravação / Transcrição / IA / Detecção / Pastas / Aparência / Sobre** tabs - grouped by category, including a **global record/stop hotkey** (capture the combo with the "Gravar atalho" button). In the **IA** tab, a `prompt.md` editor: the markdown instructions that drive the minutes (sections, rules, vocabulary) - customize freely, restore the default anytime. In the **Aparência** tab, pick a **theme**: *Automático* (follows Windows' light/dark mode) or one of four - **VS Code**, **Sublime**, **Claude** and **Claro** - switched instantly. The **Sobre** tab shows component health (GPU, diarization, ffmpeg) and updates.
 
 <p align="center">
-  <img src="docs/configuracoes.png" alt="ScribaDev — Settings, Resumo tab with the prompt.md editor" width="640">
+  <img src="docs/configuracoes.png" alt="ScribaDev — Settings, IA tab with the prompt.md editor" width="640">
+  <br><br>
+  <img src="docs/tema.png" alt="ScribaDev — Settings, Aparência tab with the theme grid and preview" width="640">
 </p>
 
-On first run, the **profile assistant** opens by itself: describe your role, area, stack and jargon, and ScribaDev **writes the meeting-notes instructions tailored to your work** — AI-generated (and validated against the structure the notes reader expects) or from an offline-ready template — and also fills the **hotwords** that guide transcription with your vocabulary. Everything is previewed before applying (the previous prompt is kept as `prompt.md.bak`); reopen it anytime via the **Assistente de perfil…** link in the Resumo tab or with `scribadev wizard`.
+On first run, the **profile assistant** opens by itself: describe your role, area, stack and jargon, and ScribaDev **writes the meeting-notes instructions tailored to your work** — AI-generated (and validated against the structure the notes reader expects) or from an offline-ready template — and also fills the **hotwords** that guide transcription with your vocabulary. Everything is previewed before applying (the previous prompt is kept as `prompt.md.bak`); reopen it anytime via the **Assistente de perfil…** link in the **IA** tab or with `scribadev wizard`.
 
 <p align="center">
   <img src="docs/wizard.png" alt="ScribaDev — profile assistant (prompt wizard by role)" width="640">
@@ -155,7 +157,7 @@ On first run, the **profile assistant** opens by itself: describe your role, are
 | `scribadev shortcut` | (re)create the Desktop and Start Menu shortcuts |
 | `scribadev purge` | delete already-transcribed recordings past the retention window (`--days N` overrides, `--dry-run` lists only) |
 
-Tray menu: **Record now/Stop** (covers in-person meetings and apps outside detection), **Open meetings/notes folder**, **Process pending** (resumes work interrupted by a shutdown) and **Quit**.
+Tray menu: **Record now/Stop** (covers in-person meetings and apps outside detection), **Theme** (quick switch between themes), **Open meetings/notes folder**, **Process pending** (resumes work interrupted by a shutdown) and **Quit**.
 
 ## Output (`notas.md`)
 
@@ -193,7 +195,7 @@ whisper: large-v3-turbo (cuda)
 **[00:00:45] Eu:** Entendi. O campo MATNR vem da MARA?
 ```
 
-`notas.md` is formatted to be **used as context in an AI** (Claude Code, etc.): **Objetivo** classifies the activity — a call can be development, standard-code debugging, effort estimation, or helping a functional analyst or another ABAPer — and **Detalhamento** adapts to it; **Regras de negócio** captures business rules and algorithms spoken in the conversation, and **Pendências** points out what's still undefined so the AI flags it instead of assuming. The final copy goes to `Documents\ScribaDev\` — and each meeting lives in its own folder under `C:\temp\scribadev\gravacoes\` (a `YYYY\MM\DD\` tree, renamed with the note's title), where the recording ends up **archived as 16 kHz mono Opus** (~20 MB/hour instead of ~1.3 GB of raw WAV — exactly the format Whisper consumes, lossless for transcription purposes). If a recording comes out incomplete (app killed mid-call, a mic stream that died), the note **warns at the top** from which minute the audio was lost. All configurable in the Settings window, including **retention**: already-transcribed recordings are deleted after N days (default 30; the final note is never touched).
+`notas.md` is formatted to be **used as context in an AI** (Claude Code, etc.): **Objetivo** classifies the activity — a call can be development, standard-code debugging, effort estimation, or helping a functional analyst or another ABAPer — and **Detalhamento** adapts to it; **Regras de negócio** captures business rules and algorithms spoken in the conversation, and **Pendências** points out what's still undefined so the AI flags it instead of assuming. The final copy goes to `%LOCALAPPDATA%\ScribaDev\Notas\` — and each meeting lives in its own folder under `C:\temp\scribadev\gravacoes\` (a `YYYY\MM\DD\` tree, renamed with the note's title), where the recording ends up **archived as 16 kHz mono Opus** (~20 MB/hour instead of ~1.3 GB of raw WAV — exactly the format Whisper consumes, lossless for transcription purposes). If a recording comes out incomplete (app killed mid-call, a mic stream that died), the note **warns at the top** from which minute the audio was lost. All configurable in the Settings window, including **retention**: already-transcribed recordings are deleted after N days (default 30; the final note is never touched).
 
 ## Configuration
 
@@ -237,7 +239,7 @@ overlay = true           # floating pill
 hotkey = "ctrl+alt+r"    # global record/stop hotkey; empty disables
 
 [output]
-export_dir = ""          # empty = Documents\ScribaDev
+export_dir = ""          # empty = %LOCALAPPDATA%\ScribaDev\Notas
 recordings_dir = ""      # empty = C:\temp\scribadev\gravacoes (created automatically)
 ```
 
@@ -262,7 +264,7 @@ With **diarization** on, the other participants come out as **Participante 1/2/3
 
 - **Audio never leaves your machine** — recording and transcription are 100% local.
 - With `[summary] enabled = true`, the transcript **text** is sent to Anthropic through Claude Code (the account/subscription you already use). Disable it for a fully offline flow.
-- Recordings and transcripts live in `C:\temp\scribadev\gravacoes` (configurable), away from synced folders — and are **deleted automatically** after the retention window (default 30 days; `0` keeps forever); config and logs in `%LOCALAPPDATA%\ScribaDev`. Only the final `.md` goes to Documents.
+- Recordings and transcripts live in `C:\temp\scribadev\gravacoes` (configurable), away from synced folders — and are **deleted automatically** after the retention window (default 30 days; `0` keeps forever); config and logs in `%LOCALAPPDATA%\ScribaDev`. Only the final `.md` goes to `%LOCALAPPDATA%\ScribaDev\Notas`.
 
 ## Legal notice
 

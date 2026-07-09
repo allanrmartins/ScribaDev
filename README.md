@@ -13,7 +13,7 @@
 <p align="center">
   <img src="docs/pilula.png" alt="Pílula de gravação" width="300">
   <br><br>
-  <img src="docs/janela.png" alt="ScribaDev — janela principal com status dos serviços" width="480">
+  <img src="docs/janela.png" alt="ScribaDev — janela principal com reuniões recentes, pendências e status dos serviços" width="480">
   <br><br>
   <img src="docs/notas.png" alt="ScribaDev — leitor de notas com títulos" width="780">
 </p>
@@ -39,7 +39,7 @@ pyannote local (opcional) ──► separa as vozes em Participante 1/2/3
 claude -p (opcional) ──► título + cliente + resumo estruturado da reunião
         │
         ▼
-notas.md ──► exportado para Documentos\ScribaDev\
+notas.md ──► exportado para %LOCALAPPDATA%\ScribaDev\Notas\
         │
         ▼
 áudio arquivado em Opus (~20 MB/h) ──► pasta renomeada com o título da nota
@@ -82,7 +82,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 
 | O quê | Onde (padrão) | Configurável? |
 |---|---|---|
-| Notas finais (`.md`) | `Documentos\ScribaDev\` | ✅ janela de Configurações |
+| Notas finais (`.md`) | `%LOCALAPPDATA%\ScribaDev\Notas\` | ✅ janela de Configurações |
 | Gravações (uma pasta por reunião, em árvore por data e nomeada com o título da nota: `2026\06\12\16-34_Boleto não gerado em produção\`) | `C:\temp\scribadev\gravacoes\` | ✅ janela de Configurações |
 | Prompt do resumo (`prompt.md`) | `%LOCALAPPDATA%\ScribaDev\prompt.md` | ✅ aba Resumo (editor embutido) |
 | Config, logs e ambiente Python | `%LOCALAPPDATA%\ScribaDev\` | — |
@@ -127,7 +127,9 @@ O botão **Notas** abre a **janela de Notas** — o coração do app: à esquerd
 O botão **⚙** abre as **Configurações**, com abas **Gravação / Transcrição / IA / Detecção / Pastas / Aparência / Sobre** — agrupadas por categoria, incluindo **atalho de teclado global** para gravar/parar (capture a combinação com o botão "Gravar atalho"). Na aba **IA**, um editor do `prompt.md`: o markdown com as instruções que geram a ata (seções, regras, vocabulário) — personalize à vontade e restaure o padrão quando quiser. Na aba **Aparência**, escolha o **tema**: *Automático* (segue o modo claro/escuro do Windows) ou um dos quatro — **VS Code**, **Sublime**, **Claude** e **Claro** — com troca na hora. A aba **Sobre** mostra a saúde dos componentes (GPU, diarização, ffmpeg) e as atualizações.
 
 <p align="center">
-  <img src="docs/configuracoes.png" alt="ScribaDev — Configurações, aba Resumo com o editor do prompt.md" width="640">
+  <img src="docs/configuracoes.png" alt="ScribaDev — Configurações, aba IA com o editor do prompt.md" width="640">
+  <br><br>
+  <img src="docs/tema.png" alt="ScribaDev — Configurações, aba Aparência com a grade de temas e prévia" width="640">
 </p>
 
 Na primeira execução, o **Assistente de perfil** abre sozinho: você descreve profissão, área, stack e jargão, e o ScribaDev **escreve as instruções da ata sob medida para o seu trabalho** — geradas por IA (e validadas contra o formato que o leitor de notas espera) ou por um modelo pronto que funciona offline — e ainda preenche as **hotwords** que guiam a transcrição com o seu vocabulário. Tudo com prévia antes de aplicar (o prompt anterior fica em `prompt.md.bak`); reacesse quando quiser pelo link **Assistente de perfil…** da aba **IA** ou por `scribadev wizard`.
@@ -193,7 +195,7 @@ whisper: large-v3-turbo (cuda)
 **[00:00:45] Eu:** Entendi. O campo MATNR vem da MARA?
 ```
 
-O `notas.md` é formatado para ser **usado como contexto numa IA** (Claude Code, etc.): o **Objetivo** classifica a atividade — a call pode ser desenvolvimento, análise/debug de standard, estimativa de esforço, suporte a funcional ou a outro ABAP — e o **Detalhamento** se molda a ela; **Regras de negócio** captura algoritmos e definições funcionais ditos na conversa, e **Pendências** aponta o que ainda não está definido para a IA não presumir. A cópia final vai para `Documentos\ScribaDev\` — e cada reunião vive numa pasta própria em `C:\temp\scribadev\gravacoes\` (árvore `AAAA\MM\DD\`, renomeada com o título da nota), onde a gravação termina **arquivada em Opus 16 kHz mono** (~20 MB/hora em vez de ~1,3 GB de WAV cru — exatamente o formato que o Whisper consome, sem perda para transcrição). Se a gravação vier incompleta (app encerrado no meio da call, microfone que parou), a nota **avisa no topo** a partir de que minuto o áudio se perdeu. Tudo configurável na janela de Configurações, incluindo a **retenção**: gravações já transcritas são apagadas após N dias (padrão 30; a nota final nunca é tocada).
+O `notas.md` é formatado para ser **usado como contexto numa IA** (Claude Code, etc.): o **Objetivo** classifica a atividade — a call pode ser desenvolvimento, análise/debug de standard, estimativa de esforço, suporte a funcional ou a outro ABAP — e o **Detalhamento** se molda a ela; **Regras de negócio** captura algoritmos e definições funcionais ditos na conversa, e **Pendências** aponta o que ainda não está definido para a IA não presumir. A cópia final vai para `%LOCALAPPDATA%\ScribaDev\Notas\` — e cada reunião vive numa pasta própria em `C:\temp\scribadev\gravacoes\` (árvore `AAAA\MM\DD\`, renomeada com o título da nota), onde a gravação termina **arquivada em Opus 16 kHz mono** (~20 MB/hora em vez de ~1,3 GB de WAV cru — exatamente o formato que o Whisper consome, sem perda para transcrição). Se a gravação vier incompleta (app encerrado no meio da call, microfone que parou), a nota **avisa no topo** a partir de que minuto o áudio se perdeu. Tudo configurável na janela de Configurações, incluindo a **retenção**: gravações já transcritas são apagadas após N dias (padrão 30; a nota final nunca é tocada).
 
 ## Configuração
 
@@ -237,7 +239,7 @@ overlay = true           # pílula flutuante
 hotkey = "ctrl+alt+r"    # atalho global gravar/parar; vazio desativa
 
 [output]
-export_dir = ""          # vazio = Documentos\ScribaDev
+export_dir = ""          # vazio = %LOCALAPPDATA%\ScribaDev\Notas
 recordings_dir = ""      # vazio = C:\temp\scribadev\gravacoes (criada automaticamente)
 ```
 
@@ -262,7 +264,7 @@ Com a **diarização** ativa, as falas dos outros participantes saem como **Part
 
 - O **áudio nunca sai da sua máquina** — gravação e transcrição são 100% locais.
 - Com `[summary] enabled = true`, o **texto** da transcrição é enviado à Anthropic via Claude Code (a mesma conta/assinatura que você já usa). Desabilite para um fluxo 100% offline.
-- Gravações e transcrições ficam em `C:\temp\scribadev\gravacoes` (configurável), fora de pastas sincronizadas — e são **apagadas automaticamente** após o prazo de retenção (padrão 30 dias; `0` mantém para sempre); config e logs em `%LOCALAPPDATA%\ScribaDev`. Só o `.md` final vai para Documentos.
+- Gravações e transcrições ficam em `C:\temp\scribadev\gravacoes` (configurável), fora de pastas sincronizadas — e são **apagadas automaticamente** após o prazo de retenção (padrão 30 dias; `0` mantém para sempre); config e logs em `%LOCALAPPDATA%\ScribaDev`. Só o `.md` final vai para `%LOCALAPPDATA%\ScribaDev\Notas`.
 
 ## Aviso legal
 
