@@ -15,10 +15,16 @@ def _startup_dir() -> Path:
 
 
 def is_enabled() -> bool:
+    if sys.platform != "win32":
+        return False
     return (_startup_dir() / _LNK_NAME).exists()
 
 
 def set_autostart(enable: bool) -> int:
+    if sys.platform != "win32":
+        # pasta Startup/.lnk são do Windows; .desktop/LaunchAgent vêm em marcos futuros (#104)
+        print("autostart não suportado neste SO ainda (Windows-only por ora)")
+        return 1
     lnk = _startup_dir() / _LNK_NAME
     if not enable:
         lnk.unlink(missing_ok=True)

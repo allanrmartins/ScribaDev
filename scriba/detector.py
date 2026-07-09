@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 import time
 from enum import Enum
 from typing import Callable
@@ -571,6 +572,11 @@ class Detector:
 
     def run(self, stop_event) -> None:
         """Loop de detecção (roda em thread própria)."""
+        if sys.platform != "win32":
+            # o ConsentStore do registro não tem equivalente POSIX; a detecção
+            # automática fora do Windows é um marco futuro (#104)
+            log.info("detecção automática de calls não suportada neste SO ainda — use a gravação manual")
+            return
         while not stop_event.is_set():
             try:
                 self.poll_once()
@@ -591,6 +597,9 @@ class Detector:
 
 def debug_loop() -> int:
     """`scriba detect`: imprime as transições de estado para teste manual."""
+    if sys.platform != "win32":
+        print("detecção automática de calls não suportada neste SO ainda (Windows-only por ora)")
+        return 1
     from .config import load
 
     # espelha os logs INFO/WARN do detector (GRACE, resume com o gap medido,

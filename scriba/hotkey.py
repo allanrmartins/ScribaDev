@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import sys
 import threading
 from ctypes import wintypes
 from typing import Callable
@@ -50,6 +51,10 @@ class GlobalHotkey:
         self._thread: threading.Thread | None = None
 
     def start(self) -> bool:
+        if sys.platform != "win32":
+            # RegisterHotKey é Win32; atalho global POSIX vem em marcos futuros (#104)
+            log.info("hotkey global não suportada neste SO ainda — '%s' ignorado", self.spec)
+            return False
         parsed = parse(self.spec)
         if parsed is None:
             return False

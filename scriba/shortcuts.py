@@ -140,6 +140,10 @@ _FOLDERID_PROGRAMS = "A77F5D77-2E2B-44C3-A6A2-ABA601054A51"
 
 def create_shortcuts(desktop: bool = True, start_menu: bool = True) -> int:
     """Cria os atalhos pedidos. Retorna 0 se ao menos um foi criado."""
+    if sys.platform != "win32":
+        # .lnk/COM/AUMID são do Windows; .desktop/aliases vêm em marcos futuros (#104)
+        print("atalhos não suportados neste SO ainda (Windows-only por ora)")
+        return 1
     target = tray_exe()
     if not target.exists():
         print(f"não encontrei {target} — rode o setup.ps1 de novo")
