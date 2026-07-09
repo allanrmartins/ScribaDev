@@ -208,13 +208,25 @@ def open_path(path) -> None:
     subprocess.Popen(["explorer.exe", str(path)])
 
 
+def console_python() -> Path:
+    """python de CONSOLE do venv para subprocessos (não o pythonw da GUI).
+
+    No Windows a GUI roda sob pythonw.exe e sys.executable herdaria a falta de
+    console (pipes/encoding quebram) — por isso o python.exe irmão em Scripts/.
+    No POSIX não existe essa distinção (nem Scripts/): sys.executable resolve (#96).
+    """
+    if sys.platform == "win32":
+        return Path(sys.prefix) / "Scripts" / "python.exe"
+    return Path(sys.executable)
+
+
 def _audio_probe(extra_args: list[str], timeout: float) -> dict | None:
     """Roda a sonda de áudio (scriba.audioprobe) num subprocesso descartável — o
     PortAudio pode abortar o processo com assert de CRT ao enumerar. None se falhar."""
     import json
     import subprocess
 
-    python = Path(sys.prefix) / "Scripts" / "python.exe"
+    python = console_python()
     try:
         proc = subprocess.run(
             [str(python), "-X", "utf8", "-m", "scriba.audioprobe", *extra_args],
@@ -223,7 +235,7 @@ def _audio_probe(extra_args: list[str], timeout: float) -> dict | None:
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if proc.returncode == 0 and proc.stdout.strip():
             return json.loads(proc.stdout.strip().splitlines()[-1])

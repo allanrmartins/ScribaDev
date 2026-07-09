@@ -17,7 +17,6 @@ from __future__ import annotations
 import logging
 import re
 import time
-import winreg
 from enum import Enum
 from typing import Callable
 
@@ -75,6 +74,10 @@ def _iter_mic_keys():
     o app está com o mic aberto. LastUsedTimeStart é reescrito toda vez que o app
     REABRE o mic — é o sinal de fronteira entre duas calls consecutivas (#34).
     """
+    # lazy: winreg só existe no Windows; o import no topo quebrava o módulo (e a
+    # cadeia scriba.main) em Linux/macOS antes de qualquer código rodar (#96)
+    import winreg
+
     for base in (_BASE, _BASE + r"\NonPackaged"):
         try:
             root = winreg.OpenKey(winreg.HKEY_CURRENT_USER, base)

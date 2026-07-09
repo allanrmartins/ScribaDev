@@ -775,7 +775,7 @@ class ScribaApp:
 
         folder = Path(folder)
         log.info("processando %s (subprocesso)", folder.name)
-        python = Path(sys.prefix) / "Scripts" / "python.exe"
+        python = util.console_python()
         args = [str(python), "-X", "utf8", "-m", "scriba.cli", "process", str(folder)]
         meta_path = folder / "meta.json"
         log_path = folder / "process.log"
@@ -791,7 +791,7 @@ class ScribaApp:
                 args,
                 stdout=out if out is not None else subprocess.DEVNULL,
                 stderr=subprocess.STDOUT if out is not None else subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NO_WINDOW,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except Exception:
             log.exception("não consegui iniciar o subprocesso de %s", folder.name)
