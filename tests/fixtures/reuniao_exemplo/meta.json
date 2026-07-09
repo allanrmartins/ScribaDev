@@ -1,0 +1,15 @@
+{
+  "started_at": "2026-07-09T10:00:00",
+  "status": "recorded",
+  "streams": {
+    "mic": {
+      "file": "mic.wav",
+      "device": "fixture TTS (Microsoft Maria, pt-BR)",
+      "rate": 16000,
+      "channels": 1,
+      "offset_seconds": 0.0,
+      "audio_seconds": 20.3
+    }
+  },
+  "meeting_title": "Reunião de exemplo (fixture do épico #104)"
+}
