@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import winreg
 from pathlib import Path
 
 from . import util
@@ -14,6 +13,10 @@ _DISPLAY = "ScribaDev"
 def _register_aumid() -> None:
     """Registra o AUMID em HKCU (sem admin) — dá nome e ícone próprios aos toasts
     e permite que cliques a partir da Central de Ações cheguem ao app."""
+    # lazy: winreg só existe no Windows; o import no topo quebrava o módulo em
+    # Linux/macOS (#96) — este caminho só roda dentro do Notifier (Windows-only)
+    import winreg
+
     key_path = rf"SOFTWARE\Classes\AppUserModelId\{AUMID}"
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as k:
         winreg.SetValueEx(k, "DisplayName", 0, winreg.REG_SZ, _DISPLAY)
