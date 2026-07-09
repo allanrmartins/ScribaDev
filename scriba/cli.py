@@ -554,7 +554,10 @@ def cmd_doctor(args) -> int:
             from .notify import Notifier
 
             Notifier().test()
-            _print(_OK, "Toast", "notificação de teste disparada")
+            if sys.platform == "win32":
+                _print(_OK, "Toast", "notificação de teste disparada")
+            else:
+                _print(_OK, "Toast", "no-op neste SO (toasts nativos ainda não suportados) — logado")
         except Exception as e:
             _print(_FAIL, "Toast", str(e))
             failures += 1
