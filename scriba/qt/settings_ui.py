@@ -696,13 +696,11 @@ class SettingsWindow(QWidget):
 
     @staticmethod
     def _gpu_str() -> str:
-        try:
-            import ctypes
+        from .. import plat
 
-            ctypes.WinDLL("nvcuda.dll")
+        if plat.has_nvidia_gpu():
             return "NVIDIA (CUDA disponível)"
-        except Exception:
-            return "sem GPU CUDA — usa CPU"
+        return "sem GPU CUDA — usa CPU"
 
     def _check_updates_about(self) -> None:
         self._about_update_btn.setVisible(False)

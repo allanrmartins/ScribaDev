@@ -355,20 +355,25 @@ def cmd_doctor(args) -> int:
         failures += 1
         cfg = None
 
-    # Imports nativos
-    for mod, why in [
-        ("pyaudiowpatch", "captura de áudio"),
+    # Imports nativos — pyaudiowpatch/windows_toasts só existem (e só instalam,
+    # pelos markers do #95) no Windows; fora dele são não-aplicáveis (#98)
+    native = [
         ("faster_whisper", "transcrição"),
         ("ctranslate2", "motor do Whisper"),
         ("pystray", "ícone de bandeja"),
-        ("windows_toasts", "notificações"),
-    ]:
+    ]
+    if sys.platform == "win32":
+        native = [("pyaudiowpatch", "captura de áudio"), *native, ("windows_toasts", "notificações")]
+    for mod, why in native:
         try:
             __import__(mod)
             _print(_OK, f"import {mod}")
         except Exception as e:
             _print(_FAIL, f"import {mod}", f"({why}) {e}")
             failures += 1
+    if sys.platform != "win32":
+        _print(_OK, "import pyaudiowpatch", "não se aplica neste SO (captura é Windows-only por ora)")
+        _print(_OK, "import windows_toasts", "não se aplica neste SO (toasts são Windows-only)")
 
     # CUDA
     try:
@@ -415,63 +420,71 @@ def cmd_doctor(args) -> int:
     except Exception as e:
         _print(_WARN, "Resumo (IA)", f"erro ao checar o provider ({e})")
 
-    # Registro dos apps monitorados
-    try:
-        from .detector import active_app, app_key_status, patterns_from
-
-        pats = patterns_from(cfg.detection) if cfg else ["teams"]
-        in_call = active_app(pats)
-        for name, exists in app_key_status(pats).items():
-            if name == in_call:
-                _print(_OK, f"Detecção {name}", "call ATIVA agora")
-            elif exists:
-                _print(_OK, f"Detecção {name}", "chave do registro OK")
-            else:
-                _print(_WARN, f"Detecção {name}", "sem chave ainda — entre numa call dele uma vez para o Windows criá-la")
-    except Exception as e:
-        _print(_FAIL, "Detecção de apps", str(e))
-        failures += 1
-
-    # Reuniões no navegador (Google Meet, Teams web...)
-    try:
-        from .detector import (
-            browser_key_status,
-            browser_patterns_from,
-            desktop_names_from,
-            title_patterns_from,
-            web_service_label,
-        )
-
-        bpats = browser_patterns_from(cfg.detection) if cfg else []
-        if bpats:
-            desktop = desktop_names_from(cfg.detection)
-            tpats = title_patterns_from(cfg.detection) if cfg else []
-            svcs = ", ".join(dict.fromkeys(web_service_label(t, desktop) for t in tpats)) or "qualquer site com mic"
-            ready = [b for b, ok in browser_key_status(bpats).items() if ok]
-            if ready:
-                _print(_OK, "Detecção no navegador", f"{svcs} — via {', '.join(ready)}")
-            else:
-                _print(_WARN, "Detecção no navegador", f"{svcs} — nenhum navegador usou o mic ainda; entre numa call (ex.: Meet) uma vez")
-        else:
-            _print(_OK, "Detecção no navegador", "desligada (browsers = \"\")")
-    except Exception as e:
-        _print(_WARN, "Detecção no navegador", str(e))
-
-    # Áudio
-    try:
-        import pyaudiowpatch as pyaudio
-
-        p = pyaudio.PyAudio()
+    # Registro dos apps monitorados — a detecção lê o ConsentStore do Windows;
+    # fora dele ainda não há detecção automática (#98; stubs na #102)
+    if sys.platform != "win32":
+        _print(_OK, "Detecção de calls", "não suportada neste SO ainda — use a gravação manual")
+    else:
         try:
-            mic = p.get_default_input_device_info()["name"]
-            lb = p.get_default_wasapi_loopback()["name"]
-        finally:
-            p.terminate()
-        _print(_OK, "Microfone padrão", mic)
-        _print(_OK, "Loopback padrão", lb)
-    except Exception as e:
-        _print(_FAIL, "Dispositivos de áudio", str(e))
-        failures += 1
+            from .detector import active_app, app_key_status, patterns_from
+
+            pats = patterns_from(cfg.detection) if cfg else ["teams"]
+            in_call = active_app(pats)
+            for name, exists in app_key_status(pats).items():
+                if name == in_call:
+                    _print(_OK, f"Detecção {name}", "call ATIVA agora")
+                elif exists:
+                    _print(_OK, f"Detecção {name}", "chave do registro OK")
+                else:
+                    _print(_WARN, f"Detecção {name}", "sem chave ainda — entre numa call dele uma vez para o Windows criá-la")
+        except Exception as e:
+            _print(_FAIL, "Detecção de apps", str(e))
+            failures += 1
+
+        # Reuniões no navegador (Google Meet, Teams web...)
+        try:
+            from .detector import (
+                browser_key_status,
+                browser_patterns_from,
+                desktop_names_from,
+                title_patterns_from,
+                web_service_label,
+            )
+
+            bpats = browser_patterns_from(cfg.detection) if cfg else []
+            if bpats:
+                desktop = desktop_names_from(cfg.detection)
+                tpats = title_patterns_from(cfg.detection) if cfg else []
+                svcs = ", ".join(dict.fromkeys(web_service_label(t, desktop) for t in tpats)) or "qualquer site com mic"
+                ready = [b for b, ok in browser_key_status(bpats).items() if ok]
+                if ready:
+                    _print(_OK, "Detecção no navegador", f"{svcs} — via {', '.join(ready)}")
+                else:
+                    _print(_WARN, "Detecção no navegador", f"{svcs} — nenhum navegador usou o mic ainda; entre numa call (ex.: Meet) uma vez")
+            else:
+                _print(_OK, "Detecção no navegador", "desligada (browsers = \"\")")
+        except Exception as e:
+            _print(_WARN, "Detecção no navegador", str(e))
+
+    # Áudio — enumeração WASAPI (pyaudiowpatch); fora do Windows a captura ainda
+    # não existe e o item é não-aplicável (#98)
+    if sys.platform != "win32":
+        _print(_OK, "Dispositivos de áudio", "captura não suportada neste SO ainda (Windows-only)")
+    else:
+        try:
+            import pyaudiowpatch as pyaudio
+
+            p = pyaudio.PyAudio()
+            try:
+                mic = p.get_default_input_device_info()["name"]
+                lb = p.get_default_wasapi_loopback()["name"]
+            finally:
+                p.terminate()
+            _print(_OK, "Microfone padrão", mic)
+            _print(_OK, "Loopback padrão", lb)
+        except Exception as e:
+            _print(_FAIL, "Dispositivos de áudio", str(e))
+            failures += 1
 
     # Compressão do áudio guardado (ffmpeg): WAV cru -> opus/flac. Sem ele os arquivos
     # ficam gigantes (~1,3 GB/h); também decodifica áudio comprimido numa re-transcrição.
@@ -482,14 +495,19 @@ def cmd_doctor(args) -> int:
         exe = util.ffmpeg_command()
         _print(_OK, "Compressão de áudio (ffmpeg)", f"no PATH: {exe[0] if exe else 'ffmpeg'}")
     elif lvl == "err":
-        _print(_FAIL, "Compressão de áudio (ffmpeg)",
-               f"AUSENTE no PATH do Windows — o áudio fica em WAV cru (~1,3 GB/h), não {fmt} (~20 MB/h). "
-               "Instale: winget install ffmpeg (entra no PATH do Windows sozinho — não é uma pasta do "
-               "ScribaDev), feche e reabra o app. Confira com: where ffmpeg")
+        if sys.platform == "win32":
+            hint = (f"AUSENTE no PATH do Windows — o áudio fica em WAV cru (~1,3 GB/h), não {fmt} (~20 MB/h). "
+                    "Instale: winget install ffmpeg (entra no PATH do Windows sozinho — não é uma pasta do "
+                    "ScribaDev), feche e reabra o app. Confira com: where ffmpeg")
+        else:
+            hint = (f"AUSENTE no PATH — o áudio fica em WAV cru (~1,3 GB/h), não {fmt} (~20 MB/h). "
+                    "Instale pelo gerenciador do SO (ex.: apt install ffmpeg / brew install ffmpeg) "
+                    "e confira com: which ffmpeg")
+        _print(_FAIL, "Compressão de áudio (ffmpeg)", hint)
         failures += 1
     else:
         _print(_WARN, "Compressão de áudio (ffmpeg)",
-               "ausente no PATH do Windows — necessário p/ compactar o áudio guardado e re-transcrever áudio comprimido")
+               "ausente no PATH — necessário p/ compactar o áudio guardado e re-transcrever áudio comprimido")
 
     # Diarização
     if cfg and cfg.diarization.enabled:

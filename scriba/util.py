@@ -187,6 +187,10 @@ def bootstrap_cuda_dlls() -> None:
     O ctranslate2 carrega cublas64_12.dll com LoadLibrary simples, que só
     consulta o PATH do processo — os.add_dll_directory sozinho não basta.
     """
+    if sys.platform != "win32":
+        # layout Lib/site-packages/nvidia/*/bin e os.add_dll_directory são do
+        # Windows; no Linux o CUDA chega pelos wheels (RPATH), no macOS não existe (#98)
+        return
     global _dll_dirs_added
     if _dll_dirs_added:
         return
