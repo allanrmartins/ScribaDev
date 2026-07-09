@@ -9,7 +9,7 @@ concurrency:
 
 jobs:
   test:
-    # Windows porque as deps são Windows-only (pyaudiowpatch, windows-toasts)
+    # Windows = plataforma principal (captura WASAPI, toasts, detecção por registro)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,6 +20,25 @@ jobs:
         run: pip install -e .
       - name: Rodar a suite de testes
         # QT_QPA_PLATFORM=offscreen: o smoke da UI Qt roda sem display no runner
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m unittest discover -s tests -v
+
+  test-linux:
+    # Port multiplataforma (épico #104): trava regressões de portabilidade a cada
+    # push. Os markers do pyproject deixam pyaudiowpatch/windows-toasts de fora;
+    # os testes Windows-only pulam por skipUnless(sys.platform == "win32").
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Bibliotecas de sistema (Qt offscreen precisa da libegl; ffmpeg p/ áudio)
+        run: sudo apt-get update && sudo apt-get install -y libegl1 ffmpeg
+      - name: Instalar deps do projeto
+        run: pip install -e .
+      - name: Rodar a suite de testes
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m unittest discover -s tests -v

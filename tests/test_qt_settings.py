@@ -134,9 +134,12 @@ class SettingsTests(unittest.TestCase):
         win = SettingsWindow(self._app())
         self._field(win, "diarization", "hf_token")[0].setText("hf_segredo123")
         win._save()
-        # no disco fica cifrado (dpapi:...); load() decifra de volta
         raw = util.CONFIG_PATH.read_text(encoding="utf-8")
-        self.assertNotIn("hf_segredo123", raw)              # não vaza em texto plano
+        if sys.platform == "win32":
+            # no disco fica cifrado (dpapi:...) e não vaza em texto plano
+            self.assertNotIn("hf_segredo123", raw)
+        # POSIX (por ora): DPAPI indisponível -> plaintext, comportamento documentado
+        # (secrets nativos = marco futuro do #104); o round-trip vale em qualquer SO
         self.assertEqual(config_mod.load().diarization.hf_token, "hf_segredo123")
 
     def test_guard_nao_salva_sem_carregar(self):

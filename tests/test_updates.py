@@ -79,6 +79,7 @@ class ManifestTests(unittest.TestCase):
         self.assertIsNone(up.update_available())  # igual → nada novo
 
 
+@unittest.skipUnless(sys.platform == "win32", "launcher pythonw/pythonww e paths C:\\ são do Windows")
 class PipInterpreterTests(unittest.TestCase):
     """Regressão do launcher 'pythonww.exe': o auto-update JAMAIS pode rodar o pip pelo
     pythonw.exe. Sob a bandeja sys.executable é o pythonw.exe e o distlib gera o
