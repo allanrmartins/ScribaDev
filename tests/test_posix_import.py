@@ -34,6 +34,12 @@ import scriba.cli
 import scriba.detector
 import scriba.notify
 import scriba.pipeline
+import scriba.wintitles
+import scriba.hotkey
+import scriba.autostart
+import scriba.shortcuts
+import scriba.recorder
+import scriba.audioprobe
 
 print("OK")
 """

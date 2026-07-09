@@ -6,6 +6,7 @@ import json
 import logging
 import queue
 import struct
+import sys
 import threading
 import time
 from datetime import datetime
@@ -15,6 +16,10 @@ from . import util
 from .config import Config
 
 log = logging.getLogger("scriba.recorder")
+
+# captura ao vivo = WASAPI loopback (pyaudiowpatch), Windows-only por ora; a
+# captura POSIX (PipeWire/PulseAudio, CoreAudio) vem em marcos futuros (#104)
+_CAPTURE_UNSUPPORTED_MSG = "captura de áudio ao vivo não suportada neste SO ainda (Windows-only por ora)"
 
 _HEADER_PATCH_INTERVAL = 5.0  # s
 _SILENCE_THRESHOLD = 0.5  # s atrás do relógio antes de injetar silêncio
@@ -287,6 +292,10 @@ class Recording:
     """Uma gravação de reunião: mic + loopback numa pasta com meta.json."""
 
     def __init__(self, cfg: Config):
+        if sys.platform != "win32":
+            # protege também o caminho da GUI (start_recording): erro claro em
+            # vez de ModuleNotFoundError de pyaudiowpatch
+            raise RuntimeError(_CAPTURE_UNSUPPORTED_MSG)
         import pyaudiowpatch as pyaudio
 
         util.ensure_app_dirs()
@@ -454,6 +463,9 @@ def repair_folder(folder: Path) -> float:
 
 def record_for(seconds: int, show_ui: bool = True) -> int:
     """`scriba record N`: gravação manual (com a pílula flutuante, se habilitada)."""
+    if sys.platform != "win32":
+        print(_CAPTURE_UNSUPPORTED_MSG)
+        return 1
     from .config import load
 
     cfg = load()
@@ -489,6 +501,9 @@ def record_for(seconds: int, show_ui: bool = True) -> int:
 
 def list_devices() -> int:
     """`scriba devices`: lista mics e loopbacks WASAPI."""
+    if sys.platform != "win32":
+        print(_CAPTURE_UNSUPPORTED_MSG)
+        return 1
     import pyaudiowpatch as pyaudio
 
     pa = pyaudio.PyAudio()
