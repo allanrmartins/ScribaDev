@@ -1,10 +1,15 @@
-"""Notificações toast do Windows (com botão "Abrir notas")."""
+"""Notificações do app: toasts nativos no Windows (com botão "Abrir notas");
+no-op logado no POSIX até os marcos de notificação nativa do épico #104 (#101)."""
 
 from __future__ import annotations
 
+import logging
+import sys
 from pathlib import Path
 
 from . import util
+
+log = logging.getLogger("scriba.notify")
 
 AUMID = util.APP_AUMID
 _DISPLAY = "ScribaDev"
@@ -24,7 +29,7 @@ def _register_aumid() -> None:
             winreg.SetValueEx(k, "IconUri", 0, winreg.REG_SZ, str(util.ICON_PNG))
 
 
-class Notifier:
+class _WindowsNotifier:
     def __init__(self):
         from . import util
 
@@ -63,3 +68,23 @@ class Notifier:
         from . import util
 
         self._toast(["ScribaDev", "Notificação de teste — clique para abrir a pasta do app"], open_path=util.APP_DIR)
+
+
+class _NoopNotifier:
+    """POSIX (Marco 1 do #104): notificações nativas ainda não existem — loga e segue.
+
+    Mesma interface do notifier do Windows; os marcos seguintes trocam por
+    notify-send (Linux) / UNUserNotification (macOS)."""
+
+    def info(self, title: str, body: str = "") -> None:
+        log.info("notificação (no-op neste SO): %s — %s", title, body)
+
+    def notes_ready(self, md_path: Path) -> None:
+        log.info("notificação (no-op neste SO): notas prontas — %s", md_path)
+
+    def test(self) -> None:
+        log.info("notificação de teste: toasts nativos não suportados neste SO ainda")
+
+
+# a classe pública escolhe o backend pelo SO (mesmo padrão da camada plat; #101)
+Notifier = _WindowsNotifier if sys.platform == "win32" else _NoopNotifier
