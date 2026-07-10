@@ -3,11 +3,32 @@
 Usado pela detecção de calls em navegador: o registro do mic só diz que
 "chrome.exe está com o microfone aberto" — é o título de alguma janela do
 navegador (a aba ativa) que diz SE aquilo é uma reunião (Meet, Teams web...).
+
+À prova de travamento (#114): `EnumWindows` pode BLOQUEAR indefinidamente quando
+algum processo com janela top-level está travado segurando locks do window manager
+(aconteceu em produção: pendurou o thread do detector dentro do início da gravação
+e congelou o app inteiro). Título de janela é sempre cosmético/best-effort, então
+a enumeração roda numa thread própria com prazo: estourou, devolve lista vazia e
+segue a vida — a thread presa é abandonada (daemon) e nenhuma nova enumeração é
+empilhada enquanto ela não morrer.
 """
 
 from __future__ import annotations
 
+import logging
 import sys
+import threading
+
+log = logging.getLogger("scriba.wintitles")
+
+# Prazo da enumeração. Normalmente ela leva poucos ms; segundos = algo travado.
+_ENUM_TIMEOUT_S = 1.5
+
+# Threads de enumeração abandonadas por timeout que ainda não morreram. Enquanto
+# houver uma viva, novas chamadas devolvem [] direto — sem empilhar uma thread
+# presa a cada poll do detector (2 s) durante um travamento longo do sistema.
+_stuck_lock = threading.Lock()
+_stuck: list[threading.Thread] = []
 
 if sys.platform == "win32":
     import ctypes
@@ -32,8 +53,8 @@ if sys.platform == "win32":
         finally:
             _kernel32.CloseHandle(handle)
 
-    def window_titles(exe_names: set[str]) -> list[str]:
-        """Títulos das janelas top-level visíveis pertencentes aos executáveis dados.
+    def _enum_titles(exe_names: set[str]) -> list[str]:
+        """Enumeração crua (pode bloquear — só chamar via window_titles).
 
         exe_names: basenames minúsculos com extensão (ex.: {"chrome.exe"}).
         """
@@ -64,6 +85,41 @@ if sys.platform == "win32":
         return titles
 
 else:
-    def window_titles(exe_names: set[str]) -> list[str]:
+    def _enum_titles(exe_names: set[str]) -> list[str]:
         """POSIX: detecção por título de janela ainda não existe (#104) — lista vazia."""
         return []
+
+
+def window_titles(exe_names: set[str], timeout_s: float = _ENUM_TIMEOUT_S) -> list[str]:
+    """Títulos das janelas top-level visíveis dos executáveis dados — com prazo.
+
+    Roda `_enum_titles` numa thread daemon e espera no máximo `timeout_s` (#114):
+    estourou o prazo (EnumWindows pendurado por um processo travado), devolve []
+    e abandona a thread — quem chama segue sem título, nunca congela. Falha da
+    enumeração também vira [] (título é cosmético, jamais derruba a detecção).
+    """
+    with _stuck_lock:
+        _stuck[:] = [t for t in _stuck if t.is_alive()]
+        if _stuck:
+            # enumeração anterior ainda pendurada: não adianta (e não é seguro)
+            # empilhar outra — o window manager segue travado
+            return []
+
+    box: dict[str, list[str]] = {}
+
+    def _work() -> None:
+        try:
+            box["titles"] = _enum_titles(exe_names)
+        except Exception:
+            log.debug("enumeração de janelas falhou", exc_info=True)
+
+    t = threading.Thread(target=_work, daemon=True, name="wintitles")
+    t.start()
+    t.join(timeout_s)
+    if t.is_alive():
+        with _stuck_lock:
+            _stuck.append(t)
+        log.warning("enumeração de janelas não respondeu em %.1fs — seguindo sem títulos (#114)",
+                    timeout_s)
+        return []
+    return box.get("titles", [])

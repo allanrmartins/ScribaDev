@@ -64,6 +64,12 @@ class ScribaApp:
         self.rec: Recording | None = None
         self.rec_source = "auto"
         self.rec_lock = threading.Lock()
+        # início de gravação em andamento (#114): Recording() é montado FORA do
+        # rec_lock (abrir streams pode demorar; segurar o lock congelava a GUI).
+        # _rec_starting evita partida dupla; _pending_stop guarda um stop que
+        # chegou no meio da montagem, executado assim que ela termina.
+        self._rec_starting = False
+        self._pending_stop: dict | None = None
         self.call_active = False  # call do Teams em andamento (a pílula segue a call)
         self._app = None  # QApplication (criado em run())
         self._pump = None  # UiPump que drena a ui_queue na thread da GUI
@@ -192,16 +198,33 @@ class ScribaApp:
             self._toast("ScribaDev: áudio indisponível", "Não consegui acessar microfone/loopback agora.")
             return
         with self.rec_lock:
-            if self.rec is not None:
+            if self.rec is not None or self._rec_starting:
                 return
-            try:
-                rec = Recording(self.cfg)
-            except Exception as e:
-                log.exception("falha ao iniciar gravação")
-                self._toast("ScribaDev: erro ao iniciar gravação", str(e))
-                return
-            self.rec = rec
-            self.rec_source = source
+            # reserva o slot e SOLTA o lock: montar Recording() abre streams e pode
+            # demorar — segurá-lo aqui congelava is_recording()/_tick da GUI quando
+            # algo nativo pendurava a montagem (#114)
+            self._rec_starting = True
+            self._pending_stop = None
+        rec = None
+        try:
+            rec = Recording(self.cfg)
+        except Exception as e:
+            log.exception("falha ao iniciar gravação")
+            self._toast("ScribaDev: erro ao iniciar gravação", str(e))
+            return
+        finally:
+            with self.rec_lock:
+                pending = self._pending_stop
+                self._pending_stop = None
+                self._rec_starting = False
+                if rec is not None:
+                    self.rec = rec
+                    self.rec_source = source
+        if pending is not None:
+            # a call terminou enquanto a gravação nascia: encerra pelo fluxo normal
+            log.info("stop chegou durante o início da gravação — encerrando já")
+            self.stop_recording(**pending)
+            return
         log.info("gravação iniciada (%s): %s", source, rec.folder.name)
         self._toast("Gravando reunião", "O áudio está sendo capturado localmente.")
         if self.tray:
@@ -220,6 +243,11 @@ class ScribaApp:
         with self.rec_lock:
             rec, source = self.rec, self.rec_source
             self.rec = None
+            if rec is None and self._rec_starting:
+                # gravação ainda nascendo (#114): registra a intenção — o
+                # start_recording encerra assim que a montagem terminar
+                self._pending_stop = {"discard": discard, "keep": keep}
+                return
         if rec is None:
             return
         if self.tray:

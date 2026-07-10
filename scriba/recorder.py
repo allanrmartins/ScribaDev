@@ -320,13 +320,34 @@ class Recording:
         except Exception:
             self.pa.terminate()
             raise
+        # Título da reunião é COSMÉTICO e vem de EnumWindows, que pode pendurar se
+        # outro processo estiver travado (#114). A gravação nasce JÁ (meta escrito,
+        # pílula aparece); o título é capturado em thread e regrava o meta ao chegar.
+        self.meeting_title = ""
+        self._meta_lock = threading.Lock()
+        self._meta_final = False  # stop() já gravou o meta final — não sobrescrever
+        self._write_meta("recording")
+        threading.Thread(target=self._capture_title_async, args=(cfg.detection,),
+                         daemon=True, name="meetingtitle").start()
+
+    def _capture_title_async(self, detection_cfg) -> None:
+        """Captura o título da janela da reunião FORA do caminho crítico (#114).
+
+        Falha/atraso nunca afeta a gravação: no pior caso a nota fica sem
+        meeting_title. Se o título chegar depois do stop(), é descartado —
+        reescrever o meta final poderia regredir o status."""
         try:
             from .detector import capture_meeting_title
 
-            self.meeting_title = capture_meeting_title(cfg.detection)
+            title = capture_meeting_title(detection_cfg)
         except Exception:
-            self.meeting_title = ""
-        self._write_meta("recording")
+            return
+        if not title:
+            return
+        with self._meta_lock:
+            self.meeting_title = title
+            if not self._meta_final:
+                self._write_meta("recording")
 
     def _new_folder(self) -> Path:
         # árvore ano/mês/dia + pasta HH-MM da gravação (":" não é válido em nome
@@ -415,13 +436,17 @@ class Recording:
         self.mic.stop()
         self.loopback.stop()
         self.pa.terminate()
-        self._write_meta(
-            status,
-            {
-                "ended_at": datetime.now().isoformat(timespec="seconds"),
-                "duration_seconds": round(duration, 1),
-            },
-        )
+        # sob o lock do meta (#114): a thread do título não pode regravar
+        # "recording" por cima do meta final depois deste ponto
+        with self._meta_lock:
+            self._meta_final = True
+            self._write_meta(
+                status,
+                {
+                    "ended_at": datetime.now().isoformat(timespec="seconds"),
+                    "duration_seconds": round(duration, 1),
+                },
+            )
         return {"folder": self.folder, "duration_seconds": duration, "status": status}
 
 
