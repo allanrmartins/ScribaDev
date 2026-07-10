@@ -101,7 +101,8 @@ def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: Transc
         # marca o estágio antes de carregar o pyannote: a UI mostra "Separando vozes…"
         _set_status(meta, meta_path, "diarizing")
         lb_segments = next((seg for st, _sp, seg, _off in pending if st == "loopback"), [])
-        dz_result = diarize_mod.diarize(loopback_wav, cfg.diarization, num_speakers=num_speakers, meta=meta)
+        dz_result = diarize_mod.diarize(loopback_wav, cfg.diarization, num_speakers=num_speakers,
+                                        meta=meta, force_cpu=force_cpu)  # --cpu vale p/ a diarização também (#115)
         if dz_result and dz_result.turns:
             meta.pop("diarization_error", None)  # sucesso: limpa erro de tentativa anterior
             diarized_groups, order = diarize_mod.assign_speakers(lb_segments, dz_result.turns)

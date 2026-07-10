@@ -97,6 +97,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_proc.add_argument("--speakers", type=int, default=None, metavar="N",
                         help="nº de participantes remotos: trava a diarização em N vozes (persiste no meta)")
+    p_proc.add_argument("--cpu", action="store_true",
+                        help="força transcrição E diarização em CPU (#115: recuperação pós-erro de GPU)")
 
     p_split = sub.add_parser(
         "split", help="corta uma reunião já processada em duas no offset dado (#37)"
@@ -175,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
         _timestamp_subprocess_output()  # process.log com HH:MM:SS por linha
         if args.when_ready:
             return process_when_ready(args.folder)
-        return 0 if process_folder(args.folder, num_speakers=args.speakers) else 1
+        return 0 if process_folder(args.folder, force_cpu=args.cpu, num_speakers=args.speakers) else 1
     if args.cmd == "run":
         from .main import run_app
 
