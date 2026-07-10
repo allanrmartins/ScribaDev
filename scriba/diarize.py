@@ -8,6 +8,7 @@ página do modelo — depois disso, o download acontece uma vez e o resto é off
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -99,11 +100,13 @@ def test_token(model: str, token: str) -> tuple[bool, str]:
 
 
 def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None,
-            meta: dict | None = None) -> DiarizationResult | None:
+            meta: dict | None = None, force_cpu: bool = False) -> DiarizationResult | None:
     """Trechos por voz do arquivo, ou None se desabilitado/indisponível (segue sem separar).
 
     num_speakers: nº de vozes remotas (loopback) informado pelo usuário — trava a
     diarização nesse número. None = automático (ou max_speakers do config).
+    force_cpu: roda o pyannote em CPU mesmo com CUDA disponível (#115) — o caminho
+    de recuperação após um erro de driver na GPU (`scribadev transcribe --cpu`).
 
     Devolve um DiarizationResult (turns + embeddings por voz) para o enrollment
     da issue #1 — ou None se a diarização não rodou.
@@ -134,6 +137,7 @@ def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None,
         _fail(f"dependências ausentes — falta o extra [diarization] ({e})")
         return None
     pipe = None
+    ctx_broken = False  # erro de driver/contexto (#115): não tocar mais na GPU
     try:
         try:
             pipe = Pipeline.from_pretrained(cfg.model, token=cfg.hf_token)
@@ -150,7 +154,9 @@ def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None,
             _fail(f"modelo indisponível — confirme que aceitou os termos de {cfg.model} no "
                   "Hugging Face com a conta do token")
             return None
-        if torch.cuda.is_available():
+        if force_cpu and torch.cuda.is_available():
+            print("diarização em CPU (forçada com --cpu)")
+        if torch.cuda.is_available() and not force_cpu:
             pipe.to(torch.device("cuda"))
             # blinda contra o sysmem fallback do Windows (spill VRAM->RAM = freeze):
             # capa o allocator do PyTorch com uma margem livre, então VRAM apertada/
@@ -181,6 +187,14 @@ def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None,
         voices = {label for *_x, label in turns}
         print(f"diarização: {len(voices)} voz(es) distintas em {len(turns)} trechos")
         return DiarizationResult(turns=turns, embeddings=embeddings)
+    except _CudaContextError as e:
+        # Erro de DRIVER/CONTEXTO (#115): abortar é a proteção — continuar
+        # submetendo trabalho a um contexto corrompido escalou para TDR/perda
+        # de vídeo em produção. A nota sai normal, sem separação de voz.
+        ctx_broken = True
+        _fail(f"erro de driver/contexto CUDA ({e}) — abortada para proteger a GPU; "
+              "reprocesse com 'scribadev transcribe <pasta> --cpu' para diarizar em CPU")
+        return None
     except Exception as e:
         _fail(f"falhou ({type(e).__name__}: {e}); seguindo com 'Participantes'", exc=True)
         return None
@@ -189,13 +203,16 @@ def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None,
         # segura ~1-2 GB durante o resumo (claude -p) e o arquivamento (ffmpeg), que
         # rodam depois no MESMO processo do pipeline. (O contexto CUDA do torch em si,
         # ~0,5-1 GB, só sai quando o subprocesso encerra — aí é inevitável.)
-        _uncap_pyannote_vram()  # restaura a fração do allocator (o cap valia só aqui)
+        # Com o contexto QUEBRADO (#115), NADA de CUDA aqui: até empty_cache/uncap
+        # submeteria chamadas ao driver ferido.
+        if not ctx_broken:
+            _uncap_pyannote_vram()  # restaura a fração do allocator (o cap valia só aqui)
         pipe = None
         try:
             import gc
 
             gc.collect()
-            if torch.cuda.is_available():
+            if not ctx_broken and torch.cuda.is_available():
                 torch.cuda.empty_cache()
         except Exception:
             pass
@@ -293,6 +310,84 @@ def _free_cuda() -> None:
         pass
 
 
+# ---- proteção de GPU (issue #115) -------------------------------------------
+# OOM é recuperável (libera cache e pula o bloco); erro de DRIVER/CONTEXTO não é:
+# o contexto CUDA fica corrompido e continuar submetendo kernels leva a TDR/perda
+# de vídeo (aconteceu em produção: 85°C + cudaErrorUnknown em série no fim de uma
+# diarização de ~112 min + driver travado = máquina desligada no botão).
+
+class _CudaContextError(RuntimeError):
+    """Contexto CUDA corrompido (erro de driver): abortar a diarização inteira e
+    NÃO tocar mais na GPU neste processo (nem empty_cache)."""
+
+
+_CTX_ERROR_MARKERS = (
+    "cuda error", "cudaerror", "device-side assert", "illegal memory access",
+    "unspecified launch failure", "misaligned address", "cudnn error",
+)
+
+
+def _is_cuda_context_error(e: BaseException) -> bool:
+    """Erro de driver/contexto CUDA? (≠ OOM/alloc, que é recuperável por bloco)."""
+    msg = str(e).lower()
+    if "out of memory" in msg or "alloc" in msg:  # OOM e afins: recuperável
+        return False
+    try:
+        import torch
+
+        if isinstance(e, torch.cuda.OutOfMemoryError):
+            return False
+    except Exception:
+        pass
+    return any(m in msg for m in _CTX_ERROR_MARKERS)
+
+
+# Pacing térmico entre blocos (#115): a diarização chunked mantém a GPU a 100%
+# por dezenas de minutos em áudio longo. Um respiro por bloco + pausa quando a
+# temperatura passa do limiar evita o full-throttle sustentado que derrubou o
+# driver em produção. Tudo best-effort: sem nvidia-smi, fica só o respiro.
+_BLOCK_YIELD_S = 0.5     # respiro fixo entre blocos
+_TEMP_SOFT_C = 80        # acima disso, espera esfriar...
+_TEMP_RESUME_C = 74      # ...até voltar para cá
+_TEMP_MAX_WAIT_S = 60    # teto da espera (termômetro nunca trava o pipeline)
+_MAX_CONSECUTIVE_FAILS = 3  # blocos falhando em série: desiste (não insiste na GPU ferida)
+
+
+def _gpu_temperature() -> int | None:
+    """Temperatura da GPU em °C via nvidia-smi (None se indisponível)."""
+    import shutil
+    import subprocess
+
+    exe = shutil.which("nvidia-smi")
+    if not exe:
+        return None
+    try:
+        out = subprocess.run(
+            [exe, "--query-gpu=temperature.gpu", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return int(out.stdout.strip().splitlines()[0])
+    except Exception:
+        return None
+
+
+def _thermal_pause() -> None:
+    """Respiro entre blocos; se a GPU estiver quente, espera esfriar (limitado)."""
+    time.sleep(_BLOCK_YIELD_S)
+    t = _gpu_temperature()
+    if t is None or t < _TEMP_SOFT_C:
+        return
+    log.warning("diarização: GPU a %d°C — pausando até esfriar (<%d°C)", t, _TEMP_RESUME_C)
+    print(f"GPU a {t}°C — pausa para resfriar antes do próximo bloco...")
+    deadline = time.monotonic() + _TEMP_MAX_WAIT_S
+    while time.monotonic() < deadline:
+        time.sleep(5)
+        t = _gpu_temperature()
+        if t is None or t <= _TEMP_RESUME_C:
+            return
+
+
 # Margem de VRAM (MB) deixada LIVRE no device durante a diarização. O working-set
 # medido do pyannote é ~3,3 GB/bloco; capar o allocator do PyTorch nesse teto faz um
 # bloco pesado (ou VRAM já apertada por outra app) levantar um OutOfMemoryError
@@ -388,20 +483,38 @@ def _diarize_chunked(pipe, audio, sr: int, chunk_s: int) -> tuple[list[Turn], di
 
     globals_: list = []          # [centroide(np), n_amostras, id global] por voz da call
     all_turns: list[Turn] = []
+    consecutive_fails = 0
     for i in range(n_chunks):
         a, b = i * chunk_n, min((i + 1) * chunk_n, total)
         offset = a / sr
         try:
             out = _run_pipe(pipe, {"waveform": wav[:, a:b].clone(), "sample_rate": sr}, {})
         except Exception as e:
+            if _is_cuda_context_error(e):
+                # Contexto CUDA corrompido (#115): NÃO submeter mais NADA à GPU —
+                # nem empty_cache. Aborta tudo; diarize() degrada p/ "Participantes".
+                raise _CudaContextError(f"bloco {i + 1}/{n_chunks}: {e}") from e
             # Resiliência por bloco: um bloco que falha (ex.: OOM sob VRAM apertada —
             # com o cap, o spill->freeze vira um OutOfMemoryError) NÃO derruba a call
             # inteira. Pula só este trecho (cai em "Participantes") e segue com os
             # demais. Antes, o erro subia e zerava TODA a diarização (issue #8).
+            consecutive_fails += 1
             _free_cuda()
             log.warning("diarização: bloco %d/%d falhou (%s); pulando este trecho", i + 1, n_chunks, e)
+            if consecutive_fails >= _MAX_CONSECUTIVE_FAILS:
+                # Insistir numa GPU que só falha piora o estado do driver (#115):
+                # para aqui e mantém o que já foi separado (blocos bons ficam;
+                # o resto cai em "Participantes").
+                log.warning("diarização: %d blocos consecutivos falharam — parando; "
+                            "trechos já separados são mantidos", consecutive_fails)
+                print(f"AVISO: diarização interrompida após {consecutive_fails} falhas seguidas — "
+                      "os trechos já separados são mantidos")
+                break
             continue
+        consecutive_fails = 0
         _free_cuda()             # solta o pico de trabalho do bloco antes do próximo
+        if i + 1 < n_chunks:
+            _thermal_pause()     # respiro/espera térmica entre blocos (#115)
         if out is None:
             continue
         turns, embs = out
