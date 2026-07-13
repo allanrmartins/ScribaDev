@@ -72,7 +72,7 @@ class TimesheetCliTests(unittest.TestCase):
 
     # -- dormência (#126) ------------------------------------------------------
     def test_dormente_bloqueia_sem_criar_banco(self):
-        for sub in (["list"], ["sync"], ["backup"],
+        for sub in (["list"], ["sync"], ["backup"], ["export"],
                     ["add", "--start", "08:00", "--end", "09:00", "--client", "X"]):
             rc, out = self._run("timesheet", *sub)
             self.assertEqual(rc, 2, sub)
@@ -160,6 +160,23 @@ class TimesheetCliTests(unittest.TestCase):
         self.assertIn("1 sugestão(ões) nova(s)", out)
         rc, out = self._run("timesheet", "sync")
         self.assertIn("0 sugestão(ões) nova(s)", out)
+
+    # -- export (#122) -----------------------------------------------------------
+    def test_export(self):
+        self._enable()
+        rc, out = self._run("timesheet", "export", "--month", "2026-07",
+                            "--out", str(self.tmp / "exp"))
+        self.assertEqual(rc, 1)  # mês sem nada confirmado
+        self.assertIn("erro:", out)
+        self._add(desc="manha")
+        rc, out = self._run("timesheet", "export", "--month", "2026-07",
+                            "--out", str(self.tmp / "exp"))
+        self.assertEqual(rc, 0)
+        self.assertIn("exportado:", out)
+        self.assertTrue((self.tmp / "exp" / "Apontamento_2026-07.xlsx").exists())
+        rc, out = self._run("timesheet", "export", "--month", "13-2026")
+        self.assertEqual(rc, 2)
+        self.assertIn("mês inválido", out)
 
     # -- backup ----------------------------------------------------------------------
     def test_backup(self):

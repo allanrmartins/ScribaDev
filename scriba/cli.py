@@ -161,6 +161,11 @@ def main(argv: list[str] | None = None) -> int:
     p_ta.add_argument("--extra", action="store_true", help="marca como hora extra")
     ts_sub.add_parser("sync", help="varre reuniões prontas e cria as sugestões que faltam")
     ts_sub.add_parser("backup", help="snapshot do timesheet.db (com rotação)")
+    p_te = ts_sub.add_parser("export",
+                             help="exporta o mês para Excel no layout da planilha de apontamento")
+    p_te.add_argument("--month", metavar="AAAA-MM", default=None, help="mês (default: o corrente)")
+    p_te.add_argument("--out", metavar="PASTA", default=None,
+                      help="pasta de destino (default: [timesheet].export_dir)")
 
     args = parser.parse_args(argv)
 
@@ -302,7 +307,9 @@ def cmd_timesheet(args) -> int:
         return 0
     if args.ts_cmd == "backup":
         return _ts_backup(ts, tsdb)
-    print("uso: scribadev timesheet {list,add,sync,backup} (veja --help)")
+    if args.ts_cmd == "export":
+        return _ts_export(args, ts)
+    print("uso: scribadev timesheet {list,add,sync,backup,export} (veja --help)")
     return 2
 
 
@@ -373,6 +380,30 @@ def _ts_add(args, tsdb) -> int:
     mine = next(r for r in tsdb.list_entries(day=work_date) if r["id"] == entry_id)
     print(f"apontado #{entry_id}: {mine['work_date']} {mine['start_time']}-{mine['end_time']} "
           f"({_hhmm(mine['minutes'])}) {mine['client_name'] or mine['client_text'] or '-'}")
+    return 0
+
+
+def _ts_export(args, ts) -> int:
+    """Exporta o mês para xlsx no layout da planilha de apontamento (#122)."""
+    from datetime import date, datetime
+    from pathlib import Path as _P
+
+    from . import timesheet_xlsx
+
+    month = args.month or date.today().strftime("%Y-%m")
+    try:
+        datetime.strptime(month, "%Y-%m")
+    except ValueError:
+        print(f"erro: mês inválido (use AAAA-MM): {month!r}")
+        return 2
+    dest = _P(args.out).expanduser() if args.out else (
+        _P(ts.export_dir).expanduser() if ts.export_dir else None)
+    try:
+        out = timesheet_xlsx.export_month(month, dest)
+    except ValueError as e:
+        print(f"erro: {e}")
+        return 1
+    print(f"exportado: {out}")
     return 0
 
 
