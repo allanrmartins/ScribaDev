@@ -140,6 +140,28 @@ def main(argv: list[str] | None = None) -> int:
     p_upd = sub.add_parser("update", help="checa atualizações (e aplica via git pull, se for instalação via git)")
     p_upd.add_argument("--check", action="store_true", help="só verifica se há nova versão, sem aplicar")
 
+    p_ts = sub.add_parser(
+        "timesheet",
+        help="apontamento de horas (#118) — dormente até ativar ([timesheet] enabled = true)",
+    )
+    ts_sub = p_ts.add_subparsers(dest="ts_cmd")
+    p_tl = ts_sub.add_parser("list", help="lista os apontamentos do mês, agrupados por dia")
+    p_tl.add_argument("--month", metavar="AAAA-MM", default=None, help="mês (default: o corrente)")
+    g_tl = p_tl.add_mutually_exclusive_group()
+    g_tl.add_argument("--suggested", action="store_true", help="só sugestões pendentes de revisão")
+    g_tl.add_argument("--unposted", action="store_true",
+                      help="só confirmados ainda não lançados no Multi Dados")
+    p_ta = ts_sub.add_parser("add", help="apontamento manual (atividade sem call)")
+    p_ta.add_argument("--date", metavar="AAAA-MM-DD", default=None, help="data (default: hoje)")
+    p_ta.add_argument("--start", required=True, metavar="HH:MM", help="hora de início")
+    p_ta.add_argument("--end", required=True, metavar="HH:MM", help="hora de fim")
+    p_ta.add_argument("--client", required=True, help="cliente (nome ou alias do cadastro)")
+    p_ta.add_argument("--project", default="", help="código de OS/GAP (ex.: 403240)")
+    p_ta.add_argument("--desc", default="", help="descrição breve da atividade")
+    p_ta.add_argument("--extra", action="store_true", help="marca como hora extra")
+    ts_sub.add_parser("sync", help="varre reuniões prontas e cria as sugestões que faltam")
+    ts_sub.add_parser("backup", help="snapshot do timesheet.db (com rotação)")
+
     args = parser.parse_args(argv)
 
     if not args.cmd:
@@ -223,6 +245,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_search(args)
     if args.cmd == "update":
         return cmd_update(args)
+    if args.cmd == "timesheet":
+        return cmd_timesheet(args)
     parser.error(f"comando desconhecido: {args.cmd}")
     return 2
 
@@ -242,6 +266,127 @@ def cmd_split(args) -> int:
         print(f"erro: {e}")
         return 1
     print(f"dividido em duas reuniões:\n  parte 1: {folder1}\n  parte 2: {folder2}")
+    return 0
+
+
+def _hhmm(minutes: int) -> str:
+    """Minutos -> 'H:MM' (formato dos totais da planilha: 5:00, 45:30)."""
+    return f"{minutes // 60}:{minutes % 60:02d}"
+
+
+def cmd_timesheet(args) -> int:
+    """`scribadev timesheet`: apontamento de horas (#118).
+
+    Módulo DORMENTE (#126): sem [timesheet].enabled = true nenhum subcomando roda
+    nem cria banco — a CLI é ponto de integração e o gate mora aqui.
+    """
+    from . import timesheet_db as tsdb
+    from .config import load
+
+    cfg = load()
+    ts = cfg.timesheet
+    if not ts.enabled:
+        print("apontamento de horas não ativado — ligue com [timesheet] enabled = true "
+              "no config.toml (ou pelo botão nas Configurações, quando disponível)")
+        return 2
+    tsdb.apply_config(ts)
+    if args.ts_cmd == "list":
+        return _ts_list(args, tsdb)
+    if args.ts_cmd == "add":
+        return _ts_add(args, tsdb)
+    if args.ts_cmd == "sync":
+        from . import timesheet_suggest
+
+        n = timesheet_suggest.sync_pending(cfg.output.resolved_recordings_dir(), ts)
+        print(f"{n} sugestão(ões) nova(s) de apontamento")
+        return 0
+    if args.ts_cmd == "backup":
+        return _ts_backup(ts, tsdb)
+    print("uso: scribadev timesheet {list,add,sync,backup} (veja --help)")
+    return 2
+
+
+def _ts_list(args, tsdb) -> int:
+    """Lista agrupada por dia: [?] = sugestão a revisar, [MD] = já no Multi Dados."""
+    from datetime import date, datetime
+
+    month = args.month or date.today().strftime("%Y-%m")
+    try:
+        datetime.strptime(month, "%Y-%m")
+    except ValueError:
+        print(f"erro: mês inválido (use AAAA-MM): {month!r}")
+        return 2
+    if args.suggested:
+        entries = tsdb.list_entries(month=month, status="suggested")
+    elif args.unposted:
+        entries = tsdb.list_entries(month=month, status="confirmed", posted=False)
+    else:
+        entries = [e for e in tsdb.list_entries(month=month) if e["status"] != "discarded"]
+    if not entries:
+        print(f"nenhum apontamento em {month}.")
+        return 0
+    totals = tsdb.day_totals(month)
+    day = None
+    for e in entries:
+        if e["work_date"] != day:
+            day = e["work_date"]
+            total = totals.get(day)
+            print(f"{day}" + (f"  ({_hhmm(total)})" if total else ""))
+        marks = " [?]" if e["status"] == "suggested" else (" [MD]" if e["posted"] else "")
+        client = e["client_name"] or e["client_text"] or "-"
+        project = e["project_code"] or e["project_text"]
+        extra = " (extra)" if e["overtime"] else ""
+        detail = "  ".join(x for x in (client, project, e["description"]) if x)
+        print(f"  {e['start_time']}-{e['end_time']}  {_hhmm(e['minutes']):>5}  "
+              f"{detail}{extra}{marks}")
+    s = tsdb.month_summary(month)
+    print(f"{month}: total {_hhmm(s['total'])} | apontado {_hhmm(s['posted'])} | "
+          f"a apontar {_hhmm(s['unposted'])} | sugestões {_hhmm(s['suggested'])}")
+    return 0
+
+
+def _ts_add(args, tsdb) -> int:
+    """Apontamento manual; cliente resolvido pelo cadastro (não resolvido = texto cru)."""
+    from datetime import date
+
+    work_date = args.date or date.today().isoformat()
+    client_id, text = tsdb.resolve_client(args.client)
+    if client_id is None:
+        print(f"aviso: cliente {text!r} não cadastrado — gravado como texto cru "
+              "(cadastre pela UI ou adicione um alias)")
+    project_id, project_text = None, args.project.strip()
+    if client_id is not None and project_text:
+        match = [p for p in tsdb.list_projects(client_id)
+                 if p["code"].casefold() == project_text.casefold()]
+        if match:
+            project_id, project_text = match[0]["id"], ""
+    try:
+        entry_id = tsdb.add_entry(
+            work_date=work_date, start_time=args.start, end_time=args.end,
+            client_id=client_id, client_text="" if client_id is not None else text,
+            project_id=project_id, project_text=project_text,
+            description=args.desc, overtime=args.extra,
+        )
+    except ValueError as e:
+        print(f"erro: {e}")
+        return 2
+    mine = next(r for r in tsdb.list_entries(day=work_date) if r["id"] == entry_id)
+    print(f"apontado #{entry_id}: {mine['work_date']} {mine['start_time']}-{mine['end_time']} "
+          f"({_hhmm(mine['minutes'])}) {mine['client_name'] or mine['client_text'] or '-'}")
+    return 0
+
+
+def _ts_backup(ts, tsdb) -> int:
+    from pathlib import Path as _P
+
+    if not tsdb._db_path().exists():
+        print("nada para fazer backup — o banco ainda não existe.")
+        return 1
+    out = tsdb.backup(_P(ts.backup_dir).expanduser() if ts.backup_dir else None)
+    if out is None:
+        print("backup falhou — veja o log.")
+        return 1
+    print(f"backup gravado em {out}")
     return 0
 
 

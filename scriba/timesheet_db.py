@@ -109,6 +109,16 @@ def _db_path() -> Path:
     return DB_PATH if DB_PATH is not None else util.APP_DIR / "timesheet.db"
 
 
+def apply_config(ts_cfg) -> None:
+    """Aplica o override de caminho do banco ([timesheet].db_path).
+
+    Chamado pelo app (#123) e pela CLI antes de qualquer operação; db_path vazio
+    volta ao default dinâmico (util.APP_DIR / timesheet.db).
+    """
+    global DB_PATH
+    DB_PATH = Path(ts_cfg.db_path).expanduser() if ts_cfg.db_path else None
+
+
 # -- conexão + schema ---------------------------------------------------------
 
 def connect() -> sqlite3.Connection:
@@ -272,8 +282,8 @@ def list_entries(*, month: str | None = None, day: str | None = None,
                  client_id: int | None = None) -> list[dict]:
     """Apontamentos filtrados, ordenados por dia e hora de início.
 
-    month = 'AAAA-MM'; day = 'AAAA-MM-DD'. Traz client_name resolvido (JOIN) para
-    lista/CLI não precisarem de segunda consulta.
+    month = 'AAAA-MM'; day = 'AAAA-MM-DD'. Traz client_name e project_code
+    resolvidos (JOIN) para lista/CLI não precisarem de segunda consulta.
     """
     where, args = [], []
     if month:
@@ -292,8 +302,9 @@ def list_entries(*, month: str | None = None, day: str | None = None,
         where.append("e.client_id = ?")
         args.append(client_id)
     sql = (
-        "SELECT e.*, c.name AS client_name FROM entries e "
+        "SELECT e.*, c.name AS client_name, p.code AS project_code FROM entries e "
         "LEFT JOIN clients c ON c.id = e.client_id "
+        "LEFT JOIN projects p ON p.id = e.project_id "
     )
     if where:
         sql += "WHERE " + " AND ".join(where) + " "
