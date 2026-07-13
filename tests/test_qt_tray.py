@@ -22,10 +22,11 @@ class _FakeCfgOut:
 
 
 class _FakeApp:
-    def __init__(self, recording=False, speakers=2):
+    def __init__(self, recording=False, speakers=2, timesheet_enabled=False):
         self._rec = recording
         self._spk = speakers
-        self.cfg = type("C", (), {"output": _FakeCfgOut()})()
+        ts = type("T", (), {"enabled": timesheet_enabled})()
+        self.cfg = type("C", (), {"output": _FakeCfgOut(), "timesheet": ts})()
 
     def is_recording(self):
         return self._rec
@@ -40,6 +41,7 @@ class _FakeApp:
     def show_main(self): pass
     def show_notes(self): pass
     def show_action_hub(self, note_path=None): pass
+    def show_timesheet(self): pass
     def show_log(self): pass
     def show_settings(self): pass
 
@@ -82,6 +84,23 @@ class TrayTests(unittest.TestCase):
         self.assertIn("Pendências", labels)
         # posicionada junto de "Notas" (logo depois)
         self.assertEqual(labels.index("Pendências"), labels.index("Notas") + 1)
+
+    def test_menu_timesheet_segue_a_dormencia(self):
+        """#118/#123: item 'Apontamento de horas' junto de Pendências, visível só
+        com [timesheet].enabled — o _sync relê a config a cada abertura do menu."""
+        from scriba.qt.tray import Tray
+
+        tray = Tray(_FakeApp(timesheet_enabled=False))
+        labels = [a.text() for a in tray._menu.actions()]
+        self.assertIn("Apontamento de horas", labels)
+        self.assertEqual(labels.index("Apontamento de horas"),
+                         labels.index("Pendências") + 1)
+        tray._sync()
+        self.assertFalse(tray._act_timesheet.isVisible())
+        # ativação em runtime (settings): próximo _sync já mostra, sem reiniciar
+        tray.app.cfg.timesheet.enabled = True
+        tray._sync()
+        self.assertTrue(tray._act_timesheet.isVisible())
 
     def test_set_recording_troca_icone_e_tooltip(self):
         from scriba.qt.tray import Tray

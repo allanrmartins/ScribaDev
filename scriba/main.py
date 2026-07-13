@@ -437,6 +437,12 @@ class ScribaApp:
                 self.notes_win.reveal_note_at_section)
         self.action_hub.refresh()
         self.action_hub.show()
+
+    def show_timesheet(self) -> None:
+        """Abre a janela de Apontamentos (#124). Enquanto ela não existe, orienta
+        para a CLI - o item da bandeja só aparece com o módulo ativado (#126)."""
+        self._toast("Apontamento de horas",
+                    "A janela chega na próxima etapa (#124) - por ora: scribadev timesheet list")
         if note_path is not None:
             self.action_hub.focus_meeting(note_path)
 
@@ -837,6 +843,23 @@ class ScribaApp:
         # reindex_renamed acima (recentes/pendências com o path antigo, já morto):
         # refresh autoritativo da capa DEPOIS do índice reconciliado (#90)
         self.ui(self._refresh_home_after_process)
+        # sugestão de apontamento (#118/#123): DEPOIS do rename, para gravar a pasta
+        # final; dormente (#126) = nem importa o módulo. Falha nunca quebra o fluxo.
+        ts = self.cfg.timesheet
+        if ts.enabled and ts.suggest:
+            try:
+                from . import timesheet_suggest
+
+                if timesheet_suggest.suggest_for_folder(folder, ts) == "created":
+                    try:
+                        m = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        m = {}
+                    who = (m.get("client") or "").strip() or "sem cliente"
+                    self._toast("Apontamento sugerido",
+                                f"{who} - {m.get('title') or folder.name}")
+            except Exception:
+                log.exception("sugestão de apontamento falhou para %s", folder.name)
         log.info("concluído %s -> %s", folder.name, export_path)
 
     def _worker(self) -> None:
@@ -940,6 +963,32 @@ class ScribaApp:
 
         threading.Thread(target=work, daemon=True, name="migrate-notes").start()
 
+    def _timesheet_boot(self) -> None:
+        """Boot do timesheet (#123): com o módulo ativado (#126), aplica o override
+        de caminho do banco, reconcilia sugestões que faltam (reuniões processadas
+        com o app fechado, crash entre o done e o hook) e faz o backup diário.
+        Dormente = no-op imediato, sem importar os módulos do timesheet."""
+        ts = self.cfg.timesheet
+        if not ts.enabled:
+            return
+
+        def work() -> None:
+            try:
+                from . import timesheet_db, timesheet_suggest
+
+                timesheet_db.apply_config(ts)
+                if ts.suggest:
+                    n = timesheet_suggest.sync_pending(
+                        self.cfg.output.resolved_recordings_dir(), ts)
+                    if n:
+                        self._toast("Apontamento de horas",
+                                    f"{n} sugestão(ões) nova(s) para revisar")
+                timesheet_db.backup_daily(ts)
+            except Exception:
+                log.exception("boot do timesheet falhou")
+
+        threading.Thread(target=work, daemon=True, name="timesheet-boot").start()
+
     def _show_window_listener(self) -> None:
         """Espera o sinal de uma 2ª instância (atalho clicado) e mostra a janela."""
 
@@ -1028,6 +1077,7 @@ class ScribaApp:
         # migração one-time das notas p/ pasta local + índice de busca (#12) encadeado
         self._after(5000, self._migrate_export_dir_boot)
         self._after(9000, self._check_updates_boot)    # aviso de nova versão (#19)
+        self._after(12000, self._timesheet_boot)       # sugestões + backup diário (#123)
 
         if not self.start_hidden:
             self.show_main()  # lançamento manual (atalho): abre a janela na frente

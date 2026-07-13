@@ -238,6 +238,29 @@ class TimesheetDbTests(unittest.TestCase):
             tsdb.set_day_note("hoje", "feriado")
 
     # -- backup ------------------------------------------------------------------
+    def test_backup_daily_uma_vez_por_dia(self):
+        from scriba import config
+
+        state0 = util.STATE_PATH
+        util.STATE_PATH = self.tmp / "state.json"
+        try:
+            ts = config.Timesheet(enabled=True, backup_dir=str(self.tmp / "bk"))
+            # dormência: sem banco, não roda nem marca o dia (tenta de novo depois)
+            self.assertIsNone(tsdb.backup_daily(ts))
+            self.assertNotIn("timesheet_last_backup", util.read_state())
+            self._entry()
+            out = tsdb.backup_daily(ts)
+            self.assertIsNotNone(out)
+            self.assertTrue(out.exists())
+            self.assertIn("timesheet_last_backup", util.read_state())
+            # mesmo dia: em dia, não roda de novo
+            self.assertIsNone(tsdb.backup_daily(ts))
+            # "ontem" no state: volta a rodar
+            util.update_state(timesheet_last_backup="2020-01-01")
+            self.assertIsNotNone(tsdb.backup_daily(ts))
+        finally:
+            util.STATE_PATH = state0
+
     def test_backup_gera_valido_e_rotaciona(self):
         self._entry()
         dest = self.tmp / "bk"

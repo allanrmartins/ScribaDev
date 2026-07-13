@@ -67,6 +67,10 @@ class Tray:
         m.addAction("Abrir ScribaDev", lambda: self.app.show_main())  # = duplo clique
         m.addAction("Notas", lambda: self.app.show_notes())
         m.addAction("Pendências", lambda: self.app.show_action_hub())
+        # timesheet (#118/#123): só aparece com o módulo ativado (#126) — o _sync
+        # relê a config a cada abertura do menu, então ativar não exige reiniciar
+        self._act_timesheet = m.addAction("Apontamento de horas",
+                                          lambda: self.app.show_timesheet())
         m.addAction("Log", lambda: self.app.show_log())
         m.addAction("Configurações", lambda: self.app.show_settings())
         self._theme_menu = self._build_theme_menu()
@@ -139,6 +143,7 @@ class Tray:
     def _sync(self) -> None:
         rec = self.app.is_recording()
         self._status.setText(self.app.status_text())
+        self._act_timesheet.setVisible(self.app.cfg.timesheet.enabled)
         self._act_record.setVisible(not rec)
         for act in (self._act_split, self._act_stop, self._act_discard, self._act_speakers):
             act.setVisible(rec)

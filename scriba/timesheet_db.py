@@ -578,6 +578,20 @@ def day_notes_month(month: str) -> dict[str, str]:
 
 # -- backup ---------------------------------------------------------------------
 
+def backup_daily(ts_cfg) -> Path | None:
+    """Backup no máximo 1x por dia (chave `timesheet_last_backup` no state.json,
+    mesmo padrão de last_update_check). Devolve o caminho quando rodou; None
+    quando já estava em dia, o banco não existe (dormência) ou falhou."""
+    today = date.today().isoformat()
+    if util.read_state().get("timesheet_last_backup") == today:
+        return None
+    dest = Path(ts_cfg.backup_dir).expanduser() if ts_cfg.backup_dir else None
+    out = backup(dest)
+    if out is not None:
+        util.update_state(timesheet_last_backup=today)
+    return out
+
+
 def backup(dest_dir: Path | None = None, keep: int = 10) -> Path | None:
     """Snapshot consistente do banco via Connection.backup() + rotação.
 
