@@ -116,6 +116,18 @@ hotkey_split = ""        # atalho global "nova call" (divide a gravação, #38);
 export_dir = ""
 # Pasta das gravações (áudio + transcrição de cada reunião). Vazio = C:\\temp\\scribadev\\gravacoes
 recordings_dir = ""
+
+[timesheet]
+# Apontamento de horas (módulo opcional, épico #118). DORMENTE por padrão: o código
+# vem no update, mas nada roda nem cria banco até você ativar (wizard/Configurações).
+enabled = false
+suggest = true            # sugestões automáticas a partir das reuniões prontas (requer enabled)
+round_minutes = 15        # arredonda início/fim sugeridos p/ passos de N min (0 = exato)
+min_meeting_minutes = 10  # reunião mais curta que isto não vira sugestão
+default_client = ""       # pré-seleção da entrada manual
+db_path = ""              # vazio = %LOCALAPPDATA%\\ScribaDev\\timesheet.db (NUNCA OneDrive/rede)
+export_dir = ""           # export Excel; vazio = Documentos\\ScribaDev\\Apontamentos
+backup_dir = ""           # vazio = %LOCALAPPDATA%\\ScribaDev\\backups (pode apontar p/ OneDrive)
 """
 
 
@@ -239,6 +251,21 @@ class Output:
 
 
 @dataclass(frozen=True)
+class Timesheet:
+    # Apontamento de horas (épico #118). DORMENTE por padrão (#126): o update entrega
+    # o código, mas nenhum banco é criado nem hook roda até o usuário ativar — a
+    # ativação (wizard/Configurações) grava enabled=true e faz o 1º connect().
+    enabled: bool = False
+    suggest: bool = True             # sugestões automáticas; só tem efeito com enabled
+    round_minutes: int = 15          # arredonda início/fim sugeridos (0 = exato)
+    min_meeting_minutes: int = 10    # reunião mais curta não vira sugestão
+    default_client: str = ""         # pré-seleção da entrada manual
+    db_path: str = ""                # vazio = %LOCALAPPDATA%\ScribaDev\timesheet.db
+    export_dir: str = ""             # export Excel; vazio = Documentos\ScribaDev\Apontamentos
+    backup_dir: str = ""             # vazio = %LOCALAPPDATA%\ScribaDev\backups
+
+
+@dataclass(frozen=True)
 class Config:
     detection: Detection
     audio: Audio
@@ -247,6 +274,7 @@ class Config:
     summary: Summary
     ui: Ui
     output: Output
+    timesheet: Timesheet
 
 
 def _section(cls, data: dict, name: str):
@@ -303,7 +331,7 @@ def save(cfg: Config) -> None:
     """Reescreve o config.toml preservando os valores atuais (comentários padrão)."""
     util.ensure_app_dirs()
     d, a, w, s, u, o = cfg.detection, cfg.audio, cfg.whisper, cfg.summary, cfg.ui, cfg.output
-    dz = cfg.diarization
+    dz, ts = cfg.diarization, cfg.timesheet
     text = f"""\
 # Configuração do ScribaDev.
 # Edite à vontade — ou use a janela de Configurações (duplo clique no ícone da bandeja).
@@ -384,6 +412,18 @@ pending_window_days = {_n(u.pending_window_days)}       # capa: só pendências 
 export_dir = {_s(o.export_dir)}
 # Pasta das gravações (áudio + transcrição de cada reunião). Vazio = C:\\temp\\scribadev\\gravacoes
 recordings_dir = {_s(o.recordings_dir)}
+
+[timesheet]
+# Apontamento de horas (módulo opcional, épico #118). DORMENTE por padrão: nada
+# roda nem cria banco até você ativar (wizard/Configurações).
+enabled = {_b(ts.enabled)}
+suggest = {_b(ts.suggest)}            # sugestões automáticas a partir das reuniões prontas (requer enabled)
+round_minutes = {_n(ts.round_minutes)}        # arredonda início/fim sugeridos p/ passos de N min (0 = exato)
+min_meeting_minutes = {_n(ts.min_meeting_minutes)}  # reunião mais curta que isto não vira sugestão
+default_client = {_s(ts.default_client)}       # pré-seleção da entrada manual
+db_path = {_s(ts.db_path)}              # vazio = %LOCALAPPDATA%\\ScribaDev\\timesheet.db (NUNCA OneDrive/rede)
+export_dir = {_s(ts.export_dir)}           # export Excel; vazio = Documentos\\ScribaDev\\Apontamentos
+backup_dir = {_s(ts.backup_dir)}           # vazio = %LOCALAPPDATA%\\ScribaDev\\backups (pode apontar p/ OneDrive)
 """
     # Rede de segurança contra sobrescrita acidental: antes de reescrever, guarda
     # uma cópia do config atual em config.toml.bak (mesma pasta). Falha ao gravar
@@ -406,6 +446,7 @@ def _build(data: dict) -> Config:
         summary=_section(Summary, data, "summary"),
         ui=_section(Ui, data, "ui"),
         output=_section(Output, data, "output"),
+        timesheet=_section(Timesheet, data, "timesheet"),
     ))
 
 

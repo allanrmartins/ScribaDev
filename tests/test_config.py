@@ -128,6 +128,49 @@ class UiConfigTests(unittest.TestCase):
         self.assertEqual(config.load().ui.pending_window_days, 0)
 
 
+class TimesheetConfigTests(unittest.TestCase):
+    """Seção [timesheet] (#119): módulo de apontamento DORMENTE por padrão (#126)."""
+
+    def setUp(self):
+        d = Path(tempfile.mkdtemp(prefix="scriba_ts_"))
+        util.APP_DIR = d
+        util.LOGS_DIR = d / "logs"
+        util.CONFIG_PATH = d / "config.toml"
+
+    def test_default_dormente(self):
+        ts = config.load().timesheet
+        self.assertFalse(ts.enabled)  # dormência: update entrega o código desligado
+        self.assertTrue(ts.suggest)
+        self.assertEqual(ts.round_minutes, 15)
+        self.assertEqual(ts.min_meeting_minutes, 10)
+        self.assertEqual(ts.default_client, "")
+        self.assertEqual(ts.db_path, "")
+
+    def test_round_trip_preserva_campos(self):
+        # prova que o template do save() TEM a seção — esquecê-lo perderia a
+        # config do timesheet silenciosamente ao salvar pelas Configurações
+        import dataclasses
+
+        cfg = config.load()
+        config.save(dataclasses.replace(cfg, timesheet=dataclasses.replace(
+            cfg.timesheet, enabled=True, round_minutes=5, default_client="Abaco",
+            backup_dir=r"D:\backups")))
+        got = config.load().timesheet
+        self.assertTrue(got.enabled)
+        self.assertEqual(got.round_minutes, 5)
+        self.assertEqual(got.default_client, "Abaco")
+        self.assertEqual(got.backup_dir, r"D:\backups")
+
+    def test_config_antigo_sem_secao_usa_defaults(self):
+        # update em máquina existente: config.toml antigo (sem [timesheet]) carrega
+        # com o módulo dormente, sem erro
+        old = config.DEFAULT_CONFIG.split("[timesheet]")[0]
+        util.CONFIG_PATH.write_text(old, encoding="utf-8")
+        ts = config.load().timesheet
+        self.assertFalse(ts.enabled)
+        self.assertEqual(ts.round_minutes, 15)
+
+
 class WhisperConfigTests(unittest.TestCase):
     """Novos campos de [whisper] (#6): beam_size, cpu_threads, vad, batch_size (#7: default 4)."""
 
