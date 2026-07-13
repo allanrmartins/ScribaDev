@@ -108,6 +108,46 @@ def suggestion_from_meta(meta: dict, ts_cfg) -> dict | None:
     }
 
 
+def activate() -> int:
+    """Ativa o módulo (#126): grava enabled=true no config, cria o banco (primeiro
+    connect: arquivo + schema) e roda a varredura inicial sobre as reuniões prontas.
+
+    É a ÚNICA porta de entrada da ativação (wizard e Configurações chamam aqui).
+    Idempotente: reativar não duplica nada (dedupe do banco). Devolve o nº de
+    sugestões iniciais criadas.
+    """
+    import dataclasses
+
+    from . import config, timesheet_db
+
+    cfg = config.load()
+    if not cfg.timesheet.enabled:
+        cfg = dataclasses.replace(
+            cfg, timesheet=dataclasses.replace(cfg.timesheet, enabled=True))
+        config.save(cfg)
+    timesheet_db.apply_config(cfg.timesheet)
+    timesheet_db.connect().close()  # o banco nasce AQUI - fim da dormência
+    created = 0
+    if cfg.timesheet.suggest:
+        created = sync_pending(cfg.output.resolved_recordings_dir(), cfg.timesheet)
+    log.info("timesheet ativado (%d sugestão(ões) inicial(is))", created)
+    return created
+
+
+def deactivate() -> None:
+    """Desativa o módulo: hooks/CLI/UI param (gate de enabled), mas o banco NÃO é
+    apagado - dado do usuário não se destrói; reativar reencontra tudo."""
+    import dataclasses
+
+    from . import config
+
+    cfg = config.load()
+    if cfg.timesheet.enabled:
+        config.save(dataclasses.replace(
+            cfg, timesheet=dataclasses.replace(cfg.timesheet, enabled=False)))
+    log.info("timesheet desativado (banco preservado)")
+
+
 def _load_enabled_cfg():
     """[timesheet] do config real, ou None se o módulo está dormente (#126)."""
     from . import config  # lazy: config.load() cria APP_DIR/config.toml — só aqui

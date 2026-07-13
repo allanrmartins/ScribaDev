@@ -78,6 +78,41 @@ class WizardWindow(QWidget):
         self._musthave, _ = self._text_row(root, "O que não pode faltar na ata",
                                            "ex.: ações com responsável e prazo, riscos, decisões")
 
+        # apontamento de horas (#118/#126): opt-in do onboarding. Só oferece quando o
+        # módulo está DORMENTE; pular (desmarcado) = zero side effects na máquina.
+        self._timesheet_opt = None
+        try:
+            from .. import config as _config
+
+            ts_dormente = not _config.load().timesheet.enabled
+        except Exception:
+            ts_dormente = False   # em dúvida, não oferece: ativação exige certeza
+        if ts_dormente:
+            from PySide6.QtWidgets import QFrame
+
+            t = theme.active()
+            card = QFrame()
+            card.setObjectName("wizTimesheet")
+            card.setStyleSheet(
+                f"QFrame#wizTimesheet {{ background:{t.surface}; border:1.5px solid {t.warn};"
+                f" border-radius:{t.radius}px; }}"
+                f"QFrame#wizTimesheet QLabel {{ border:none; background:transparent; }}")
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(12, 8, 12, 10)
+            cl.setSpacing(4)
+            ct = QLabel("Novo: apontamento de horas (opcional)")
+            ct.setStyleSheet(f"font-weight:bold; color:{t.warn};")
+            cd = QLabel("Reuniões processadas viram sugestões de apontamento (cliente, horários, "
+                        "descrição), com entrada manual e exportação Excel. Ativar cria o banco "
+                        "local timesheet.db; sem ativar, nada roda nem é criado.")
+            cd.setProperty("role", "muted")
+            cd.setWordWrap(True)
+            self._timesheet_opt = widgets.AnimatedCheckBox("Ativar o apontamento de horas ao aplicar")
+            cl.addWidget(ct)
+            cl.addWidget(cd)
+            cl.addWidget(self._timesheet_opt)
+            root.addWidget(card)
+
         btns = QHBoxLayout()
         self._ai_btn = widgets.ModernButton("Gerar com IA (recomendado)", self._generate_ai, kind="primary")
         self._tpl_btn = widgets.ModernButton("Usar modelo pronto", self._generate_template)
@@ -216,9 +251,29 @@ class WizardWindow(QWidget):
             except Exception:
                 pass
         extra = f" O prompt anterior ficou em {backup.name}." if backup else ""
+        if self._timesheet_opt is not None and self._timesheet_opt.isChecked():
+            threading.Thread(target=self._activate_timesheet, daemon=True,
+                             name="wizard-timesheet").start()
+            extra += " Ativando o apontamento de horas…"
         self._status.setText(f"Aplicado ✓ — as próximas atas usam este perfil.{extra}")
         if self.on_applied:
             QTimer.singleShot(1200, self.on_applied)
+
+    def _activate_timesheet(self) -> None:
+        """Opt-in do onboarding (#126): roda a rotina única de ativação em thread."""
+        try:
+            from .. import timesheet_suggest
+
+            n = timesheet_suggest.activate()
+            log.info("timesheet ativado pelo wizard (%d sugestão(ões) inicial(is))", n)
+        except Exception:
+            log.exception("ativação do timesheet pelo wizard falhou")
+            return
+        if self.app is not None:
+            try:
+                self.app.reload_config()
+            except Exception:
+                pass
 
     # -- janela --------------------------------------------------------------
 

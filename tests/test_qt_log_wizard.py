@@ -218,3 +218,48 @@ class WizardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+@unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")
+class WizardTimesheetTests(unittest.TestCase):
+    """#118/#126: opt-in do apontamento de horas no onboarding (config isolado)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        import tempfile
+
+        from scriba import config as config_mod, util
+
+        d = Path(tempfile.mkdtemp(prefix="scriba_wizts_"))
+        self._orig = util.CONFIG_PATH
+        util.CONFIG_PATH = d / "config.toml"
+        util.CONFIG_PATH.write_text(config_mod.DEFAULT_CONFIG, encoding="utf-8")
+
+    def tearDown(self):
+        from scriba import util
+
+        util.CONFIG_PATH = self._orig
+
+    def test_dormente_oferece_opt_in_desmarcado(self):
+        from scriba.qt.wizard_ui import WizardWindow
+
+        win = WizardWindow()
+        self.assertIsNotNone(win._timesheet_opt)
+        self.assertFalse(win._timesheet_opt.isChecked())  # pular = zero side effects
+
+    def test_ja_ativado_nao_oferece(self):
+        import dataclasses
+
+        from scriba import config as config_mod
+        from scriba.qt.wizard_ui import WizardWindow
+
+        cfg = config_mod.load()
+        config_mod.save(dataclasses.replace(cfg, timesheet=dataclasses.replace(
+            cfg.timesheet, enabled=True)))
+        win = WizardWindow()
+        self.assertIsNone(win._timesheet_opt)

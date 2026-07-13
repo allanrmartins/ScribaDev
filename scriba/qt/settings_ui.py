@@ -207,6 +207,7 @@ class _ThemeCard(QFrame):
 class SettingsWindow(QWidget):
     _about_ready = Signal(object)     # marshaling da checagem de update (thread -> UI)
     _devices_ready = Signal(object)   # marshaling da enumeração de dispositivos (thread -> UI)
+    _ts_done = Signal(str)            # marshaling da ativação/desativação do timesheet (#126)
 
     def __init__(self, app):
         super().__init__()
@@ -237,9 +238,11 @@ class SettingsWindow(QWidget):
         self._build_detection_tab()
         self._build_dirs_tab()
         self._build_appearance_tab()
+        self._build_timesheet_tab()
         self._build_about_tab()
         self._about_ready.connect(self._show_about_update)
         self._devices_ready.connect(self._fill_devices)
+        self._ts_done.connect(self._on_timesheet_done)
 
         foot = QHBoxLayout()
         self._saved = QLabel(""); self._saved.setProperty("role", "ok")
@@ -600,6 +603,163 @@ class SettingsWindow(QWidget):
         ativo + marca o novo selecionado). Contrato `restyle_theme` de theme.apply (#70)."""
         if getattr(self, "_theme_grid", None) is not None:
             self._populate_theme_cards()
+        if getattr(self, "_ts_off", None) is not None:
+            self._style_timesheet_cards()
+
+    # -- aba Apontamento (#118/#126): ativação opt-in do timesheet -------------
+
+    def _build_timesheet_tab(self) -> None:
+        from PySide6.QtWidgets import QFrame, QPushButton
+
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(14, 14, 14, 14)
+        outer.setSpacing(10)
+
+        # cartão DORMENTE: destaque deliberado (borda/botão âmbar, fora do padrão
+        # visual da tela) para quem recebe o módulo num update perceber a novidade
+        self._ts_off = QFrame()
+        self._ts_off.setObjectName("tsActivateCard")
+        off = QVBoxLayout(self._ts_off)
+        off.setContentsMargins(16, 12, 16, 14)
+        off.setSpacing(6)
+        self._ts_off_title = QLabel("Apontamento de horas — NOVO")
+        self._ts_off_desc = QLabel(
+            "Suas reuniões processadas viram sugestões de apontamento (cliente, horários "
+            "e descrição), com entrada manual para o resto do dia, fila do que falta lançar "
+            "no Multi Dados e exportação Excel no layout da sua planilha.\n"
+            "Nada roda nem é criado até você ativar — a ativação cria o banco local "
+            "(timesheet.db) e já varre as reuniões recentes.")
+        self._ts_off_desc.setWordWrap(True)
+        self._ts_activate_btn = QPushButton("✨  Ativar apontamento de horas")
+        self._ts_activate_btn.setObjectName("tsActivateBtn")
+        self._ts_activate_btn.setCursor(Qt.PointingHandCursor)
+        self._ts_activate_btn.clicked.connect(self._activate_timesheet)
+        off.addWidget(self._ts_off_title)
+        off.addWidget(self._ts_off_desc)
+        brow = QHBoxLayout()
+        brow.addWidget(self._ts_activate_btn)
+        brow.addStretch(1)
+        off.addLayout(brow)
+        outer.addWidget(self._ts_off)
+
+        # cartão ATIVADO: controles normais (sem destaque)
+        self._ts_on = QFrame()
+        on = QVBoxLayout(self._ts_on)
+        on.setContentsMargins(2, 2, 2, 2)
+        on.setSpacing(6)
+        ok = QLabel("Apontamento de horas está ativado ✓")
+        ok.setProperty("role", "ok")
+        hint = QLabel("Banco local em %LOCALAPPDATA%\\ScribaDev\\timesheet.db (backup diário "
+                      "automático). Ajustes finos ficam na seção [timesheet] do config.toml; "
+                      "a UI de ajustes chega na fase 2 (#125). Desativar NÃO apaga seus dados.")
+        hint.setProperty("role", "muted")
+        hint.setWordWrap(True)
+        on.addWidget(ok)
+        on.addWidget(hint)
+        orow = QHBoxLayout()
+        orow.setSpacing(6)
+        orow.addWidget(widgets.ModernButton(
+            "Abrir apontamentos", lambda: getattr(self.app, "show_timesheet", lambda: None)(),
+            kind="primary"))
+        orow.addWidget(widgets.ModernButton("Desativar…", self._deactivate_timesheet))
+        orow.addStretch(1)
+        on.addLayout(orow)
+        outer.addWidget(self._ts_on)
+
+        self._ts_status = QLabel("")
+        self._ts_status.setProperty("role", "muted")
+        self._ts_status.setWordWrap(True)
+        outer.addWidget(self._ts_status)
+        outer.addStretch(1)
+        self._tabs.addTab(page, "Apontamento")
+        self._ts_tab_index = self._tabs.indexOf(page)
+        self._style_timesheet_cards()
+        self._sync_timesheet_tab()
+
+    def _style_timesheet_cards(self) -> None:
+        """Estilo dependente de tema do cartão de destaque; reaplicado no restyle (#70).
+        Texto do botão por luminância do âmbar (contraste nos temas claro E escuro)."""
+        from PySide6.QtGui import QColor
+
+        t = theme.active()
+        fg = "#1b1b1b" if QColor(t.warn).lightnessF() > 0.5 else "#f5f5f5"
+        self._ts_off.setStyleSheet(
+            f"QFrame#tsActivateCard {{ background:{t.surface}; border:2px solid {t.warn};"
+            f" border-radius:{t.radius}px; }}"
+            f"QFrame#tsActivateCard QLabel {{ border:none; background:transparent; }}"
+            f"QPushButton#tsActivateBtn {{ background:{t.warn}; color:{fg}; font-weight:bold;"
+            f" font-size:11pt; padding:9px 20px; border:none; border-radius:{t.radius}px; }}"
+            f"QPushButton#tsActivateBtn:hover {{ background:{t.accent}; color:{t.on_accent}; }}"
+            f"QPushButton#tsActivateBtn:disabled {{ background:{t.border}; color:{t.muted}; }}")
+        self._ts_off_title.setStyleSheet(f"font-size:12pt; font-weight:bold; color:{t.warn};")
+        self._ts_off_desc.setStyleSheet(f"color:{t.muted};")
+
+    def _timesheet_enabled(self) -> bool:
+        try:
+            return bool(self.app.cfg.timesheet.enabled)
+        except Exception:
+            return False
+
+    def _sync_timesheet_tab(self) -> None:
+        enabled = self._timesheet_enabled()
+        self._ts_off.setVisible(not enabled)
+        self._ts_on.setVisible(enabled)
+        self._tabs.setTabText(self._ts_tab_index,
+                              "Apontamento" if enabled else "Apontamento ✨")
+
+    def _activate_timesheet(self) -> None:
+        self._ts_activate_btn.setEnabled(False)
+        self._ts_status.setText("Ativando — criando o banco e varrendo as reuniões recentes…")
+
+        def work() -> None:
+            try:
+                from .. import timesheet_suggest
+
+                n = timesheet_suggest.activate()
+                msg = (f"Ativado ✓ — {n} sugestão(ões) inicial(is) esperando revisão "
+                       "em Apontamentos." if n else
+                       "Ativado ✓ — o item Apontamento de horas já aparece na bandeja.")
+            except Exception:
+                log.exception("ativação do timesheet falhou")
+                msg = "Falha ao ativar — detalhes na janela de Log."
+            self._ts_done.emit(msg)
+
+        threading.Thread(target=work, daemon=True, name="ts-activate").start()
+
+    def _deactivate_timesheet(self) -> None:
+        from PySide6.QtWidgets import QMessageBox
+
+        if QMessageBox.question(
+                self, "Desativar apontamento de horas",
+                "As sugestões automáticas, o item da bandeja e a CLI param.\n"
+                "Seus apontamentos NÃO são apagados — reativar reencontra tudo.\n\n"
+                "Desativar?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+
+        def work() -> None:
+            try:
+                from .. import timesheet_suggest
+
+                timesheet_suggest.deactivate()
+                msg = "Desativado — os dados foram preservados; reative quando quiser."
+            except Exception:
+                log.exception("desativação do timesheet falhou")
+                msg = "Falha ao desativar — detalhes na janela de Log."
+            self._ts_done.emit(msg)
+
+        threading.Thread(target=work, daemon=True, name="ts-deactivate").start()
+
+    def _on_timesheet_done(self, msg: str) -> None:
+        if self.app is not None:
+            try:
+                self.app.reload_config()
+            except Exception:
+                log.exception("settings: reload_config pós-ativação falhou")
+        self._ts_status.setText(msg)
+        self._ts_activate_btn.setEnabled(True)
+        self._sync_timesheet_tab()
 
     def _build_about_tab(self) -> None:
         from .. import updates
@@ -857,6 +1017,7 @@ class SettingsWindow(QWidget):
             self._loaded = False
             return
         self._loaded = True
+        self._sync_timesheet_tab()  # o config pode ter mudado fora (wizard/CLI)
         if hasattr(self, "_prompt_editor"):   # prompt.md (não-crítico p/ o guard)
             try:
                 from .. import notes

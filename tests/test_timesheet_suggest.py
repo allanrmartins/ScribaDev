@@ -183,6 +183,34 @@ class SuggestFlowTests(unittest.TestCase):
         self.assertEqual(len(tsdb.list_entries(status="suggested")), 2)
         self.assertEqual(tss.sync_pending(self.rec, _CFG), 0)  # idempotente
 
+    def test_activate_e_deactivate_ciclo(self):
+        """#126: rotina única de ativação - enabled + banco + varredura inicial;
+        desativar preserva os dados; reativar reencontra tudo."""
+        import dataclasses
+
+        self._folder()
+        cfg = config.load()
+        config.save(dataclasses.replace(cfg, output=dataclasses.replace(
+            cfg.output, recordings_dir=str(self.rec))))
+        # ativa: enabled persistido, banco criado, reunião fake vira sugestão
+        self.assertEqual(tss.activate(), 1)
+        self.assertTrue(config.load().timesheet.enabled)
+        self.assertTrue(tsdb._db_path().exists())
+        self.assertEqual(len(tsdb.list_entries(status="suggested")), 1)
+        # idempotente: reativar não duplica nada
+        self.assertEqual(tss.activate(), 0)
+        self.assertEqual(len(tsdb.list_entries(status="suggested")), 1)
+        # desativa: gate volta a segurar, banco INTACTO
+        tss.deactivate()
+        self.assertFalse(config.load().timesheet.enabled)
+        self.assertTrue(tsdb._db_path().exists())
+        nova = self._folder("outra/15-00", started="2026-07-13T15:00:00",
+                            ended="2026-07-13T16:00:00")
+        self.assertEqual(tss.suggest_for_folder(nova), "ignored")  # dormente de novo
+        # reativa: dados antigos preservados + a reunião nova entra
+        self.assertEqual(tss.activate(), 1)
+        self.assertEqual(len(tsdb.list_entries(status="suggested")), 2)
+
     def test_dormencia_auto_bloqueia_sem_cfg_explicita(self):
         # config real (isolado) com enabled=false: motor não roda nem cria banco
         folder = self._folder()

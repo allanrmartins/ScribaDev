@@ -55,6 +55,36 @@ class SettingsTests(unittest.TestCase):
                 return w, kind
         raise KeyError((section, attr))
 
+    def test_timesheet_tab_dormente_mostra_destaque(self):
+        """#126: módulo dormente = cartão de ativação em destaque e aba marcada."""
+        from scriba.qt.settings_ui import SettingsWindow
+
+        win = SettingsWindow(self._app())
+        self.assertFalse(win._timesheet_enabled())
+        # isHidden = escondido EXPLICITAMENTE (a aba não-corrente esconde o resto)
+        self.assertFalse(win._ts_off.isHidden())
+        self.assertTrue(win._ts_on.isHidden())
+        self.assertIn("✨", win._tabs.tabText(win._ts_tab_index))
+        self.assertTrue(win._ts_activate_btn.isEnabled())
+
+    def test_timesheet_tab_ativado_troca_controles(self):
+        """#126: com enabled=true o destaque some e dá lugar aos controles normais."""
+        import dataclasses
+
+        from scriba import config as config_mod
+        from scriba.qt.settings_ui import SettingsWindow
+
+        app = self._app()
+        win = SettingsWindow(app)
+        cfg = config_mod.load()
+        config_mod.save(dataclasses.replace(cfg, timesheet=dataclasses.replace(
+            cfg.timesheet, enabled=True)))
+        app.reload_config()
+        win._sync_timesheet_tab()
+        self.assertFalse(win._ts_on.isHidden())
+        self.assertTrue(win._ts_off.isHidden())
+        self.assertEqual(win._tabs.tabText(win._ts_tab_index), "Apontamento")
+
     def test_load_preenche_dos_defaults(self):
         from scriba.qt.settings_ui import SettingsWindow
 
