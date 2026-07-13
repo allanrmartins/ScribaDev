@@ -1,0 +1,892 @@
+"""Janela de Apontamentos (épico #118, #124).
+
+Quatro abas num QTabWidget, no molde das demais janelas da casa (QWidget +
+remember_geometry + closeEvent->hide + restyle_theme + IO em thread com marshal
+via app.ui):
+
+1. Apontamentos - grade do mês agrupada por dia (QTreeWidget multi-coluna) com
+   entrada rápida no topo e totais no rodapé; duplo clique edita.
+2. Sugestões - fila de revisão do que o motor (#120) criou: aceitar, editar e
+   aceitar, descartar, cadastrar cliente não resolvido, abrir a reunião.
+3. Multi Dados - confirmados ainda não lançados, com checkbox por linha,
+   "marcar como apontados" e o export Excel do mês (#122).
+4. Cadastro - clientes (novo/renomear/desativar/mesclar), aliases e projetos.
+
+A janela só é alcançável com o módulo ativado (#126): o item da bandeja e o
+show_timesheet do app são condicionados a [timesheet].enabled — aqui dentro
+não há gate. Toda leitura/escrita do banco roda fora da thread da GUI.
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+from datetime import date, datetime
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QBrush, QColor
+from PySide6.QtWidgets import (
+    QAbstractItemView, QComboBox, QDateEdit, QDialog, QDialogButtonBox,
+    QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QMessageBox, QRadioButton, QSplitter, QTabWidget, QTreeWidget,
+    QTreeWidgetItem, QVBoxLayout, QWidget,
+)
+
+from .. import timesheet_db as tsdb
+from .. import util
+from . import theme, widgets
+
+log = logging.getLogger("scriba.qt.timesheet")
+
+_WEEK = ("seg", "ter", "qua", "qui", "sex", "sáb", "dom")
+_LOCATIONS = ("", "Base", "In Loco", "Remoto")
+
+
+def _fmt_min(minutes: int) -> str:
+    return f"{minutes // 60}:{minutes % 60:02d}"
+
+
+def _day_label(day: str) -> str:
+    d = date.fromisoformat(day)
+    return f"{_WEEK[d.weekday()]} {d.strftime('%d/%m')}"
+
+
+def _time_edit(tooltip: str) -> QLineEdit:
+    """Campo HH:MM: dígitos viram máscara ao sair (util.format_time_hhmm)."""
+    le = widgets.make_entry("hh:mm")
+    le.setFixedWidth(72)
+    le.setAlignment(Qt.AlignCenter)
+    widgets.add_tooltip(le, tooltip)
+    le.editingFinished.connect(lambda le=le: le.setText(util.format_time_hhmm(le.text())))
+    return le
+
+
+def _shift_month(month: str, delta: int) -> str:
+    d = datetime.strptime(month, "%Y-%m")
+    y, m = d.year, d.month + delta
+    y, m = y + (m - 1) // 12, (m - 1) % 12 + 1
+    return f"{y:04d}-{m:02d}"
+
+
+class TimesheetWindow(QWidget):
+    def __init__(self, app):
+        super().__init__()
+        self.app = app
+        self._titlebar_done = False
+        self._inline_bg = False      # testes: True roda o collect na própria thread
+        self._data = None            # último payload (restyle re-renderiza sem re-coletar)
+        self._month = date.today().strftime("%Y-%m")
+        self._entry_items: dict[QTreeWidgetItem, dict] = {}
+        self._sug_items: dict[QTreeWidgetItem, dict] = {}
+        self._queue_items: dict[QTreeWidgetItem, dict] = {}
+        self._reg_clients: dict[int, dict] = {}
+
+        self.setWindowTitle("ScribaDev - Apontamentos")
+        self.setMinimumSize(820, 560)
+        widgets.remember_geometry(self, "qt_timesheet", default=(150, 110, 1020, 680))
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 8, 12, 8)
+        self._tabs = QTabWidget()
+        self._tabs.setUsesScrollButtons(False)
+        self._tabs.setElideMode(Qt.ElideRight)
+        self._tabs.addTab(self._build_tab_entries(), "Apontamentos")
+        self._tabs.addTab(self._build_tab_suggestions(), "Sugestões")
+        self._tabs.addTab(self._build_tab_queue(), "Multi Dados")
+        self._tabs.addTab(self._build_tab_registry(), "Cadastro")
+        root.addWidget(self._tabs)
+
+        self.refresh()
+
+    # ------------------------------------------------------------ ciclo de vida --
+
+    def show(self):
+        super().show()
+        self.raise_()
+        self.activateWindow()
+        if not self._titlebar_done:
+            self._titlebar_done = True
+            widgets.enable_dark_titlebar(self)
+        self.refresh()
+
+    def closeEvent(self, event):  # X esconde, não fecha (padrão da casa)
+        event.ignore()
+        self.hide()
+
+    def restyle_theme(self):
+        if self._data is not None:
+            self._render(self._data)
+
+    # ------------------------------------------------------------------ coleta --
+
+    def refresh(self):
+        if self._inline_bg:
+            self._collect()
+        else:
+            threading.Thread(target=self._collect, daemon=True, name="timesheet-ui").start()
+
+    def _collect(self):
+        if getattr(self.app, "cfg", None) is None:  # smoke tests: sem app real, no-op
+            return
+        try:
+            tsdb.apply_config(self.app.cfg.timesheet)
+            month = self._month
+            clients = tsdb.list_clients()
+            data = {
+                "month": month,
+                "entries": [e for e in tsdb.list_entries(month=month)
+                            if e["status"] != "discarded"],
+                "totals": tsdb.day_totals(month),
+                "notes": tsdb.day_notes_month(month),
+                "summary": tsdb.month_summary(month),
+                "suggestions": tsdb.list_entries(status="suggested"),
+                "queue": tsdb.list_entries(status="confirmed", posted=False),
+                "clients": clients,
+                "clients_all": tsdb.list_clients(active_only=False),
+                "aliases": {c["id"]: tsdb.list_aliases(c["id"]) for c in clients},
+                "projects": {c["id"]: tsdb.list_projects(c["id"]) for c in clients},
+            }
+        except Exception:
+            log.exception("coleta do timesheet falhou")
+            return
+        self.app.ui(lambda: self._render(data))
+
+    def _bg(self, fn):
+        """Mutação fora da GUI + refresh ao terminar. Erros viram diálogo, não crash."""
+        def work():
+            try:
+                fn()
+            except Exception as e:
+                log.exception("timesheet UI: operação falhou")
+                self.app.ui(lambda: QMessageBox.warning(self, "Apontamento de horas", str(e)))
+            self.app.ui(self.refresh)
+
+        if self._inline_bg:
+            work()
+        else:
+            threading.Thread(target=work, daemon=True, name="timesheet-op").start()
+
+    # ------------------------------------------------------ aba 1: Apontamentos --
+
+    def _build_tab_entries(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(4, 8, 4, 4)
+        lay.setSpacing(6)
+
+        # navegação de mês
+        nav = QHBoxLayout()
+        nav.setSpacing(6)
+        nav.addWidget(widgets.icon_button("chevron-down", "Mês anterior",
+                                          lambda: self._change_month(-1)))
+        self._month_combo = QComboBox()
+        widgets.no_wheel_steal(self._month_combo)
+        self._month_combo.setFixedWidth(110)
+        for i in range(24):
+            self._month_combo.addItem(_shift_month(date.today().strftime("%Y-%m"), -i))
+        self._month_combo.currentTextChanged.connect(self._on_month_combo)
+        nav.addWidget(self._month_combo)
+        nav.addWidget(widgets.icon_button("chevron-up", "Mês seguinte",
+                                          lambda: self._change_month(+1)))
+        nav.addStretch(1)
+        nav.addWidget(widgets.ModernButton("Marcar dia…", self._mark_day))
+        lay.addLayout(nav)
+
+        # entrada rápida (teclado: Tab entre campos, Enter adiciona)
+        form = QHBoxLayout()
+        form.setSpacing(6)
+        self._q_date = QDateEdit()
+        self._q_date.setCalendarPopup(True)
+        self._q_date.setDisplayFormat("dd/MM/yyyy")
+        self._q_date.setDate(date.today())
+        self._q_date.setFixedWidth(130)
+        widgets.no_wheel_steal(self._q_date)
+        self._q_start = _time_edit("hora de início")
+        self._q_end = _time_edit("hora de fim")
+        self._q_client = QComboBox()
+        self._q_client.setEditable(True)
+        self._q_client.setMinimumWidth(130)
+        self._q_client.currentTextChanged.connect(self._on_quick_client)
+        widgets.no_wheel_steal(self._q_client)
+        self._q_project = QComboBox()
+        self._q_project.setEditable(True)
+        self._q_project.setMinimumWidth(110)
+        widgets.no_wheel_steal(self._q_project)
+        self._q_desc = widgets.make_entry("descrição breve da atividade…")
+        self._q_desc.returnPressed.connect(self._quick_add)
+        self._q_extra = widgets.AnimatedCheckBox("extra")
+        for w in (self._q_date, self._q_start, self._q_end, self._q_client,
+                  self._q_project, self._q_desc, self._q_extra):
+            form.addWidget(w)
+        form.setStretchFactor(self._q_desc, 1)
+        form.addWidget(widgets.ModernButton("Adicionar", self._quick_add, kind="primary"))
+        lay.addLayout(form)
+
+        self._tree = self._make_tree(
+            ["Horário", "Total", "Cliente", "Projeto", "Descrição", "Marcas"],
+            widths=(150, 48, 140, 120, 0, 70), stretch=4)
+        self._tree.itemDoubleClicked.connect(self._edit_item)
+        self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._tree.customContextMenuRequested.connect(self._entries_menu)
+        lay.addWidget(self._tree, 1)
+
+        self._footer = QLabel("")
+        self._footer.setProperty("role", "muted")
+        lay.addWidget(self._footer)
+        return page
+
+    def _make_tree(self, headers: list[str], widths: tuple, stretch: int) -> QTreeWidget:
+        tree = QTreeWidget()
+        tree.setHeaderLabels(headers)
+        tree.setRootIsDecorated(True)
+        tree.setSelectionMode(QAbstractItemView.SingleSelection)
+        tree.setAllColumnsShowFocus(True)
+        tree.header().setStretchLastSection(False)
+        for i, w in enumerate(widths):
+            if w:
+                tree.setColumnWidth(i, w)
+        tree.header().setSectionResizeMode(stretch, tree.header().ResizeMode.Stretch)
+        return tree
+
+    def _change_month(self, delta: int) -> None:
+        self._set_month(_shift_month(self._month, delta))
+
+    def _on_month_combo(self, text: str) -> None:
+        if text and text != self._month:
+            self._set_month(text)
+
+    def _set_month(self, month: str) -> None:
+        self._month = month
+        if self._month_combo.findText(month) < 0:
+            self._month_combo.addItem(month)
+        self._month_combo.setCurrentText(month)
+        self.refresh()
+
+    def _on_quick_client(self, text: str) -> None:
+        """Projetos do combo seguem o cliente escolhido (dependente)."""
+        self._q_project.clear()
+        if not self._data:
+            return
+        cid = next((c["id"] for c in self._data["clients"]
+                    if c["name"].casefold() == text.strip().casefold()), None)
+        for p in self._data["projects"].get(cid, ()):
+            self._q_project.addItem(p["code"])
+        self._q_project.setCurrentText("")
+
+    def _quick_add(self) -> None:
+        day = self._q_date.date().toPython().isoformat()
+        start = util.format_time_hhmm(self._q_start.text())
+        end = util.format_time_hhmm(self._q_end.text())
+        client = self._q_client.currentText().strip()
+        project = self._q_project.currentText().strip()
+        desc = self._q_desc.text().strip()
+        extra = self._q_extra.isChecked()
+        if not (util.time_hhmm_ok(start) and util.time_hhmm_ok(end)):
+            QMessageBox.warning(self, "Apontamento de horas",
+                                "Informe início e fim no formato HH:MM.")
+            return
+        self._q_desc.clear()
+
+        def work():
+            cid, text = tsdb.resolve_client(client)
+            pid, ptext = None, project
+            if cid is not None and project:
+                match = [p for p in tsdb.list_projects(cid)
+                         if p["code"].casefold() == project.casefold()]
+                if match:
+                    pid, ptext = match[0]["id"], ""
+            tsdb.add_entry(work_date=day, start_time=start, end_time=end,
+                           client_id=cid, client_text="" if cid else text,
+                           project_id=pid, project_text=ptext,
+                           description=desc, overtime=extra)
+
+        self._bg(work)
+
+    def _mark_day(self) -> None:
+        day = self._q_date.date().toPython().isoformat()
+        note, ok = QInputDialog.getText(
+            self, "Marcar dia", f"Nota para {day} (feriado, férias…; vazio remove):")
+        if ok:
+            self._bg(lambda: tsdb.set_day_note(day, note))
+
+    def _entries_menu(self, pos) -> None:
+        from PySide6.QtWidgets import QMenu
+
+        item = self._tree.itemAt(pos)
+        entry = self._entry_items.get(item)
+        if entry is None:
+            return
+        menu = QMenu(self)
+        menu.addAction(theme.qicon("edit"), "Editar…", lambda: self._edit_item(item, 0))
+        if entry["posted"]:
+            menu.addAction("Desmarcar apontado",
+                           lambda: self._bg(lambda: tsdb.set_posted([entry["id"]], False)))
+        else:
+            menu.addAction(theme.qicon("checkmark"), "Marcar como apontado",
+                           lambda: self._bg(lambda: tsdb.set_posted([entry["id"]], True)))
+        if entry["meeting_started_at"]:
+            menu.addAction(theme.qicon("dismiss"), "Descartar sugestão aceita",
+                           lambda: self._discard(entry))
+        else:
+            menu.addAction(theme.qicon("delete"), "Excluir",
+                           lambda: self._delete(entry))
+        menu.exec(self._tree.viewport().mapToGlobal(pos))
+
+    def _delete(self, entry: dict) -> None:
+        if QMessageBox.question(
+                self, "Excluir apontamento",
+                f"Excluir {entry['start_time']}-{entry['end_time']} de {entry['work_date']}?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
+            self._bg(lambda: tsdb.delete_entry(entry["id"]))
+
+    def _discard(self, entry: dict) -> None:
+        if QMessageBox.question(
+                self, "Descartar",
+                "O apontamento desta reunião será descartado e a sugestão não voltará.\n"
+                "Descartar mesmo assim?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
+            self._bg(lambda: tsdb.update_entry(entry["id"], status="discarded"))
+
+    def _edit_item(self, item, _col) -> None:
+        entry = self._entry_items.get(item)
+        if entry is not None:
+            self._open_editor(entry)
+
+    def _open_editor(self, entry: dict, accept_after: bool = False) -> None:
+        dlg = _EntryDialog(self, entry, self._data or {})
+        if dlg.exec() != QDialog.Accepted:
+            return
+        fields = dlg.fields()
+
+        def work():
+            cid, text = tsdb.resolve_client(fields.pop("_client"))
+            fields["client_id"] = cid
+            fields["client_text"] = "" if cid else text
+            project = fields.pop("_project")
+            pid, ptext = None, project
+            if cid is not None and project:
+                match = [p for p in tsdb.list_projects(cid)
+                         if p["code"].casefold() == project.casefold()]
+                if match:
+                    pid, ptext = match[0]["id"], ""
+            fields["project_id"] = pid
+            fields["project_text"] = ptext
+            if accept_after:
+                fields["status"] = "confirmed"
+            tsdb.update_entry(entry["id"], **fields)
+
+        self._bg(work)
+
+    # -------------------------------------------------------- aba 2: Sugestões --
+
+    def _build_tab_suggestions(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(4, 8, 4, 4)
+        lay.setSpacing(6)
+
+        hint = QLabel("Reuniões processadas viram sugestões - revise, ajuste e confirme. "
+                      "Cliente em destaque = não cadastrado.")
+        hint.setProperty("role", "muted")
+        lay.addWidget(hint)
+
+        self._sug_tree = self._make_tree(
+            ["Data", "Horário", "Total", "Cliente", "Descrição"],
+            widths=(84, 96, 48, 150, 0), stretch=4)
+        self._sug_tree.setRootIsDecorated(False)
+        self._sug_tree.itemDoubleClicked.connect(
+            lambda item, _c: self._sug_edit_accept(item))
+        lay.addWidget(self._sug_tree, 1)
+
+        btns = QHBoxLayout()
+        btns.setSpacing(6)
+        self._b_accept = widgets.ModernButton("Aceitar", self._sug_accept, kind="primary")
+        self._b_edit = widgets.ModernButton("Editar e aceitar…",
+                                            lambda: self._sug_edit_accept(None))
+        self._b_discard = widgets.ModernButton("Descartar", self._sug_discard)
+        self._b_client = widgets.ModernButton("Cadastrar cliente…", self._sug_register_client)
+        self._b_open = widgets.ModernButton("Abrir reunião", self._sug_open_meeting)
+        for b in (self._b_accept, self._b_edit, self._b_discard, self._b_client, self._b_open):
+            btns.addWidget(b)
+        btns.addStretch(1)
+        lay.addLayout(btns)
+        return page
+
+    def _sug_selected(self) -> dict | None:
+        items = self._sug_tree.selectedItems()
+        return self._sug_items.get(items[0]) if items else None
+
+    def _sug_accept(self) -> None:
+        e = self._sug_selected()
+        if e:
+            self._bg(lambda: tsdb.update_entry(e["id"], status="confirmed"))
+
+    def _sug_edit_accept(self, item) -> None:
+        e = self._sug_items.get(item) if item is not None else self._sug_selected()
+        if e:
+            self._open_editor(e, accept_after=True)
+
+    def _sug_discard(self) -> None:
+        e = self._sug_selected()
+        if e:
+            self._discard(e)
+
+    def _sug_register_client(self) -> None:
+        e = self._sug_selected()
+        if e is None or not e["client_text"]:
+            return
+        dlg = _RegisterClientDialog(self, e["client_text"], (self._data or {}).get("clients", []))
+        if dlg.exec() != QDialog.Accepted:
+            return
+        raw, target = e["client_text"], dlg.target_client_id()
+
+        def work():
+            cid = tsdb.add_client(raw) if target is None else target
+            if target is not None:
+                tsdb.add_alias(cid, raw)
+            tsdb.update_entry(e["id"], client_id=cid, client_text="")
+
+        self._bg(work)
+
+    def _sug_open_meeting(self) -> None:
+        e = self._sug_selected()
+        if e is None:
+            return
+        from pathlib import Path
+
+        folder = Path(e["meeting_folder"]) if e["meeting_folder"] else None
+        if folder is None or not folder.exists():
+            folder = self._find_meeting_folder(e["meeting_started_at"])
+        if folder is None:
+            QMessageBox.information(self, "Abrir reunião",
+                                    "A pasta desta reunião não existe mais "
+                                    "(renomeada e não reencontrada, ou removida pela retenção).")
+            return
+        util.open_path(folder)
+
+    def _find_meeting_folder(self, started_at: str | None):
+        """Fallback do rename: procura o meta.json do dia com o mesmo started_at."""
+        if not started_at:
+            return None
+        try:
+            import json
+
+            d = datetime.fromisoformat(started_at)
+            day_dir = (self.app.cfg.output.resolved_recordings_dir()
+                       / f"{d.year:04d}" / f"{d.month:02d}" / f"{d.day:02d}")
+            for meta in day_dir.glob("*/meta.json"):
+                try:
+                    if json.loads(meta.read_text(encoding="utf-8")).get("started_at") == started_at:
+                        return meta.parent
+                except (OSError, ValueError):
+                    continue
+        except Exception:
+            log.exception("fallback de pasta da reunião falhou")
+        return None
+
+    # -------------------------------------------------------- aba 3: Multi Dados --
+
+    def _build_tab_queue(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(4, 8, 4, 4)
+        lay.setSpacing(6)
+
+        hint = QLabel("Confirmados ainda não lançados no Multi Dados - marque o que "
+                      "você já lançou lá.")
+        hint.setProperty("role", "muted")
+        lay.addWidget(hint)
+
+        self._queue_tree = self._make_tree(
+            ["Horário", "Total", "Cliente", "Projeto", "Descrição"],
+            widths=(150, 48, 140, 120, 0), stretch=4)
+        lay.addWidget(self._queue_tree, 1)
+
+        btns = QHBoxLayout()
+        btns.setSpacing(6)
+        btns.addWidget(widgets.ModernButton("Marcar selecionados como apontados",
+                                            self._queue_mark, kind="primary"))
+        btns.addWidget(widgets.ModernButton("Exportar Excel do mês…", self._export_month))
+        btns.addStretch(1)
+        lay.addLayout(btns)
+        return page
+
+    def _queue_mark(self) -> None:
+        ids = [e["id"] for item, e in self._queue_items.items()
+               if item.checkState(0) == Qt.Checked]
+        if ids:
+            self._bg(lambda: tsdb.set_posted(ids, True))
+
+    def _export_month(self) -> None:
+        month = self._month
+        ts = self.app.cfg.timesheet
+
+        def work():
+            from pathlib import Path
+
+            from .. import timesheet_xlsx
+
+            dest = Path(ts.export_dir).expanduser() if ts.export_dir else None
+            out = timesheet_xlsx.export_month(month, dest)
+            self.app.ui(lambda: QMessageBox.information(
+                self, "Exportado", f"Excel do mês {month} gerado em:\n{out}"))
+
+        self._bg(work)
+
+    # ---------------------------------------------------------- aba 4: Cadastro --
+
+    def _build_tab_registry(self) -> QWidget:
+        page = QWidget()
+        lay = QHBoxLayout(page)
+        lay.setContentsMargins(4, 8, 4, 4)
+        split = QSplitter()
+        lay.addWidget(split)
+
+        left = QWidget()
+        llay = QVBoxLayout(left)
+        llay.setContentsMargins(0, 0, 0, 0)
+        llay.setSpacing(6)
+        self._reg_list = QListWidget()
+        self._reg_list.currentRowChanged.connect(lambda _i: self._render_registry_detail())
+        llay.addWidget(self._reg_list, 1)
+        lbtn = QHBoxLayout()
+        lbtn.setSpacing(6)
+        lbtn.addWidget(widgets.ModernButton("Novo…", self._client_new, kind="primary"))
+        lbtn.addWidget(widgets.ModernButton("Renomear…", self._client_rename))
+        lbtn.addWidget(widgets.ModernButton("Desativar", self._client_deactivate))
+        lbtn.addWidget(widgets.ModernButton("Mesclar em…", self._client_merge))
+        llay.addLayout(lbtn)
+        split.addWidget(left)
+
+        right = QWidget()
+        rlay = QVBoxLayout(right)
+        rlay.setContentsMargins(8, 0, 0, 0)
+        rlay.setSpacing(6)
+        rlay.addWidget(QLabel("Aliases (grafias que resolvem para este cliente):"))
+        self._alias_list = QListWidget()
+        rlay.addWidget(self._alias_list, 1)
+        arow = QHBoxLayout()
+        self._alias_entry = widgets.make_entry("novo alias…")
+        self._alias_entry.returnPressed.connect(self._alias_add)
+        arow.addWidget(self._alias_entry, 1)
+        arow.addWidget(widgets.ModernButton("Adicionar", self._alias_add))
+        rlay.addLayout(arow)
+        rlay.addWidget(QLabel("Projetos (códigos de OS/GAP):"))
+        self._proj_list = QListWidget()
+        rlay.addWidget(self._proj_list, 1)
+        prow = QHBoxLayout()
+        self._proj_code = widgets.make_entry("código (ex.: 403240)…")
+        self._proj_label = widgets.make_entry("rótulo (opcional)…")
+        self._proj_code.returnPressed.connect(self._project_add)
+        self._proj_label.returnPressed.connect(self._project_add)
+        prow.addWidget(self._proj_code, 1)
+        prow.addWidget(self._proj_label, 1)
+        prow.addWidget(widgets.ModernButton("Adicionar", self._project_add))
+        rlay.addLayout(prow)
+        split.addWidget(right)
+        widgets.remember_splitter(split, "qt_timesheet_split")
+        return page
+
+    def _reg_selected_client(self) -> dict | None:
+        item = self._reg_list.currentItem()
+        if item is None:
+            return None
+        return self._reg_clients.get(item.data(Qt.UserRole))
+
+    def _client_new(self) -> None:
+        name, ok = QInputDialog.getText(self, "Novo cliente", "Nome canônico:")
+        if ok and name.strip():
+            self._bg(lambda: tsdb.add_client(name))
+
+    def _client_rename(self) -> None:
+        c = self._reg_selected_client()
+        if c is None:
+            return
+        name, ok = QInputDialog.getText(self, "Renomear cliente", "Novo nome:",
+                                        text=c["name"])
+        if ok and name.strip():
+            self._bg(lambda: tsdb.rename_client(c["id"], name))
+
+    def _client_deactivate(self) -> None:
+        c = self._reg_selected_client()
+        if c is None:
+            return
+        if QMessageBox.question(
+                self, "Desativar cliente",
+                f"Desativar {c['name']}? Ele some dos combos e do resolve; "
+                "os apontamentos históricos permanecem.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
+            self._bg(lambda: tsdb.set_client_active(c["id"], False))
+
+    def _client_merge(self) -> None:
+        c = self._reg_selected_client()
+        if c is None or self._data is None:
+            return
+        others = [x for x in self._data["clients"] if x["id"] != c["id"]]
+        if not others:
+            return
+        names = [x["name"] for x in others]
+        name, ok = QInputDialog.getItem(
+            self, "Mesclar cliente", f"Mesclar {c['name']} em:", names, 0, False)
+        if ok and name:
+            dst = next(x["id"] for x in others if x["name"] == name)
+            self._bg(lambda: tsdb.merge_client(c["id"], dst))
+
+    def _alias_add(self) -> None:
+        c = self._reg_selected_client()
+        alias = self._alias_entry.text().strip()
+        if c and alias:
+            self._alias_entry.clear()
+            self._bg(lambda: tsdb.add_alias(c["id"], alias))
+
+    def _project_add(self) -> None:
+        c = self._reg_selected_client()
+        code = self._proj_code.text().strip()
+        if c and code:
+            label = self._proj_label.text().strip()
+            self._proj_code.clear()
+            self._proj_label.clear()
+            self._bg(lambda: tsdb.add_project(c["id"], code, label))
+
+    # ------------------------------------------------------------------ render --
+
+    def _render(self, data: dict) -> None:
+        self._data = data
+        self._render_entries(data)
+        self._render_suggestions(data)
+        self._render_queue(data)
+        self._render_registry(data)
+        self._tabs.setTabText(1, f"Sugestões ({len(data['suggestions'])})"
+                              if data["suggestions"] else "Sugestões")
+        self._tabs.setTabText(2, f"Multi Dados ({len(data['queue'])})"
+                              if data["queue"] else "Multi Dados")
+
+    def _entry_cells(self, e: dict, with_date: bool = False) -> list[str]:
+        cells = [f"{e['start_time']}-{e['end_time']}", _fmt_min(e["minutes"]),
+                 e["client_name"] or e["client_text"] or "-",
+                 e["project_code"] or e["project_text"] or "",
+                 e["description"] or ""]
+        if with_date:
+            cells.insert(0, _day_label(e["work_date"]))
+        return cells
+
+    def _render_entries(self, data: dict) -> None:
+        t = theme.active()
+        self._tree.clear()
+        self._entry_items.clear()
+        by_day: dict[str, list[dict]] = {}
+        for e in data["entries"]:
+            by_day.setdefault(e["work_date"], []).append(e)
+        bold = self.font()
+        bold.setBold(True)
+        for day in sorted(set(by_day) | set(data["notes"])):
+            total = data["totals"].get(day)
+            node = QTreeWidgetItem(self._tree, [
+                _day_label(day), _fmt_min(total) if total else "", "", "",
+                data["notes"].get(day, ""), ""])
+            for col in (0, 1):
+                node.setFont(col, bold)
+            for e in by_day.get(day, ()):
+                marks = []
+                if e["status"] == "suggested":
+                    marks.append("?")
+                if e["overtime"]:
+                    marks.append("extra")
+                if e["posted"]:
+                    marks.append("MD")
+                item = QTreeWidgetItem(node, self._entry_cells(e) + [" ".join(marks)])
+                if e["status"] == "suggested":
+                    for col in range(item.columnCount()):
+                        item.setForeground(col, QBrush(QColor(t.warn)))
+                elif e["posted"]:
+                    item.setForeground(5, QBrush(QColor(t.ok)))
+                self._entry_items[item] = e
+            node.setExpanded(True)  # só expande DEPOIS dos filhos existirem
+        s = data["summary"]
+        self._footer.setText(
+            f"{data['month']}: total {_fmt_min(s['total'])}  ·  "
+            f"apontado {_fmt_min(s['posted'])}  ·  a apontar {_fmt_min(s['unposted'])}  ·  "
+            f"sugestões {_fmt_min(s['suggested'])}")
+
+    def _render_suggestions(self, data: dict) -> None:
+        t = theme.active()
+        self._sug_tree.clear()
+        self._sug_items.clear()
+        for e in data["suggestions"]:
+            item = QTreeWidgetItem(self._sug_tree, [
+                e["work_date"], f"{e['start_time']}-{e['end_time']}",
+                _fmt_min(e["minutes"]),
+                e["client_name"] or (f"? {e['client_text']}" if e["client_text"] else "? sem cliente"),
+                e["description"] or ""])
+            if e["client_name"] is None:  # não resolvido: destaque de aviso
+                item.setForeground(3, QBrush(QColor(t.warn)))
+            self._sug_items[item] = e
+
+    def _render_queue(self, data: dict) -> None:
+        self._queue_tree.clear()
+        self._queue_items.clear()
+        by_day: dict[str, list[dict]] = {}
+        for e in data["queue"]:
+            by_day.setdefault(e["work_date"], []).append(e)
+        bold = self.font()
+        bold.setBold(True)
+        for day in sorted(by_day):
+            node = QTreeWidgetItem(self._queue_tree, [_day_label(day)])
+            node.setFont(0, bold)
+            for e in by_day[day]:
+                item = QTreeWidgetItem(node, self._entry_cells(e))
+                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                item.setCheckState(0, Qt.Unchecked)
+                self._queue_items[item] = e
+            node.setExpanded(True)  # só expande DEPOIS dos filhos existirem
+
+    def _render_registry(self, data: dict) -> None:
+        selected = self._reg_selected_client()
+        self._reg_list.clear()
+        self._reg_clients = {c["id"]: c for c in data["clients_all"]}
+        for c in data["clients_all"]:
+            label = c["name"] + ("" if c["active"] else "  (inativo)")
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, c["id"])
+            self._reg_list.addItem(item)
+            if selected and c["id"] == selected["id"]:
+                self._reg_list.setCurrentItem(item)
+        if self._reg_list.currentRow() < 0 and self._reg_list.count():
+            self._reg_list.setCurrentRow(0)
+        self._render_registry_detail()
+        # combo de cliente da entrada rápida acompanha o cadastro
+        current = self._q_client.currentText()
+        self._q_client.blockSignals(True)
+        self._q_client.clear()
+        self._q_client.addItem("")
+        for c in data["clients"]:
+            self._q_client.addItem(c["name"])
+        if not current and getattr(self.app, "cfg", None) is not None:
+            current = self.app.cfg.timesheet.default_client or ""
+        self._q_client.setCurrentText(current)
+        self._q_client.blockSignals(False)
+        self._on_quick_client(self._q_client.currentText())
+
+    def _render_registry_detail(self) -> None:
+        self._alias_list.clear()
+        self._proj_list.clear()
+        c = self._reg_selected_client()
+        if c is None or self._data is None:
+            return
+        for a in self._data["aliases"].get(c["id"], ()):
+            self._alias_list.addItem(a["alias"])
+        for p in self._data["projects"].get(c["id"], ()):
+            label = p["code"] + (f"  -  {p['label']}" if p["label"] else "")
+            self._proj_list.addItem(label)
+
+
+class _EntryDialog(QDialog):
+    """Edição de um apontamento (duplo clique na grade e 'Editar e aceitar')."""
+
+    def __init__(self, parent, entry: dict, data: dict):
+        super().__init__(parent)
+        self.setWindowTitle("Editar apontamento")
+        lay = QVBoxLayout(self)
+        from PySide6.QtWidgets import QFormLayout
+
+        form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        self._date = QDateEdit()
+        self._date.setCalendarPopup(True)
+        self._date.setDisplayFormat("dd/MM/yyyy")
+        self._date.setDate(date.fromisoformat(entry["work_date"]))
+        widgets.no_wheel_steal(self._date)
+        self._start = _time_edit("início")
+        self._start.setText(entry["start_time"])
+        self._end = _time_edit("fim")
+        self._end.setText(entry["end_time"])
+        times = QHBoxLayout()
+        times.addWidget(self._start)
+        times.addWidget(QLabel("até"))
+        times.addWidget(self._end)
+        times.addStretch(1)
+        self._client = QComboBox()
+        self._client.setEditable(True)
+        for c in data.get("clients", ()):
+            self._client.addItem(c["name"])
+        self._client.setCurrentText(entry["client_name"] or entry["client_text"] or "")
+        widgets.no_wheel_steal(self._client)
+        self._project = QComboBox()
+        self._project.setEditable(True)
+        self._project.setCurrentText(entry["project_code"] or entry["project_text"] or "")
+        widgets.no_wheel_steal(self._project)
+        self._desc = widgets.make_entry("")
+        self._desc.setText(entry["description"] or "")
+        self._extra = widgets.AnimatedCheckBox("hora extra")
+        self._extra.setChecked(bool(entry["overtime"]))
+        self._location = QComboBox()
+        self._location.addItems(_LOCATIONS)
+        self._location.setCurrentText(entry["location"] or "")
+        widgets.no_wheel_steal(self._location)
+        form.addRow("Data:", self._date)
+        form.addRow("Horário:", times)
+        form.addRow("Cliente:", self._client)
+        form.addRow("Projeto:", self._project)
+        form.addRow("Descrição:", self._desc)
+        form.addRow("Local:", self._location)
+        form.addRow("", self._extra)
+        lay.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self._validate_accept)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+
+    def _validate_accept(self) -> None:
+        start = util.format_time_hhmm(self._start.text())
+        end = util.format_time_hhmm(self._end.text())
+        if not (util.time_hhmm_ok(start) and util.time_hhmm_ok(end)):
+            QMessageBox.warning(self, "Editar apontamento",
+                                "Informe início e fim no formato HH:MM.")
+            return
+        self.accept()
+
+    def fields(self) -> dict:
+        return {
+            "work_date": self._date.date().toPython().isoformat(),
+            "start_time": util.format_time_hhmm(self._start.text()),
+            "end_time": util.format_time_hhmm(self._end.text()),
+            "_client": self._client.currentText().strip(),
+            "_project": self._project.currentText().strip(),
+            "description": self._desc.text().strip(),
+            "overtime": self._extra.isChecked(),
+            "location": self._location.currentText(),
+        }
+
+
+class _RegisterClientDialog(QDialog):
+    """Cliente não resolvido numa sugestão: criar novo ou virar alias de existente."""
+
+    def __init__(self, parent, raw: str, clients: list[dict]):
+        super().__init__(parent)
+        self.setWindowTitle("Cadastrar cliente")
+        self._clients = clients
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel(f"A IA identificou o cliente como: “{raw}”"))
+        self._new = QRadioButton(f"Criar o cliente “{raw}”")
+        self._new.setChecked(True)
+        self._alias = QRadioButton("É uma grafia (alias) do cliente existente:")
+        self._combo = QComboBox()
+        for c in clients:
+            self._combo.addItem(c["name"], c["id"])
+        self._combo.setEnabled(False)
+        self._alias.toggled.connect(self._combo.setEnabled)
+        if not clients:
+            self._alias.setEnabled(False)
+        lay.addWidget(self._new)
+        lay.addWidget(self._alias)
+        lay.addWidget(self._combo)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+
+    def target_client_id(self) -> int | None:
+        """None = criar cliente novo; senão, o id do cliente que ganha o alias."""
+        if self._new.isChecked():
+            return None
+        return self._combo.currentData()

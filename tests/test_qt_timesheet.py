@@ -1,0 +1,180 @@
+"""Smoke offscreen da janela de Apontamentos (#118/#124).
+
+Constrói a TimesheetWindow sem app real (cfg=None -> coleta é no-op, não toca
+banco), e exercita o fluxo com banco isolado em tempdir: render das 4 abas,
+badges de contagem, aceitar sugestão, marcar apontado na fila, entrada rápida
+e restyle_theme a partir do cache. IO roda inline (determinístico) via um
+refresh guardado por flag - o __init__ dispara refresh antes do banco existir.
+
+Roda sem display:  QT_QPA_PLATFORM=offscreen python -m unittest
+"""
+
+import importlib.util
+import os
+import shutil
+import sys
+import tempfile
+import unittest
+from datetime import date
+from pathlib import Path
+from types import SimpleNamespace
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+_HAS_PYSIDE = importlib.util.find_spec("PySide6") is not None
+
+from scriba import timesheet_db as tsdb  # noqa: E402
+from scriba import util  # noqa: E402
+
+
+class _FakeApp:
+    def __init__(self, cfg=None):
+        self.cfg = cfg
+        self.toasts = []
+
+    def ui(self, fn):  # síncrono: collect->render determinístico nos testes
+        fn()
+
+    def _toast(self, *a):
+        self.toasts.append(a)
+
+
+def _cfg(tmp: Path) -> SimpleNamespace:
+    return SimpleNamespace(
+        timesheet=SimpleNamespace(enabled=True, suggest=True, round_minutes=15,
+                                  min_meeting_minutes=10, default_client="",
+                                  db_path="", export_dir="", backup_dir=""),
+        output=SimpleNamespace(resolved_recordings_dir=lambda: tmp / "rec"),
+    )
+
+
+@unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")
+class TimesheetWindowTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+
+        cls.qapp = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="scriba_tsui_"))
+        self._app0, self._logs0, self._db0 = util.APP_DIR, util.LOGS_DIR, tsdb.DB_PATH
+        util.APP_DIR = self.tmp / "app"
+        util.LOGS_DIR = util.APP_DIR / "logs"
+        # DB_PATH fica None: o apply_config da janela (db_path vazio) reseta para
+        # None de qualquer forma — o isolamento aqui é via APP_DIR, como no app real
+        tsdb.DB_PATH = None
+
+    def tearDown(self):
+        util.APP_DIR, util.LOGS_DIR, tsdb.DB_PATH = self._app0, self._logs0, self._db0
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _window(self, app):
+        """Janela com refresh GUARDADO: o do __init__ é no-op; depois roda inline."""
+        from scriba.qt.timesheet_ui import TimesheetWindow
+
+        class _Win(TimesheetWindow):
+            def refresh(self):
+                if getattr(self, "_ready", False):
+                    self._collect()
+
+        win = _Win(app)
+        win._inline_bg = True
+        return win
+
+    # -- smoke sem app real ----------------------------------------------------
+    def test_constroi_sem_app_real_e_x_esconde(self):
+        win = self._window(_FakeApp(cfg=None))
+        self.assertEqual(win._tabs.count(), 4)
+        win._ready = True
+        win.refresh()  # cfg=None: no-op, sem tocar banco
+        self.assertFalse(tsdb._db_path().exists())
+        win.show()
+        self.assertTrue(win.isVisible())
+        win.close()
+        self.assertFalse(win.isVisible())  # X esconde, não fecha
+
+    # -- fluxo com banco isolado -------------------------------------------------
+    def _seed(self):
+        cid = tsdb.add_client("Coruripe")
+        tsdb.add_project(cid, "403240")
+        eid = tsdb.add_entry(work_date="2026-07-13", start_time="08:00",
+                             end_time="13:00", client_id=cid, description="manha")
+        tsdb.upsert_suggestion({
+            "work_date": "2026-07-13", "start_time": "14:00", "end_time": "15:00",
+            "client_text": "Cliente Novo", "description": "call sugerida",
+            "meeting_started_at": "2026-07-13T14:00:00"})
+        return cid, eid
+
+    def _data_window(self):
+        fake = _FakeApp(cfg=None)
+        win = self._window(fake)
+        fake.cfg = _cfg(self.tmp)
+        win._ready = True
+        win._month = "2026-07"
+        win.refresh()
+        return win
+
+    def test_render_abas_e_badges(self):
+        self._seed()
+        win = self._data_window()
+        # grade: 1 dia com 2 linhas (confirmada + sugestão em cor de aviso)
+        self.assertEqual(win._tree.topLevelItemCount(), 1)
+        self.assertEqual(win._tree.topLevelItem(0).childCount(), 2)
+        self.assertIn("total 5:00", win._footer.text())
+        self.assertIn("sugestões 1:00", win._footer.text())
+        self.assertEqual(win._tabs.tabText(1), "Sugestões (1)")
+        self.assertEqual(win._tabs.tabText(2), "Multi Dados (1)")
+        # cadastro: cliente na lista e projeto no detalhe
+        self.assertEqual(win._reg_list.count(), 1)
+        self.assertEqual(win._proj_list.count(), 1)
+
+    def test_aceitar_sugestao(self):
+        self._seed()
+        win = self._data_window()
+        win._sug_tree.setCurrentItem(win._sug_tree.topLevelItem(0))
+        win._sug_accept()
+        self.assertEqual(win._tabs.tabText(1), "Sugestões")
+        self.assertEqual(len(tsdb.list_entries(status="suggested")), 0)
+        self.assertEqual(len(tsdb.list_entries(status="confirmed")), 2)
+
+    def test_fila_marcar_apontado(self):
+        from PySide6.QtCore import Qt
+
+        self._seed()
+        win = self._data_window()
+        node = win._queue_tree.topLevelItem(0)
+        node.child(0).setCheckState(0, Qt.Checked)
+        win._queue_mark()
+        self.assertEqual(win._tabs.tabText(2), "Multi Dados")
+        rows = tsdb.list_entries(status="confirmed", posted=True)
+        self.assertEqual(len(rows), 1)
+
+    def test_entrada_rapida(self):
+        self._seed()
+        win = self._data_window()
+        win._q_date.setDate(date(2026, 7, 14))
+        win._q_start.setText("08:00")
+        win._q_end.setText("09:30")
+        win._q_client.setCurrentText("Coruripe")
+        win._q_project.setCurrentText("403240")
+        win._q_desc.setText("testes unitarios")
+        win._quick_add()
+        rows = tsdb.list_entries(day="2026-07-14")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["minutes"], 90)
+        self.assertEqual(rows[0]["client_name"], "Coruripe")
+        self.assertEqual(rows[0]["project_code"], "403240")
+
+    def test_restyle_theme_re_renderiza_do_cache(self):
+        self._seed()
+        win = self._data_window()
+        footer = win._footer.text()
+        win.restyle_theme()
+        self.assertEqual(win._footer.text(), footer)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

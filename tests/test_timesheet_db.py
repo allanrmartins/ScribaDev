@@ -162,6 +162,21 @@ class TimesheetDbTests(unittest.TestCase):
         self.assertEqual([c["name"] for c in tsdb.list_clients()], ["Cellera"])
         self.assertIsNotNone(eid)
 
+    def test_rename_e_desativa_cliente(self):
+        cid = tsdb.add_client("Celera")
+        tsdb.rename_client(cid, "Cellera")
+        self.assertEqual(tsdb.resolve_client("cellera"), (cid, "Cellera"))
+        with self.assertRaises(ValueError):
+            tsdb.rename_client(cid, "  ")
+        with self.assertRaises(ValueError):
+            tsdb.rename_client(99999, "X")
+        tsdb.set_client_active(cid, False)
+        self.assertEqual(tsdb.resolve_client("cellera"), (None, "cellera"))  # sai do resolve
+        self.assertEqual(tsdb.list_clients(), [])
+        self.assertEqual(len(tsdb.list_clients(active_only=False)), 1)
+        tsdb.set_client_active(cid, True)  # reativar volta ao normal
+        self.assertEqual(tsdb.resolve_client("cellera"), (cid, "Cellera"))
+
     def test_projects_por_cliente(self):
         a = tsdb.add_client("Coruripe")
         b = tsdb.add_client("Delta")

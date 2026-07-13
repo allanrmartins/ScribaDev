@@ -82,6 +82,7 @@ class ScribaApp:
         self.wizard_win = None
         self.log_win = None
         self.main_win = None
+        self.timesheet_win = None  # janela de Apontamentos (#118/#124)
         self.update_news = None  # versão nova detectada (#19); a capa exibe o aviso
         self.hotkey = None
         self.hotkey_split = None  # #38: atalho "nova call" (dividir a gravação)
@@ -437,14 +438,21 @@ class ScribaApp:
                 self.notes_win.reveal_note_at_section)
         self.action_hub.refresh()
         self.action_hub.show()
-
-    def show_timesheet(self) -> None:
-        """Abre a janela de Apontamentos (#124). Enquanto ela não existe, orienta
-        para a CLI - o item da bandeja só aparece com o módulo ativado (#126)."""
-        self._toast("Apontamento de horas",
-                    "A janela chega na próxima etapa (#124) - por ora: scribadev timesheet list")
         if note_path is not None:
             self.action_hub.focus_meeting(note_path)
+
+    def show_timesheet(self) -> None:
+        """Abre a janela de Apontamentos (#118/#124), instância única, chamável de
+        qualquer thread. O acesso é condicionado ao módulo ativado (#126): o item
+        da bandeja só aparece com [timesheet].enabled."""
+        self.ui(self._open_timesheet_ui)
+
+    def _open_timesheet_ui(self) -> None:
+        if self.timesheet_win is None:
+            from .qt.timesheet_ui import TimesheetWindow
+
+            self.timesheet_win = TimesheetWindow(self)
+        self.timesheet_win.show()
 
     def show_log(self) -> None:
         """Abre a janela de Log/diagnóstico (chamável de qualquer thread)."""

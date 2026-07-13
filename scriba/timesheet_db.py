@@ -477,6 +477,25 @@ def add_alias(client_id: int, alias: str) -> int:
         return cur.lastrowid
 
 
+def rename_client(client_id: int, name: str) -> None:
+    """Renomeia um cliente canônico (aliases e apontamentos seguem pelo id)."""
+    text = _norm(name)
+    if not text:
+        raise ValueError("nome de cliente vazio")
+    with closing(connect()) as conn, conn:
+        cur = conn.execute("UPDATE clients SET name = ? WHERE id = ?", (text, client_id))
+        if cur.rowcount == 0:
+            raise ValueError(f"cliente id={client_id} não existe")
+
+
+def set_client_active(client_id: int, active: bool) -> None:
+    """Ativa/desativa um cliente (desativado sai dos combos e do resolve_client;
+    os apontamentos históricos continuam apontando para ele)."""
+    with closing(connect()) as conn, conn:
+        conn.execute("UPDATE clients SET active = ? WHERE id = ?",
+                     (int(bool(active)), client_id))
+
+
 def list_clients(active_only: bool = True) -> list[dict]:
     sql = "SELECT * FROM clients"
     if active_only:
