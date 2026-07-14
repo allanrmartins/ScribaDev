@@ -75,6 +75,7 @@ class TimesheetWindow(QWidget):
         self._titlebar_done = False
         self._inline_bg = False      # testes: True roda o collect na própria thread
         self._data = None            # último payload (restyle re-renderiza sem re-coletar)
+        self._rendering = False      # setCheckState do render não é clique do usuário
         self._month = date.today().strftime("%Y-%m")
         self._entry_items: dict[QTreeWidgetItem, dict] = {}
         self._sug_items: dict[QTreeWidgetItem, dict] = {}
@@ -134,6 +135,7 @@ class TimesheetWindow(QWidget):
             clients = tsdb.list_clients()
             data = {
                 "month": month,
+                "client_names": tsdb.known_client_names(),
                 "entries": [e for e in tsdb.list_entries(month=month)
                             if e["status"] != "discarded"],
                 "totals": tsdb.day_totals(month),
@@ -223,9 +225,10 @@ class TimesheetWindow(QWidget):
         lay.addLayout(form)
 
         self._tree = self._make_tree(
-            ["Horário", "Total", "Cliente", "Projeto", "Descrição", "Marcas"],
-            widths=(150, 48, 140, 120, 0, 70), stretch=4)
+            ["Horário", "Total", "Cliente", "Projeto", "Descrição", "MD"],
+            widths=(150, 48, 140, 120, 0, 44), stretch=4)
         self._tree.itemDoubleClicked.connect(self._edit_item)
+        self._tree.itemChanged.connect(self._on_entry_check)
         self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._entries_menu)
         lay.addWidget(self._tree, 1)
@@ -346,6 +349,18 @@ class TimesheetWindow(QWidget):
                 "Descartar mesmo assim?",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
             self._bg(lambda: tsdb.update_entry(entry["id"], status="discarded"))
+
+    def _on_entry_check(self, item, col) -> None:
+        """Checkbox MD da grade (a coluna J da planilha): marca/desmarca 'lançado
+        no Multi Dados' direto na linha, sem passar pela aba de fila."""
+        if col != 5 or self._rendering:
+            return
+        e = self._entry_items.get(item)
+        if e is None or e["status"] != "confirmed":
+            return
+        posted = item.checkState(5) == Qt.Checked
+        if bool(e["posted"]) != posted:
+            self._bg(lambda: tsdb.set_posted([e["id"]], posted))
 
     def _edit_item(self, item, _col) -> None:
         entry = self._entry_items.get(item)
@@ -652,20 +667,24 @@ class TimesheetWindow(QWidget):
 
     def _render(self, data: dict) -> None:
         self._data = data
-        self._render_entries(data)
-        self._render_suggestions(data)
-        self._render_queue(data)
-        self._render_registry(data)
+        self._rendering = True
+        try:
+            self._render_entries(data)
+            self._render_suggestions(data)
+            self._render_queue(data)
+            self._render_registry(data)
+        finally:
+            self._rendering = False
         self._tabs.setTabText(1, f"Sugestões ({len(data['suggestions'])})"
                               if data["suggestions"] else "Sugestões")
         self._tabs.setTabText(2, f"Multi Dados ({len(data['queue'])})"
                               if data["queue"] else "Multi Dados")
 
     def _entry_cells(self, e: dict, with_date: bool = False) -> list[str]:
+        desc = (e["description"] or "") + (" (extra)" if e["overtime"] else "")
         cells = [f"{e['start_time']}-{e['end_time']}", _fmt_min(e["minutes"]),
                  e["client_name"] or e["client_text"] or "-",
-                 e["project_code"] or e["project_text"] or "",
-                 e["description"] or ""]
+                 e["project_code"] or e["project_text"] or "", desc.strip()]
         if with_date:
             cells.insert(0, _day_label(e["work_date"]))
         return cells
@@ -679,7 +698,8 @@ class TimesheetWindow(QWidget):
             by_day.setdefault(e["work_date"], []).append(e)
         bold = self.font()
         bold.setBold(True)
-        for day in sorted(set(by_day) | set(data["notes"])):
+        # dias mais recentes primeiro (pedido do uso real: o hoje fica no topo)
+        for day in sorted(set(by_day) | set(data["notes"]), reverse=True):
             total = data["totals"].get(day)
             node = QTreeWidgetItem(self._tree, [
                 _day_label(day), _fmt_min(total) if total else "", "", "",
@@ -687,19 +707,17 @@ class TimesheetWindow(QWidget):
             for col in (0, 1):
                 node.setFont(col, bold)
             for e in by_day.get(day, ()):
-                marks = []
+                item = QTreeWidgetItem(node, self._entry_cells(e) + [""])
                 if e["status"] == "suggested":
-                    marks.append("?")
-                if e["overtime"]:
-                    marks.append("extra")
-                if e["posted"]:
-                    marks.append("MD")
-                item = QTreeWidgetItem(node, self._entry_cells(e) + [" ".join(marks)])
-                if e["status"] == "suggested":
+                    # sugestão não é marcável antes de confirmar (o flag vem por
+                    # padrão no Qt - remover de verdade, não só não pintar o box)
+                    item.setFlags(item.flags() & ~Qt.ItemIsUserCheckable)
                     for col in range(item.columnCount()):
                         item.setForeground(col, QBrush(QColor(t.warn)))
-                elif e["posted"]:
-                    item.setForeground(5, QBrush(QColor(t.ok)))
+                else:
+                    # checkbox MD = a coluna J (SIM/NÃO) da planilha: marca direto
+                    # na linha o que já foi lançado no Multi Dados
+                    item.setCheckState(5, Qt.Checked if e["posted"] else Qt.Unchecked)
                 self._entry_items[item] = e
             node.setExpanded(True)  # só expande DEPOIS dos filhos existirem
         s = data["summary"]
@@ -712,7 +730,8 @@ class TimesheetWindow(QWidget):
         t = theme.active()
         self._sug_tree.clear()
         self._sug_items.clear()
-        for e in data["suggestions"]:
+        for e in sorted(data["suggestions"],
+                        key=lambda x: (x["work_date"], x["start_time"]), reverse=True):
             item = QTreeWidgetItem(self._sug_tree, [
                 e["work_date"], f"{e['start_time']}-{e['end_time']}",
                 _fmt_min(e["minutes"]),
@@ -730,7 +749,7 @@ class TimesheetWindow(QWidget):
             by_day.setdefault(e["work_date"], []).append(e)
         bold = self.font()
         bold.setBold(True)
-        for day in sorted(by_day):
+        for day in sorted(by_day, reverse=True):
             node = QTreeWidgetItem(self._queue_tree, [_day_label(day)])
             node.setFont(0, bold)
             for e in by_day[day]:
@@ -759,8 +778,8 @@ class TimesheetWindow(QWidget):
         self._q_client.blockSignals(True)
         self._q_client.clear()
         self._q_client.addItem("")
-        for c in data["clients"]:
-            self._q_client.addItem(c["name"])
+        for name in data["client_names"]:   # cadastro + textos crus já usados
+            self._q_client.addItem(name)
         if not current and getattr(self.app, "cfg", None) is not None:
             current = self.app.cfg.timesheet.default_client or ""
         self._q_client.setCurrentText(current)
@@ -785,6 +804,7 @@ class _EntryDialog(QDialog):
 
     def __init__(self, parent, entry: dict, data: dict):
         super().__init__(parent)
+        self._data = data
         self.setWindowTitle("Editar apontamento")
         lay = QVBoxLayout(self)
         from PySide6.QtWidgets import QFormLayout
@@ -807,12 +827,14 @@ class _EntryDialog(QDialog):
         times.addStretch(1)
         self._client = QComboBox()
         self._client.setEditable(True)
-        for c in data.get("clients", ()):
-            self._client.addItem(c["name"])
+        for name in data.get("client_names", ()):  # cadastro + textos crus já usados
+            self._client.addItem(name)
         self._client.setCurrentText(entry["client_name"] or entry["client_text"] or "")
+        self._client.currentTextChanged.connect(self._reload_projects)
         widgets.no_wheel_steal(self._client)
         self._project = QComboBox()
         self._project.setEditable(True)
+        self._reload_projects(self._client.currentText())
         self._project.setCurrentText(entry["project_code"] or entry["project_text"] or "")
         widgets.no_wheel_steal(self._project)
         self._desc = widgets.make_entry("")
@@ -832,9 +854,21 @@ class _EntryDialog(QDialog):
         form.addRow("", self._extra)
         lay.addLayout(form)
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Save).setText("Salvar")
+        buttons.button(QDialogButtonBox.Cancel).setText("Cancelar")
         buttons.accepted.connect(self._validate_accept)
         buttons.rejected.connect(self.reject)
         lay.addWidget(buttons)
+
+    def _reload_projects(self, client_name: str) -> None:
+        """Projetos do combo seguem o cliente escolhido (só cadastrados têm)."""
+        current = self._project.currentText()
+        self._project.clear()
+        cid = next((c["id"] for c in self._data.get("clients", ())
+                    if c["name"].casefold() == client_name.strip().casefold()), None)
+        for p in self._data.get("projects", {}).get(cid, ()):
+            self._project.addItem(p["code"])
+        self._project.setCurrentText(current)
 
     def _validate_accept(self) -> None:
         start = util.format_time_hhmm(self._start.text())

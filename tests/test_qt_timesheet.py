@@ -106,6 +106,8 @@ class TimesheetWindowTests(unittest.TestCase):
             "work_date": "2026-07-13", "start_time": "14:00", "end_time": "15:00",
             "client_text": "Cliente Novo", "description": "call sugerida",
             "meeting_started_at": "2026-07-13T14:00:00"})
+        tsdb.add_entry(work_date="2026-07-14", start_time="09:00", end_time="10:00",
+                       client_text="Delta", description="dia seguinte")
         return cid, eid
 
     def _data_window(self):
@@ -120,16 +122,40 @@ class TimesheetWindowTests(unittest.TestCase):
     def test_render_abas_e_badges(self):
         self._seed()
         win = self._data_window()
-        # grade: 1 dia com 2 linhas (confirmada + sugestão em cor de aviso)
-        self.assertEqual(win._tree.topLevelItemCount(), 1)
-        self.assertEqual(win._tree.topLevelItem(0).childCount(), 2)
-        self.assertIn("total 5:00", win._footer.text())
+        # grade em ordem DECRESCENTE de dia (o hoje no topo): 14/07 antes de 13/07
+        self.assertEqual(win._tree.topLevelItemCount(), 2)
+        self.assertIn("14/07", win._tree.topLevelItem(0).text(0))
+        self.assertEqual(win._tree.topLevelItem(1).childCount(), 2)
+        self.assertIn("total 6:00", win._footer.text())
         self.assertIn("sugestões 1:00", win._footer.text())
         self.assertEqual(win._tabs.tabText(1), "Sugestões (1)")
-        self.assertEqual(win._tabs.tabText(2), "Multi Dados (1)")
+        self.assertEqual(win._tabs.tabText(2), "Multi Dados (2)")
         # cadastro: cliente na lista e projeto no detalhe
         self.assertEqual(win._reg_list.count(), 1)
         self.assertEqual(win._proj_list.count(), 1)
+        # combo de cliente: cadastro + textos crus já usados (bug do uso real)
+        names = [win._q_client.itemText(i) for i in range(win._q_client.count())]
+        self.assertIn("Coruripe", names)
+        self.assertIn("Cliente Novo", names)
+        self.assertIn("Delta", names)
+
+    def test_checkbox_md_marca_apontado(self):
+        """A coluna MD é a coluna J (SIM/NÃO) da planilha: marca direto na linha."""
+        from PySide6.QtCore import Qt
+
+        self._seed()
+        win = self._data_window()
+        day13 = win._tree.topLevelItem(1)
+        # sugestão não tem checkbox (não é marcável antes de confirmar) - conferir
+        # ANTES do toggle: o refresh que ele dispara recria todos os itens
+        sug = next(day13.child(i) for i in range(day13.childCount())
+                   if win._entry_items[day13.child(i)]["status"] == "suggested")
+        self.assertFalse(sug.flags() & Qt.ItemIsUserCheckable)
+        confirmed = next(day13.child(i) for i in range(day13.childCount())
+                         if win._entry_items[day13.child(i)]["status"] == "confirmed")
+        self.assertEqual(confirmed.checkState(5), Qt.Unchecked)
+        confirmed.setCheckState(5, Qt.Checked)   # itemChanged -> set_posted + refresh
+        self.assertEqual(len(tsdb.list_entries(status="confirmed", posted=True)), 1)
 
     def test_aceitar_sugestao(self):
         self._seed()
@@ -138,31 +164,32 @@ class TimesheetWindowTests(unittest.TestCase):
         win._sug_accept()
         self.assertEqual(win._tabs.tabText(1), "Sugestões")
         self.assertEqual(len(tsdb.list_entries(status="suggested")), 0)
-        self.assertEqual(len(tsdb.list_entries(status="confirmed")), 2)
+        self.assertEqual(len(tsdb.list_entries(status="confirmed")), 3)
 
     def test_fila_marcar_apontado(self):
         from PySide6.QtCore import Qt
 
         self._seed()
         win = self._data_window()
-        node = win._queue_tree.topLevelItem(0)
+        node = win._queue_tree.topLevelItem(0)   # dias desc: 14/07 primeiro
+        self.assertIn("14/07", node.text(0))
         node.child(0).setCheckState(0, Qt.Checked)
         win._queue_mark()
-        self.assertEqual(win._tabs.tabText(2), "Multi Dados")
+        self.assertEqual(win._tabs.tabText(2), "Multi Dados (1)")  # sobrou o dia 13
         rows = tsdb.list_entries(status="confirmed", posted=True)
         self.assertEqual(len(rows), 1)
 
     def test_entrada_rapida(self):
         self._seed()
         win = self._data_window()
-        win._q_date.setDate(date(2026, 7, 14))
+        win._q_date.setDate(date(2026, 7, 15))
         win._q_start.setText("08:00")
         win._q_end.setText("09:30")
         win._q_client.setCurrentText("Coruripe")
         win._q_project.setCurrentText("403240")
         win._q_desc.setText("testes unitarios")
         win._quick_add()
-        rows = tsdb.list_entries(day="2026-07-14")
+        rows = tsdb.list_entries(day="2026-07-15")
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["minutes"], 90)
         self.assertEqual(rows[0]["client_name"], "Coruripe")

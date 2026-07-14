@@ -496,6 +496,21 @@ def set_client_active(client_id: int, active: bool) -> None:
                      (int(bool(active)), client_id))
 
 
+def known_client_names() -> list[str]:
+    """Nomes para os combos de cliente da UI: canônicos ativos do cadastro + os
+    textos crus distintos já usados em apontamentos (IA/digitados, ainda sem
+    cadastro) - senão o combo nasce vazio até o usuário cadastrar tudo à mão."""
+    with closing(connect()) as conn, conn:
+        rows = conn.execute(
+            """SELECT name FROM clients WHERE active = 1
+               UNION
+               SELECT DISTINCT client_text FROM entries
+               WHERE client_text != '' AND status != 'discarded'
+               ORDER BY 1 COLLATE NOCASE"""
+        )
+        return [r[0] for r in rows]
+
+
 def list_clients(active_only: bool = True) -> list[dict]:
     sql = "SELECT * FROM clients"
     if active_only:

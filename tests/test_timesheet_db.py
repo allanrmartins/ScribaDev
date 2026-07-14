@@ -162,6 +162,19 @@ class TimesheetDbTests(unittest.TestCase):
         self.assertEqual([c["name"] for c in tsdb.list_clients()], ["Cellera"])
         self.assertIsNotNone(eid)
 
+    def test_known_client_names_uniao_cadastro_e_crus(self):
+        tsdb.add_client("Coruripe")
+        inativo = tsdb.add_client("Antiga")
+        tsdb.set_client_active(inativo, False)
+        self._entry(client_text="Delta")                       # cru em uso
+        self._entry(start_time="14:00", end_time="15:00",
+                    client_text="Gencau", status="discarded")  # descartado: fora
+        names = tsdb.known_client_names()
+        self.assertIn("Coruripe", names)
+        self.assertIn("Delta", names)
+        self.assertNotIn("Gencau", names)
+        self.assertNotIn("Antiga", names)   # inativo sai dos combos
+
     def test_rename_e_desativa_cliente(self):
         cid = tsdb.add_client("Celera")
         tsdb.rename_client(cid, "Cellera")
