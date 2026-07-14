@@ -340,7 +340,13 @@ class TimesheetWindow(QWidget):
 
     def _on_entry_check(self, item, col) -> None:
         """Checkbox MD da grade (a coluna J da planilha): marca/desmarca 'lançado
-        no Multi Dados' direto na linha, sem passar pela aba de fila."""
+        no Multi Dados' direto na linha, sem passar pela aba de fila.
+
+        A mutação é DIFERIDA para o próximo giro do event loop (singleShot 0):
+        o itemChanged é emitido no MEIO do setCheckState, e um refresh síncrono
+        (modo inline dos testes) faria tree.clear() destruir o próprio item ainda
+        em uso na pilha - use-after-free real, capturado pelo faulthandler na
+        caça ao segfault intermitente da suíte."""
         if col != 5 or self._rendering:
             return
         e = self._entry_items.get(item)
@@ -348,7 +354,10 @@ class TimesheetWindow(QWidget):
             return
         posted = item.checkState(5) == Qt.Checked
         if bool(e["posted"]) != posted:
-            self._bg(lambda: tsdb.set_posted([e["id"]], posted))
+            from PySide6.QtCore import QTimer
+
+            QTimer.singleShot(
+                0, lambda: self._bg(lambda: tsdb.set_posted([e["id"]], posted)))
 
     def _edit_item(self, item, _col) -> None:
         entry = self._entry_items.get(item)

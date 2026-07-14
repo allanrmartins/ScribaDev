@@ -149,7 +149,11 @@ class TimesheetWindowTests(unittest.TestCase):
         confirmed = next(day13.child(i) for i in range(day13.childCount())
                          if win._entry_items[day13.child(i)]["status"] == "confirmed")
         self.assertEqual(confirmed.checkState(5), Qt.Unchecked)
-        confirmed.setCheckState(5, Qt.Checked)   # itemChanged -> set_posted + refresh
+        confirmed.setCheckState(5, Qt.Checked)
+        # a mutação é diferida (singleShot 0) para fora da pilha do setCheckState
+        # - o refresh inline aqui destruiria o item AINDA EM USO (use-after-free
+        # que segfaultava a suíte); processEvents dispara o timer com segurança
+        self.qapp.processEvents()
         self.assertEqual(len(tsdb.list_entries(status="confirmed", posted=True)), 1)
 
     def test_aceitar_sugestao(self):
