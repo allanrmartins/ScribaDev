@@ -191,38 +191,13 @@ class TimesheetWindow(QWidget):
         nav.addWidget(widgets.icon_button("chevron-up", "Mês seguinte",
                                           lambda: self._change_month(+1)))
         nav.addStretch(1)
+        # lançamento manual SEMPRE pelo diálogo completo (pedido do uso real: a
+        # barra rápida induzia lançamento incompleto; o pop-up valida tudo)
+        add_btn = widgets.ModernButton("Adicionar…", self._add_manual, kind="primary")
+        add_btn.setIcon(theme.qicon("edit", color=theme.active().on_accent))
+        nav.addWidget(add_btn)
         nav.addWidget(widgets.ModernButton("Marcar dia…", self._mark_day))
         lay.addLayout(nav)
-
-        # entrada rápida (teclado: Tab entre campos, Enter adiciona)
-        form = QHBoxLayout()
-        form.setSpacing(6)
-        self._q_date = QDateEdit()
-        self._q_date.setCalendarPopup(True)
-        self._q_date.setDisplayFormat("dd/MM/yyyy")
-        self._q_date.setDate(date.today())
-        self._q_date.setFixedWidth(130)
-        widgets.no_wheel_steal(self._q_date)
-        self._q_start = _time_edit("hora de início")
-        self._q_end = _time_edit("hora de fim")
-        self._q_client = QComboBox()
-        self._q_client.setEditable(True)
-        self._q_client.setMinimumWidth(130)
-        self._q_client.currentTextChanged.connect(self._on_quick_client)
-        widgets.no_wheel_steal(self._q_client)
-        self._q_project = QComboBox()
-        self._q_project.setEditable(True)
-        self._q_project.setMinimumWidth(110)
-        widgets.no_wheel_steal(self._q_project)
-        self._q_desc = widgets.make_entry("descrição breve da atividade…")
-        self._q_desc.returnPressed.connect(self._quick_add)
-        self._q_extra = widgets.AnimatedCheckBox("extra")
-        for w in (self._q_date, self._q_start, self._q_end, self._q_client,
-                  self._q_project, self._q_desc, self._q_extra):
-            form.addWidget(w)
-        form.setStretchFactor(self._q_desc, 1)
-        form.addWidget(widgets.ModernButton("Adicionar", self._quick_add, kind="primary"))
-        lay.addLayout(form)
 
         self._tree = self._make_tree(
             ["Horário", "Total", "Cliente", "Projeto", "Descrição", "MD"],
@@ -265,52 +240,41 @@ class TimesheetWindow(QWidget):
         self._month_combo.setCurrentText(month)
         self.refresh()
 
-    def _on_quick_client(self, text: str) -> None:
-        """Projetos do combo seguem o cliente escolhido (dependente)."""
-        self._q_project.clear()
-        if not self._data:
-            return
-        cid = next((c["id"] for c in self._data["clients"]
-                    if c["name"].casefold() == text.strip().casefold()), None)
-        for p in self._data["projects"].get(cid, ()):
-            self._q_project.addItem(p["code"])
-        self._q_project.setCurrentText("")
-
-    def _quick_add(self) -> None:
-        day = self._q_date.date().toPython().isoformat()
-        start = util.format_time_hhmm(self._q_start.text())
-        end = util.format_time_hhmm(self._q_end.text())
-        client = self._q_client.currentText().strip()
-        project = self._q_project.currentText().strip()
-        desc = self._q_desc.text().strip()
-        extra = self._q_extra.isChecked()
-        if not (util.time_hhmm_ok(start) and util.time_hhmm_ok(end)):
-            QMessageBox.warning(self, "Apontamento de horas",
-                                "Informe início e fim no formato HH:MM.")
-            return
-        self._q_desc.clear()
-
-        def work():
-            cid, text = tsdb.resolve_client(client)
-            pid, ptext = None, project
-            if cid is not None and project:
-                match = [p for p in tsdb.list_projects(cid)
-                         if p["code"].casefold() == project.casefold()]
-                if match:
-                    pid, ptext = match[0]["id"], ""
-            tsdb.add_entry(work_date=day, start_time=start, end_time=end,
-                           client_id=cid, client_text="" if cid else text,
-                           project_id=pid, project_text=ptext,
-                           description=desc, overtime=extra)
-
-        self._bg(work)
+    def _add_manual(self) -> None:
+        """Novo apontamento manual pelo diálogo completo (mesmo do duplo clique)."""
+        default_client = ""
+        if getattr(self.app, "cfg", None) is not None:
+            default_client = self.app.cfg.timesheet.default_client or ""
+        dlg = _EntryDialog(self, None, self._data or {}, default_client=default_client)
+        if dlg.exec() == QDialog.Accepted:
+            self._save_entry_fields(dlg.fields())
 
     def _mark_day(self) -> None:
-        day = self._q_date.date().toPython().isoformat()
-        note, ok = QInputDialog.getText(
-            self, "Marcar dia", f"Nota para {day} (feriado, férias…; vazio remove):")
-        if ok:
-            self._bg(lambda: tsdb.set_day_note(day, note))
+        """Dia especial (feriado, férias…): diálogo próprio com data + nota."""
+        from PySide6.QtWidgets import QFormLayout
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Marcar dia")
+        lay = QVBoxLayout(dlg)
+        form = QFormLayout()
+        day = QDateEdit()
+        day.setCalendarPopup(True)
+        day.setDisplayFormat("dd/MM/yyyy")
+        day.setDate(date.today())
+        widgets.no_wheel_steal(day)
+        note = widgets.make_entry("feriado, férias… (vazio remove a marca)")
+        form.addRow("Data:", day)
+        form.addRow("Nota:", note)
+        lay.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("Salvar")
+        buttons.button(QDialogButtonBox.Cancel).setText("Cancelar")
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        lay.addWidget(buttons)
+        if dlg.exec() == QDialog.Accepted:
+            self._bg(lambda: tsdb.set_day_note(day.date().toPython().isoformat(),
+                                               note.text()))
 
     def _entries_menu(self, pos) -> None:
         from PySide6.QtWidgets import QMenu
@@ -369,10 +333,14 @@ class TimesheetWindow(QWidget):
 
     def _open_editor(self, entry: dict, accept_after: bool = False) -> None:
         dlg = _EntryDialog(self, entry, self._data or {})
-        if dlg.exec() != QDialog.Accepted:
-            return
-        fields = dlg.fields()
+        if dlg.exec() == QDialog.Accepted:
+            self._save_entry_fields(dlg.fields(), entry_id=entry["id"],
+                                    accept_after=accept_after)
 
+    def _save_entry_fields(self, fields: dict, entry_id: int | None = None,
+                           accept_after: bool = False) -> None:
+        """Persiste os campos do diálogo: resolve cliente/projeto e cria
+        (entry_id=None) ou atualiza o apontamento. Roda fora da GUI."""
         def work():
             cid, text = tsdb.resolve_client(fields.pop("_client"))
             fields["client_id"] = cid
@@ -386,9 +354,12 @@ class TimesheetWindow(QWidget):
                     pid, ptext = match[0]["id"], ""
             fields["project_id"] = pid
             fields["project_text"] = ptext
-            if accept_after:
-                fields["status"] = "confirmed"
-            tsdb.update_entry(entry["id"], **fields)
+            if entry_id is None:
+                tsdb.add_entry(**fields)
+            else:
+                if accept_after:
+                    fields["status"] = "confirmed"
+                tsdb.update_entry(entry_id, **fields)
 
         self._bg(work)
 
@@ -773,18 +744,6 @@ class TimesheetWindow(QWidget):
         if self._reg_list.currentRow() < 0 and self._reg_list.count():
             self._reg_list.setCurrentRow(0)
         self._render_registry_detail()
-        # combo de cliente da entrada rápida acompanha o cadastro
-        current = self._q_client.currentText()
-        self._q_client.blockSignals(True)
-        self._q_client.clear()
-        self._q_client.addItem("")
-        for name in data["client_names"]:   # cadastro + textos crus já usados
-            self._q_client.addItem(name)
-        if not current and getattr(self.app, "cfg", None) is not None:
-            current = self.app.cfg.timesheet.default_client or ""
-        self._q_client.setCurrentText(current)
-        self._q_client.blockSignals(False)
-        self._on_quick_client(self._q_client.currentText())
 
     def _render_registry_detail(self) -> None:
         self._alias_list.clear()
@@ -800,12 +759,19 @@ class TimesheetWindow(QWidget):
 
 
 class _EntryDialog(QDialog):
-    """Edição de um apontamento (duplo clique na grade e 'Editar e aceitar')."""
+    """Diálogo de lançamento: novo apontamento (entry=None), edição (duplo
+    clique na grade) e 'Editar e aceitar' das sugestões."""
 
-    def __init__(self, parent, entry: dict, data: dict):
+    def __init__(self, parent, entry: dict | None, data: dict, default_client: str = ""):
         super().__init__(parent)
         self._data = data
-        self.setWindowTitle("Editar apontamento")
+        new = entry is None
+        entry = entry or {
+            "work_date": date.today().isoformat(), "start_time": "", "end_time": "",
+            "client_name": None, "client_text": default_client, "project_code": None,
+            "project_text": "", "description": "", "overtime": 0, "location": "",
+        }
+        self.setWindowTitle("Novo apontamento" if new else "Editar apontamento")
         lay = QVBoxLayout(self)
         from PySide6.QtWidgets import QFormLayout
 

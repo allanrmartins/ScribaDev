@@ -15,7 +15,6 @@ import shutil
 import sys
 import tempfile
 import unittest
-from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -133,11 +132,6 @@ class TimesheetWindowTests(unittest.TestCase):
         # cadastro: cliente na lista e projeto no detalhe
         self.assertEqual(win._reg_list.count(), 1)
         self.assertEqual(win._proj_list.count(), 1)
-        # combo de cliente: cadastro + textos crus já usados (bug do uso real)
-        names = [win._q_client.itemText(i) for i in range(win._q_client.count())]
-        self.assertIn("Coruripe", names)
-        self.assertIn("Cliente Novo", names)
-        self.assertIn("Delta", names)
 
     def test_checkbox_md_marca_apontado(self):
         """A coluna MD é a coluna J (SIM/NÃO) da planilha: marca direto na linha."""
@@ -179,16 +173,29 @@ class TimesheetWindowTests(unittest.TestCase):
         rows = tsdb.list_entries(status="confirmed", posted=True)
         self.assertEqual(len(rows), 1)
 
-    def test_entrada_rapida(self):
+    def test_novo_apontamento_via_dialogo(self):
+        """Lançamento manual SEMPRE pelo pop-up completo (a barra rápida saiu)."""
+        from scriba.qt.timesheet_ui import _EntryDialog
+
         self._seed()
         win = self._data_window()
-        win._q_date.setDate(date(2026, 7, 15))
-        win._q_start.setText("08:00")
-        win._q_end.setText("09:30")
-        win._q_client.setCurrentText("Coruripe")
-        win._q_project.setCurrentText("403240")
-        win._q_desc.setText("testes unitarios")
-        win._quick_add()
+        # diálogo em modo NOVO: título próprio, data de hoje, horários vazios
+        # (obrigam preenchimento correto) e combo com cadastro + nomes crus
+        dlg = _EntryDialog(win, None, win._data, default_client="Coruripe")
+        self.assertEqual(dlg.windowTitle(), "Novo apontamento")
+        self.assertEqual(dlg._start.text(), "")
+        self.assertEqual(dlg._client.currentText(), "Coruripe")
+        names = [dlg._client.itemText(i) for i in range(dlg._client.count())]
+        self.assertIn("Cliente Novo", names)
+        self.assertIn("Delta", names)
+        # projetos seguem o cliente (Coruripe cadastrado tem o 403240)
+        codes = [dlg._project.itemText(i) for i in range(dlg._project.count())]
+        self.assertIn("403240", codes)
+        # persistência: mesmos campos que o diálogo produz -> add_entry
+        win._save_entry_fields({
+            "work_date": "2026-07-15", "start_time": "08:00", "end_time": "09:30",
+            "_client": "Coruripe", "_project": "403240",
+            "description": "testes unitarios", "overtime": False, "location": ""})
         rows = tsdb.list_entries(day="2026-07-15")
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["minutes"], 90)
