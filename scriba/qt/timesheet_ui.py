@@ -28,8 +28,8 @@ from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QDateEdit, QDialog, QDialogButtonBox,
     QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMessageBox, QRadioButton, QSplitter, QTabWidget, QTreeWidget,
-    QTreeWidgetItem, QVBoxLayout, QWidget,
+    QMessageBox, QPlainTextEdit, QRadioButton, QSplitter, QTabWidget,
+    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from .. import timesheet_db as tsdb
@@ -791,6 +791,49 @@ class TimesheetWindow(QWidget):
             self._proj_list.addItem(label)
 
 
+class _DescEdit(QPlainTextEdit):
+    """Descrição multi-linha (comporta ~240 caracteres visíveis) com o
+    autocompletar de frases inteiras do histórico - QPlainTextEdit não tem
+    setCompleter, então a fiação (popup + inserção) é manual."""
+
+    def __init__(self, completer, rows: int = 4, parent=None):
+        super().__init__(parent)
+        self.setTabChangesFocus(True)
+        self.setFixedHeight(self.fontMetrics().lineSpacing() * rows + 16)
+        self._completer = completer
+        self._inserting = False
+        completer.setWidget(self)
+        completer.activated.connect(self._apply_completion)
+        self.textChanged.connect(self._maybe_complete)
+
+    def _apply_completion(self, text: str) -> None:
+        self._inserting = True
+        try:
+            self.setPlainText(text)
+            cursor = self.textCursor()
+            cursor.movePosition(cursor.MoveOperation.End)
+            self.setTextCursor(cursor)
+        finally:
+            self._inserting = False
+
+    def _maybe_complete(self) -> None:
+        # só enquanto o usuário digita (sem foco = preenchimento programático;
+        # abrir o diálogo de edição não pode piscar o popup)
+        if self._inserting or not self.hasFocus():
+            return
+        prefix = self.toPlainText().strip()
+        if len(prefix) < 2:
+            self._completer.popup().hide()
+            return
+        self._completer.setCompletionPrefix(prefix)
+        if self._completer.completionCount():
+            rect = self.cursorRect()
+            rect.setWidth(max(260, self.width() - 12))
+            self._completer.complete(rect)
+        else:
+            self._completer.popup().hide()
+
+
 class _EntryDialog(QDialog):
     """Diálogo de lançamento: novo apontamento (entry=None, com os defaults
     inteligentes de _new_entry_defaults), edição (duplo clique na grade) e
@@ -809,11 +852,16 @@ class _EntryDialog(QDialog):
             "project_text": "", "description": "", "overtime": 0, "location": "",
         }
         self.setWindowTitle("Novo apontamento" if self._new else "Editar apontamento")
+        self.setMinimumWidth(560)   # sem aperto: descrição de ~240 chars respira
         lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 14, 16, 12)
+        lay.setSpacing(10)
         from PySide6.QtWidgets import QFormLayout
 
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(8)
         self._date = QDateEdit()
         self._date.setCalendarPopup(True)
         self._date.setDisplayFormat("dd/MM/yyyy")
@@ -837,7 +885,6 @@ class _EntryDialog(QDialog):
         self._project = QComboBox()
         self._project.setEditable(True)
         widgets.no_wheel_steal(self._project)
-        self._desc = widgets.make_entry("")
         # sugestões de descrição do cliente (frases recorrentes do histórico)
         from PySide6.QtCore import QStringListModel
         from PySide6.QtWidgets import QCompleter
@@ -846,14 +893,14 @@ class _EntryDialog(QDialog):
         completer = QCompleter(self._desc_model, self)
         completer.setCaseSensitivity(Qt.CaseInsensitive)
         completer.setFilterMode(Qt.MatchContains)
-        self._desc.setCompleter(completer)
+        self._desc = _DescEdit(completer)
         # projeto/descrições seguem o cliente; no modo novo, o projeto mais
         # recente do cliente já vem preenchido (pedido do uso real)
         self._client.currentTextChanged.connect(self._on_client_changed)
         self._on_client_changed(self._client.currentText())
         if entry["project_code"] or entry["project_text"]:
             self._project.setCurrentText(entry["project_code"] or entry["project_text"])
-        self._desc.setText(entry["description"] or "")
+        self._desc.setPlainText(entry["description"] or "")
         self._extra = widgets.AnimatedCheckBox("hora extra")
         self._extra.setChecked(bool(entry["overtime"]))
         self._location = QComboBox()
@@ -915,7 +962,9 @@ class _EntryDialog(QDialog):
             "end_time": util.format_time_hhmm(self._end.text()),
             "_client": self._client.currentText().strip(),
             "_project": self._project.currentText().strip(),
-            "description": self._desc.text().strip(),
+            # quebras de linha viram espaço: a descrição é um texto único na
+            # grade, no Excel e no Multi Dados (precedente do _bigtext do settings)
+            "description": " ".join(self._desc.toPlainText().split()),
             "overtime": self._extra.isChecked(),
             "location": self._location.currentText(),
         }

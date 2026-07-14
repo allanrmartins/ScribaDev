@@ -202,6 +202,12 @@ class TimesheetWindowTests(unittest.TestCase):
         dlg._client.setCurrentText("Delta")
         self.assertEqual(dlg._project.currentText(), "MM03")
         self.assertIn("dia seguinte", dlg._desc_model.stringList())
+        # diálogo sem aperto: descrição multi-linha (~240 chars) e largura mínima;
+        # quebras de linha normalizam para espaço no save
+        self.assertGreaterEqual(dlg.minimumWidth(), 560)
+        dlg._desc.setPlainText("analise de programas z\ne leitura de emails")
+        self.assertEqual(dlg.fields()["description"],
+                         "analise de programas z e leitura de emails")
         # persistência: mesmos campos que o diálogo produz -> add_entry
         win._save_entry_fields({
             "work_date": "2026-07-15", "start_time": "08:00", "end_time": "09:30",
