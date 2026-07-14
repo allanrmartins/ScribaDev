@@ -129,23 +129,19 @@ class TimesheetWindowTests(unittest.TestCase):
         self.assertIn("total 6:00", win._footer.text())
         self.assertIn("sugestões 1:00", win._footer.text())
         self.assertEqual(win._tabs.tabText(1), "Sugestões (1)")
-        self.assertEqual(win._tabs.tabText(2), "Multi Dados (2)")
+        self.assertEqual(win._tabs.tabText(2), "A lançar (2)")
         # cadastro: cliente na lista e projeto no detalhe
         self.assertEqual(win._reg_list.count(), 1)
         self.assertEqual(win._proj_list.count(), 1)
 
-    def test_checkbox_md_marca_apontado(self):
-        """A coluna MD é a coluna J (SIM/NÃO) da planilha: marca direto na linha."""
+    def test_checkbox_lancado_por_linha(self):
+        """A coluna 'Lançado' é a coluna J (SIM/NÃO) da planilha - e numa
+        SUGESTÃO, marcar = confirmar E lançar num gesto só."""
         from PySide6.QtCore import Qt
 
         self._seed()
         win = self._data_window()
         day13 = win._tree.topLevelItem(1)
-        # sugestão não tem checkbox (não é marcável antes de confirmar) - conferir
-        # ANTES do toggle: o refresh que ele dispara recria todos os itens
-        sug = next(day13.child(i) for i in range(day13.childCount())
-                   if win._entry_items[day13.child(i)]["status"] == "suggested")
-        self.assertFalse(sug.flags() & Qt.ItemIsUserCheckable)
         confirmed = next(day13.child(i) for i in range(day13.childCount())
                          if win._entry_items[day13.child(i)]["status"] == "confirmed")
         self.assertEqual(confirmed.checkState(5), Qt.Unchecked)
@@ -155,6 +151,36 @@ class TimesheetWindowTests(unittest.TestCase):
         # que segfaultava a suíte); processEvents dispara o timer com segurança
         self.qapp.processEvents()
         self.assertEqual(len(tsdb.list_entries(status="confirmed", posted=True)), 1)
+        # sugestão TEM checkbox agora: marcar consolida (confirma + lança)
+        day13 = win._tree.topLevelItem(1)   # itens recriados pelo refresh
+        sug = next(day13.child(i) for i in range(day13.childCount())
+                   if win._entry_items[day13.child(i)]["status"] == "suggested")
+        sug.setCheckState(5, Qt.Checked)
+        self.qapp.processEvents()
+        self.assertEqual(len(tsdb.list_entries(status="suggested")), 0)
+        self.assertEqual(len(tsdb.list_entries(status="confirmed", posted=True)), 2)
+
+    def test_checkbox_do_dia_consolida(self):
+        """Marcar o DIA consolida tudo (sugestão confirma+lança); desmarcar só
+        tira o 'lançado' dos confirmados."""
+        from PySide6.QtCore import Qt
+
+        self._seed()
+        win = self._data_window()
+        day13 = win._tree.topLevelItem(1)
+        self.assertIn(day13, win._day_items)
+        self.assertEqual(day13.checkState(5), Qt.Unchecked)
+        day13.setCheckState(5, Qt.Checked)
+        self.qapp.processEvents()
+        rows = tsdb.list_entries(day="2026-07-13")
+        self.assertTrue(all(r["status"] == "confirmed" and r["posted"] for r in rows))
+        # desmarca o dia: continuam confirmados, só saem do 'lançado'
+        day13 = win._tree.topLevelItem(1)
+        self.assertEqual(day13.checkState(5), Qt.Checked)
+        day13.setCheckState(5, Qt.Unchecked)
+        self.qapp.processEvents()
+        rows = tsdb.list_entries(day="2026-07-13")
+        self.assertTrue(all(r["status"] == "confirmed" and not r["posted"] for r in rows))
 
     def test_aceitar_sugestao(self):
         self._seed()
@@ -174,7 +200,7 @@ class TimesheetWindowTests(unittest.TestCase):
         self.assertIn("14/07", node.text(0))
         node.child(0).setCheckState(0, Qt.Checked)
         win._queue_mark()
-        self.assertEqual(win._tabs.tabText(2), "Multi Dados (1)")  # sobrou o dia 13
+        self.assertEqual(win._tabs.tabText(2), "A lançar (1)")  # sobrou o dia 13
         rows = tsdb.list_entries(status="confirmed", posted=True)
         self.assertEqual(len(rows), 1)
 

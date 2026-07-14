@@ -150,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
     g_tl = p_tl.add_mutually_exclusive_group()
     g_tl.add_argument("--suggested", action="store_true", help="só sugestões pendentes de revisão")
     g_tl.add_argument("--unposted", action="store_true",
-                      help="só confirmados ainda não lançados no Multi Dados")
+                      help="só confirmados ainda não lançados no sistema de horas")
     p_ta = ts_sub.add_parser("add", help="apontamento manual (atividade sem call)")
     p_ta.add_argument("--date", metavar="AAAA-MM-DD", default=None, help="data (default: hoje)")
     p_ta.add_argument("--start", required=True, metavar="HH:MM", help="hora de início")
@@ -314,7 +314,7 @@ def cmd_timesheet(args) -> int:
 
 
 def _ts_list(args, tsdb) -> int:
-    """Lista agrupada por dia: [?] = sugestão a revisar, [MD] = já no Multi Dados."""
+    """Lista agrupada por dia: [?] = sugestão a revisar, [L] = já lançado."""
     from datetime import date, datetime
 
     month = args.month or date.today().strftime("%Y-%m")
@@ -339,7 +339,7 @@ def _ts_list(args, tsdb) -> int:
             day = e["work_date"]
             total = totals.get(day)
             print(f"{day}" + (f"  ({_hhmm(total)})" if total else ""))
-        marks = " [?]" if e["status"] == "suggested" else (" [MD]" if e["posted"] else "")
+        marks = " [?]" if e["status"] == "suggested" else (" [L]" if e["posted"] else "")
         client = e["client_name"] or e["client_text"] or "-"
         project = e["project_code"] or e["project_text"]
         extra = " (extra)" if e["overtime"] else ""
@@ -347,8 +347,8 @@ def _ts_list(args, tsdb) -> int:
         print(f"  {e['start_time']}-{e['end_time']}  {_hhmm(e['minutes']):>5}  "
               f"{detail}{extra}{marks}")
     s = tsdb.month_summary(month)
-    print(f"{month}: total {_hhmm(s['total'])} | apontado {_hhmm(s['posted'])} | "
-          f"a apontar {_hhmm(s['unposted'])} | sugestões {_hhmm(s['suggested'])}")
+    print(f"{month}: total {_hhmm(s['total'])} | lançado {_hhmm(s['posted'])} | "
+          f"a lançar {_hhmm(s['unposted'])} | sugestões {_hhmm(s['suggested'])}")
     return 0
 
 
@@ -378,7 +378,7 @@ def _ts_add(args, tsdb) -> int:
         print(f"erro: {e}")
         return 2
     mine = next(r for r in tsdb.list_entries(day=work_date) if r["id"] == entry_id)
-    print(f"apontado #{entry_id}: {mine['work_date']} {mine['start_time']}-{mine['end_time']} "
+    print(f"registrado #{entry_id}: {mine['work_date']} {mine['start_time']}-{mine['end_time']} "
           f"({_hhmm(mine['minutes'])}) {mine['client_name'] or mine['client_text'] or '-'}")
     return 0
 

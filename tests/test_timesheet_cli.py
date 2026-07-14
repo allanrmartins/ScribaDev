@@ -92,7 +92,7 @@ class TimesheetCliTests(unittest.TestCase):
         self.assertIn("08:00-13:00", out)
         self.assertIn("aplicacao de notas (extra)", out)
         self.assertIn("total 5:00", out)
-        self.assertIn("a apontar 5:00", out)
+        self.assertIn("a lançar 5:00", out)
 
     def test_add_invalido_e_mes_invalido(self):
         self._enable()
@@ -128,7 +128,7 @@ class TimesheetCliTests(unittest.TestCase):
             "description": "call sugerida", "meeting_started_at": "2026-07-13T18:00:00"})
         rc, out = self._run("timesheet", "list", "--month", "2026-07")
         self.assertEqual(rc, 0)
-        self.assertIn("[MD]", out)
+        self.assertIn("[L]", out)
         self.assertIn("[?]", out)
         self.assertIn("sugestões 1:00", out)
         rc, out = self._run("timesheet", "list", "--month", "2026-07", "--suggested")

@@ -341,7 +341,7 @@ def month_summary(month: str) -> dict:
 
 
 def set_posted(ids: list[int], posted: bool) -> int:
-    """Marca/desmarca 'apontado no Multi Dados' em lote; devolve linhas afetadas."""
+    """Marca/desmarca 'lançado no sistema de horas' em lote; devolve linhas afetadas."""
     if not ids:
         return 0
     marks = ",".join("?" * len(ids))
@@ -350,6 +350,21 @@ def set_posted(ids: list[int], posted: bool) -> int:
             f"UPDATE entries SET posted = ?, posted_at = ?, updated_at = ? "
             f"WHERE id IN ({marks})",
             (int(posted), _now() if posted else None, _now(), *ids),
+        )
+        return cur.rowcount
+
+
+def confirm_and_post(ids: list[int]) -> int:
+    """Consolida em lote: sugestão vira confirmada E lançada num gesto só - o
+    checkbox do dia/linha na grade. Descartadas nunca ressuscitam por aqui."""
+    if not ids:
+        return 0
+    marks = ",".join("?" * len(ids))
+    with closing(connect()) as conn, conn:
+        cur = conn.execute(
+            f"UPDATE entries SET status = 'confirmed', posted = 1, posted_at = ?, "
+            f"updated_at = ? WHERE id IN ({marks}) AND status != 'discarded'",
+            (_now(), _now(), *ids),
         )
         return cur.rowcount
 

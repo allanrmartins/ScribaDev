@@ -627,7 +627,7 @@ class SettingsWindow(QWidget):
         self._ts_off_desc = QLabel(
             "Suas reuniões processadas viram sugestões de apontamento (cliente, horários "
             "e descrição), com entrada manual para o resto do dia, fila do que falta lançar "
-            "no Multi Dados e exportação Excel no layout da sua planilha.\n"
+            "no seu sistema de horas e exportação Excel no layout da sua planilha.\n"
             "Nada roda nem é criado até você ativar — a ativação cria o banco local "
             "(timesheet.db) e já varre as reuniões recentes.")
         self._ts_off_desc.setWordWrap(True)

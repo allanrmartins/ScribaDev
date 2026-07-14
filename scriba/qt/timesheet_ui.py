@@ -8,8 +8,8 @@ via app.ui):
    entrada rápida no topo e totais no rodapé; duplo clique edita.
 2. Sugestões - fila de revisão do que o motor (#120) criou: aceitar, editar e
    aceitar, descartar, cadastrar cliente não resolvido, abrir a reunião.
-3. Multi Dados - confirmados ainda não lançados, com checkbox por linha,
-   "marcar como apontados" e o export Excel do mês (#122).
+3. A lançar - confirmados ainda não lançados no sistema de horas do usuário
+   (Multi Dados etc.), com checkbox por linha e o export Excel do mês (#122).
 4. Cadastro - clientes (novo/renomear/desativar/mesclar), aliases e projetos.
 
 A janela só é alcançável com o módulo ativado (#126): o item da bandeja e o
@@ -77,6 +77,7 @@ class TimesheetWindow(QWidget):
         self._data = None            # último payload (restyle re-renderiza sem re-coletar)
         self._rendering = False      # setCheckState do render não é clique do usuário
         self._month = date.today().strftime("%Y-%m")
+        self._day_items: dict[QTreeWidgetItem, list[dict]] = {}
         self._entry_items: dict[QTreeWidgetItem, dict] = {}
         self._sug_items: dict[QTreeWidgetItem, dict] = {}
         self._queue_items: dict[QTreeWidgetItem, dict] = {}
@@ -93,7 +94,7 @@ class TimesheetWindow(QWidget):
         self._tabs.setElideMode(Qt.ElideRight)
         self._tabs.addTab(self._build_tab_entries(), "Apontamentos")
         self._tabs.addTab(self._build_tab_suggestions(), "Sugestões")
-        self._tabs.addTab(self._build_tab_queue(), "Multi Dados")
+        self._tabs.addTab(self._build_tab_queue(), "A lançar")
         self._tabs.addTab(self._build_tab_registry(), "Cadastro")
         root.addWidget(self._tabs)
 
@@ -201,8 +202,8 @@ class TimesheetWindow(QWidget):
         lay.addLayout(nav)
 
         self._tree = self._make_tree(
-            ["Horário", "Total", "Cliente", "Projeto", "Descrição", "MD"],
-            widths=(150, 48, 140, 120, 0, 44), stretch=4)
+            ["Horário", "Total", "Cliente", "Projeto", "Descrição", "Lançado"],
+            widths=(150, 48, 140, 120, 0, 64), stretch=4)
         self._tree.itemDoubleClicked.connect(self._edit_item)
         self._tree.itemChanged.connect(self._on_entry_check)
         self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -310,10 +311,10 @@ class TimesheetWindow(QWidget):
         menu = QMenu(self)
         menu.addAction(theme.qicon("edit"), "Editar…", lambda: self._edit_item(item, 0))
         if entry["posted"]:
-            menu.addAction("Desmarcar apontado",
+            menu.addAction("Desmarcar lançado",
                            lambda: self._bg(lambda: tsdb.set_posted([entry["id"]], False)))
         else:
-            menu.addAction(theme.qicon("checkmark"), "Marcar como apontado",
+            menu.addAction(theme.qicon("checkmark"), "Marcar como lançado",
                            lambda: self._bg(lambda: tsdb.set_posted([entry["id"]], True)))
         if entry["meeting_started_at"]:
             menu.addAction(theme.qicon("dismiss"), "Descartar sugestão aceita",
@@ -339,8 +340,8 @@ class TimesheetWindow(QWidget):
             self._bg(lambda: tsdb.update_entry(entry["id"], status="discarded"))
 
     def _on_entry_check(self, item, col) -> None:
-        """Checkbox MD da grade (a coluna J da planilha): marca/desmarca 'lançado
-        no Multi Dados' direto na linha, sem passar pela aba de fila.
+        """Checkbox 'Lançado' da grade (a coluna J da planilha): marca/desmarca o
+        lançamento no sistema de horas direto na linha, sem passar pela aba de fila.
 
         A mutação é DIFERIDA para o próximo giro do event loop (singleShot 0):
         o itemChanged é emitido no MEIO do setCheckState, e um refresh síncrono
@@ -349,20 +350,40 @@ class TimesheetWindow(QWidget):
         caça ao segfault intermitente da suíte."""
         if col != 5 or self._rendering:
             return
+        from PySide6.QtCore import QTimer
+
+        day_entries = self._day_items.get(item)
+        if day_entries is not None:
+            # checkbox do DIA: marcar consolida (confirma+lança) o dia inteiro;
+            # desmarcar só tira o "lançado" dos confirmados (sugestão fica como está)
+            if item.checkState(5) == Qt.Checked:
+                ids = [e["id"] for e in day_entries]
+                QTimer.singleShot(
+                    0, lambda: self._bg(lambda: tsdb.confirm_and_post(ids)))
+            elif item.checkState(5) == Qt.Unchecked:
+                ids = [e["id"] for e in day_entries
+                       if e["status"] == "confirmed" and e["posted"]]
+                if ids:
+                    QTimer.singleShot(
+                        0, lambda: self._bg(lambda: tsdb.set_posted(ids, False)))
+            return
         e = self._entry_items.get(item)
-        if e is None or e["status"] != "confirmed":
+        if e is None:
             return
         posted = item.checkState(5) == Qt.Checked
-        if bool(e["posted"]) != posted:
-            from PySide6.QtCore import QTimer
-
+        if e["status"] == "suggested":
+            if posted:  # marcar sugestão = confirmar E lançar num gesto
+                QTimer.singleShot(
+                    0, lambda: self._bg(lambda: tsdb.confirm_and_post([e["id"]])))
+        elif bool(e["posted"]) != posted:
             QTimer.singleShot(
                 0, lambda: self._bg(lambda: tsdb.set_posted([e["id"]], posted)))
 
     def _edit_item(self, item, _col) -> None:
         entry = self._entry_items.get(item)
         if entry is not None:
-            self._open_editor(entry)
+            # editar uma sugestão É validá-la: salvar confirma (o usuário mexeu)
+            self._open_editor(entry, accept_after=(entry["status"] == "suggested"))
 
     def _open_editor(self, entry: dict, accept_after: bool = False) -> None:
         dlg = _EntryDialog(self, entry, self._data or {})
@@ -413,6 +434,8 @@ class TimesheetWindow(QWidget):
             ["Data", "Horário", "Total", "Cliente", "Descrição"],
             widths=(84, 96, 48, 150, 0), stretch=4)
         self._sug_tree.setRootIsDecorated(False)
+        # triagem em massa: aceitar/descartar valem para TODA a seleção
+        self._sug_tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._sug_tree.itemDoubleClicked.connect(
             lambda item, _c: self._sug_edit_accept(item))
         lay.addWidget(self._sug_tree, 1)
@@ -435,10 +458,14 @@ class TimesheetWindow(QWidget):
         items = self._sug_tree.selectedItems()
         return self._sug_items.get(items[0]) if items else None
 
+    def _sug_selection(self) -> list[dict]:
+        return [self._sug_items[i] for i in self._sug_tree.selectedItems()
+                if i in self._sug_items]
+
     def _sug_accept(self) -> None:
-        e = self._sug_selected()
-        if e:
-            self._bg(lambda: tsdb.update_entry(e["id"], status="confirmed"))
+        ids = [e["id"] for e in self._sug_selection()]
+        if ids:
+            self._bg(lambda: [tsdb.update_entry(i, status="confirmed") for i in ids])
 
     def _sug_edit_accept(self, item) -> None:
         e = self._sug_items.get(item) if item is not None else self._sug_selected()
@@ -446,9 +473,17 @@ class TimesheetWindow(QWidget):
             self._open_editor(e, accept_after=True)
 
     def _sug_discard(self) -> None:
-        e = self._sug_selected()
-        if e:
-            self._discard(e)
+        sel = self._sug_selection()
+        if not sel:
+            return
+        if QMessageBox.question(
+                self, "Descartar",
+                f"{len(sel)} sugestão(ões) serão descartadas e não voltarão no "
+                "reprocesso.\nDescartar mesmo assim?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        ids = [e["id"] for e in sel]
+        self._bg(lambda: [tsdb.update_entry(i, status="discarded") for i in ids])
 
     def _sug_register_client(self) -> None:
         e = self._sug_selected()
@@ -503,7 +538,7 @@ class TimesheetWindow(QWidget):
             log.exception("fallback de pasta da reunião falhou")
         return None
 
-    # -------------------------------------------------------- aba 3: Multi Dados --
+    # -------------------------------------------------------- aba 3: A lançar ----
 
     def _build_tab_queue(self) -> QWidget:
         page = QWidget()
@@ -511,8 +546,8 @@ class TimesheetWindow(QWidget):
         lay.setContentsMargins(4, 8, 4, 4)
         lay.setSpacing(6)
 
-        hint = QLabel("Confirmados ainda não lançados no Multi Dados - marque o que "
-                      "você já lançou lá.")
+        hint = QLabel("Confirmados ainda não lançados no seu sistema de horas "
+                      "(Multi Dados etc.) - marque o que você já lançou lá.")
         hint.setProperty("role", "muted")
         lay.addWidget(hint)
 
@@ -523,7 +558,7 @@ class TimesheetWindow(QWidget):
 
         btns = QHBoxLayout()
         btns.setSpacing(6)
-        btns.addWidget(widgets.ModernButton("Marcar selecionados como apontados",
+        btns.addWidget(widgets.ModernButton("Marcar selecionados como lançados",
                                             self._queue_mark, kind="primary"))
         btns.addWidget(widgets.ModernButton("Exportar Excel do mês…", self._export_month))
         btns.addStretch(1)
@@ -681,8 +716,8 @@ class TimesheetWindow(QWidget):
             self._rendering = False
         self._tabs.setTabText(1, f"Sugestões ({len(data['suggestions'])})"
                               if data["suggestions"] else "Sugestões")
-        self._tabs.setTabText(2, f"Multi Dados ({len(data['queue'])})"
-                              if data["queue"] else "Multi Dados")
+        self._tabs.setTabText(2, f"A lançar ({len(data['queue'])})"
+                              if data["queue"] else "A lançar")
 
     def _entry_cells(self, e: dict, with_date: bool = False) -> list[str]:
         desc = (e["description"] or "") + (" (extra)" if e["overtime"] else "")
@@ -702,6 +737,7 @@ class TimesheetWindow(QWidget):
             by_day.setdefault(e["work_date"], []).append(e)
         bold = self.font()
         bold.setBold(True)
+        self._day_items.clear()
         # dias mais recentes primeiro (pedido do uso real: o hoje fica no topo)
         for day in sorted(set(by_day) | set(data["notes"]), reverse=True):
             total = data["totals"].get(day)
@@ -711,23 +747,28 @@ class TimesheetWindow(QWidget):
             for col in (0, 1):
                 node.setFont(col, bold)
             for e in by_day.get(day, ()):
+                # checkbox "Lançado" em TODAS as linhas (a coluna J da planilha):
+                # numa sugestão, marcar = confirmar E lançar num gesto só
                 item = QTreeWidgetItem(node, self._entry_cells(e) + [""])
+                item.setCheckState(5, Qt.Checked if e["posted"] else Qt.Unchecked)
                 if e["status"] == "suggested":
-                    # sugestão não é marcável antes de confirmar (o flag vem por
-                    # padrão no Qt - remover de verdade, não só não pintar o box)
-                    item.setFlags(item.flags() & ~Qt.ItemIsUserCheckable)
                     for col in range(item.columnCount()):
                         item.setForeground(col, QBrush(QColor(t.warn)))
-                else:
-                    # checkbox MD = a coluna J (SIM/NÃO) da planilha: marca direto
-                    # na linha o que já foi lançado no Multi Dados
-                    item.setCheckState(5, Qt.Checked if e["posted"] else Qt.Unchecked)
                 self._entry_items[item] = e
+            entries = by_day.get(day, [])
+            if entries:
+                # checkbox do DIA: consolidar tudo de uma vez ("marcar esse dia")
+                posted = sum(1 for e in entries if e["posted"])
+                node.setCheckState(5, Qt.Checked if posted == len(entries)
+                                   else Qt.PartiallyChecked if posted else Qt.Unchecked)
+                self._day_items[node] = entries
+            else:
+                node.setFlags(node.flags() & ~Qt.ItemIsUserCheckable)
             node.setExpanded(True)  # só expande DEPOIS dos filhos existirem
         s = data["summary"]
         self._footer.setText(
             f"{data['month']}: total {_fmt_min(s['total'])}  ·  "
-            f"apontado {_fmt_min(s['posted'])}  ·  a apontar {_fmt_min(s['unposted'])}  ·  "
+            f"lançado {_fmt_min(s['posted'])}  ·  a lançar {_fmt_min(s['unposted'])}  ·  "
             f"sugestões {_fmt_min(s['suggested'])}")
 
     def _render_suggestions(self, data: dict) -> None:
