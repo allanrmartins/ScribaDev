@@ -760,6 +760,12 @@ class SettingsWindow(QWidget):
         self._ts_status.setText(msg)
         self._ts_activate_btn.setEnabled(True)
         self._sync_timesheet_tab()
+        main_win = getattr(self.app, "main_win", None)
+        if main_win is not None:  # capa aberta: o botão "Horas" do header segue na hora
+            try:
+                main_win.refresh_home()
+            except Exception:
+                log.exception("settings: refresh da capa pós-ativação falhou")
 
     def _build_about_tab(self) -> None:
         from .. import updates

@@ -48,6 +48,23 @@ class MainWindowTests(unittest.TestCase):
 
         return MainWindow(_FakeApp(**kw))
 
+    def test_botao_horas_segue_a_ativacao(self):
+        """#118/#126: atalho 'Horas' no header só com o timesheet ativado; a
+        visibilidade re-sincroniza a cada refresh_home (ativação a quente)."""
+        from types import SimpleNamespace
+
+        win = self._win()
+        win._collect_home = lambda: None   # só o header interessa aqui
+        self.assertTrue(win._timesheet_btn.isHidden())   # cfg None = dormente
+        win.refresh_home()
+        self.assertTrue(win._timesheet_btn.isHidden())
+        win.app.cfg = SimpleNamespace(timesheet=SimpleNamespace(enabled=True))
+        win.refresh_home()
+        self.assertFalse(win._timesheet_btn.isHidden())
+        win.app.cfg = SimpleNamespace(timesheet=SimpleNamespace(enabled=False))
+        win.refresh_home()
+        self.assertTrue(win._timesheet_btn.isHidden())
+
     def test_render_status_cria_uma_linha_por_item(self):
         win = self._win()
         win._render_status([

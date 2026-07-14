@@ -215,6 +215,14 @@ class MainWindow(QWidget):
         notes_btn = widgets.ModernButton("Notas", lambda: self.app.show_notes(), kind="primary")
         notes_btn.setIcon(theme.qicon("folder", color=theme.active().on_accent))
         head.addWidget(notes_btn)
+        # Apontamentos (#118): mesmo destaque de Notas, mas SÓ com o módulo ativado
+        # (#126) - a visibilidade é re-sincronizada a cada refresh_home, então a
+        # ativação nas Configurações mostra o botão sem reiniciar o app.
+        self._timesheet_btn = widgets.ModernButton(
+            "Horas", lambda: self.app.show_timesheet(), kind="primary")
+        self._timesheet_btn.setIcon(theme.qicon("clock", color=theme.active().on_accent))
+        self._timesheet_btn.hide()
+        head.addWidget(self._timesheet_btn)
         head.addWidget(widgets.ModernButton("Log", lambda: self.app.show_log()))
         head.addWidget(widgets.icon_button("settings", "Configurações", lambda: self.app.show_settings()))
         root.addLayout(head)
@@ -504,6 +512,10 @@ class MainWindow(QWidget):
 
     def refresh_home(self) -> None:
         """Recarrega recentes/stats/pendências do índice, em thread."""
+        try:  # atalho de Apontamentos no header segue a ativação (#126) a quente
+            self._timesheet_btn.setVisible(bool(self.app.cfg.timesheet.enabled))
+        except Exception:
+            self._timesheet_btn.hide()   # sem app real/cfg: capa fica como antes
         threading.Thread(target=self._collect_home, daemon=True, name="home").start()
 
     def _collect_home(self) -> None:
