@@ -393,12 +393,12 @@ class TimesheetWindow(QWidget):
 
     def _save_entry_fields(self, fields: dict, entry_id: int | None = None,
                            accept_after: bool = False) -> None:
-        """Persiste os campos do diálogo: resolve cliente/projeto e cria
-        (entry_id=None) ou atualiza o apontamento. Roda fora da GUI."""
+        """Persiste os campos do diálogo: resolve cliente/projeto e grava um
+        apontamento POR BLOCO de horário (lançamento fracionado). Na edição, o
+        1º bloco atualiza o registro; blocos extras viram apontamentos novos
+        (fracionar um bloco existente - ex.: tirar o almoço do meio). Fora da GUI."""
         def work():
             cid, text = tsdb.resolve_client(fields.pop("_client"))
-            fields["client_id"] = cid
-            fields["client_text"] = "" if cid else text
             project = fields.pop("_project")
             pid, ptext = None, project
             if cid is not None and project:
@@ -406,14 +406,19 @@ class TimesheetWindow(QWidget):
                          if p["code"].casefold() == project.casefold()]
                 if match:
                     pid, ptext = match[0]["id"], ""
-            fields["project_id"] = pid
-            fields["project_text"] = ptext
+            blocks = fields.pop("blocks")
+            common = dict(fields, client_id=cid, client_text="" if cid else text,
+                          project_id=pid, project_text=ptext)
             if entry_id is None:
-                tsdb.add_entry(**fields)
-            else:
-                if accept_after:
-                    fields["status"] = "confirmed"
-                tsdb.update_entry(entry_id, **fields)
+                for start, end in blocks:
+                    tsdb.add_entry(start_time=start, end_time=end, **common)
+                return
+            upd = dict(common, start_time=blocks[0][0], end_time=blocks[0][1])
+            if accept_after:
+                upd["status"] = "confirmed"
+            tsdb.update_entry(entry_id, **upd)
+            for start, end in blocks[1:]:  # extras: apontamentos novos (manuais)
+                tsdb.add_entry(start_time=start, end_time=end, **common)
 
         self._bg(work)
 
@@ -908,15 +913,14 @@ class _EntryDialog(QDialog):
         self._date.setDisplayFormat("dd/MM/yyyy")
         self._date.setDate(date.fromisoformat(entry["work_date"]))
         widgets.no_wheel_steal(self._date)
-        self._start = _time_edit("início")
-        self._start.setText(entry["start_time"])
-        self._end = _time_edit("fim")
-        self._end.setText(entry["end_time"])
-        times = QHBoxLayout()
-        times.addWidget(self._start)
-        times.addWidget(QLabel("até"))
-        times.addWidget(self._end)
-        times.addStretch(1)
+        # blocos de horário DINÂMICOS: o [+] do 1º bloco adiciona linhas (lançamento
+        # fracionado - ex.: 08:00-13:00 e 14:00-17:00 com o almoço no meio); cada
+        # linha adicionada tem o [-] para remover. Cada bloco vira um apontamento.
+        self._time_rows: list[tuple] = []
+        times = QVBoxLayout()
+        times.setSpacing(4)
+        self._times_box = times
+        self._add_time_row(entry["start_time"], entry["end_time"], removable=False)
         self._client = QComboBox()
         self._client.setEditable(True)
         for name in data.get("client_names", ()):  # cadastro + textos crus já usados
@@ -963,6 +967,37 @@ class _EntryDialog(QDialog):
         buttons.rejected.connect(self.reject)
         lay.addWidget(buttons)
 
+    def _add_time_row(self, start: str = "", end: str = "", removable: bool = True) -> None:
+        """Um bloco início-fim. O 1º carrega o [+]; os demais, o [-] de remoção."""
+        row = QWidget()
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        s = _time_edit("hora de início")
+        s.setText(start)
+        e = _time_edit("hora de fim")
+        e.setText(end)
+        lay.addWidget(s)
+        lay.addWidget(QLabel("até"))
+        lay.addWidget(e)
+        if removable:
+            lay.addWidget(widgets.icon_button(
+                "subtract", "Remover este bloco de horário",
+                lambda: self._remove_time_row(row)))
+        else:
+            lay.addWidget(widgets.icon_button(
+                "add", "Adicionar outro bloco de horário (lançamento fracionado - "
+                       "ex.: 08:00-13:00 e 14:00-17:00, com o almoço no meio)",
+                lambda: self._add_time_row()))
+        lay.addStretch(1)
+        self._times_box.addWidget(row)
+        self._time_rows.append((s, e, row))
+
+    def _remove_time_row(self, row) -> None:
+        self._time_rows = [t for t in self._time_rows if t[2] is not row]
+        row.setParent(None)
+        row.deleteLater()
+
     def _hist_for(self, client_name: str) -> dict:
         """Histórico do cliente (projetos/descrições), casando o nome sem caixa."""
         key = client_name.strip().casefold()
@@ -988,19 +1023,22 @@ class _EntryDialog(QDialog):
         self._desc_model.setStringList(hist.get("descriptions", []))
 
     def _validate_accept(self) -> None:
-        start = util.format_time_hhmm(self._start.text())
-        end = util.format_time_hhmm(self._end.text())
-        if not (util.time_hhmm_ok(start) and util.time_hhmm_ok(end)):
-            QMessageBox.warning(self, "Editar apontamento",
-                                "Informe início e fim no formato HH:MM.")
-            return
+        for s, e, _row in self._time_rows:
+            start = util.format_time_hhmm(s.text())
+            end = util.format_time_hhmm(e.text())
+            if not (util.time_hhmm_ok(start) and util.time_hhmm_ok(end)):
+                QMessageBox.warning(self, self.windowTitle(),
+                                    "Informe início e fim no formato HH:MM "
+                                    "em todos os blocos de horário.")
+                return
         self.accept()
 
     def fields(self) -> dict:
         return {
             "work_date": self._date.date().toPython().isoformat(),
-            "start_time": util.format_time_hhmm(self._start.text()),
-            "end_time": util.format_time_hhmm(self._end.text()),
+            # cada bloco (início, fim) vira UM apontamento no salvar
+            "blocks": [(util.format_time_hhmm(s.text()), util.format_time_hhmm(e.text()))
+                       for s, e, _row in self._time_rows],
             "_client": self._client.currentText().strip(),
             "_project": self._project.currentText().strip(),
             # quebras de linha viram espaço: a descrição é um texto único na

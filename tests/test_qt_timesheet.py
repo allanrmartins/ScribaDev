@@ -217,7 +217,7 @@ class TimesheetWindowTests(unittest.TestCase):
                         project_text="", description="", overtime=0, location="")
         dlg = _EntryDialog(win, None, win._data, defaults=defaults)
         self.assertEqual(dlg.windowTitle(), "Novo apontamento")
-        self.assertEqual(dlg._start.text(), "")
+        self.assertEqual(dlg._time_rows[0][0].text(), "")  # início vazio: obriga preencher
         self.assertEqual(dlg._client.currentText(), "Coruripe")
         names = [dlg._client.itemText(i) for i in range(dlg._client.count())]
         self.assertIn("Cliente Novo", names)
@@ -234,16 +234,48 @@ class TimesheetWindowTests(unittest.TestCase):
         dlg._desc.setPlainText("analise de programas z\ne leitura de emails")
         self.assertEqual(dlg.fields()["description"],
                          "analise de programas z e leitura de emails")
-        # persistência: mesmos campos que o diálogo produz -> add_entry
+        # lançamento FRACIONADO: [+] adiciona bloco, [-] remove; cada bloco no fields
+        self.assertEqual(len(dlg._time_rows), 1)
+        dlg._add_time_row()
+        self.assertEqual(len(dlg._time_rows), 2)
+        dlg._time_rows[0][0].setText("08:00")
+        dlg._time_rows[0][1].setText("13:00")
+        dlg._time_rows[1][0].setText("14:00")
+        dlg._time_rows[1][1].setText("17:00")
+        self.assertEqual(dlg.fields()["blocks"], [("08:00", "13:00"), ("14:00", "17:00")])
+        dlg._remove_time_row(dlg._time_rows[1][2])
+        self.assertEqual(dlg.fields()["blocks"], [("08:00", "13:00")])
+        # persistência: um apontamento POR BLOCO (manhã e tarde, almoço no meio)
         win._save_entry_fields({
-            "work_date": "2026-07-15", "start_time": "08:00", "end_time": "09:30",
+            "work_date": "2026-07-15",
+            "blocks": [("08:00", "13:00"), ("14:00", "17:00")],
             "_client": "Coruripe", "_project": "403240",
             "description": "testes unitarios", "overtime": False, "location": ""})
         rows = tsdb.list_entries(day="2026-07-15")
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["minutes"], 90)
-        self.assertEqual(rows[0]["client_name"], "Coruripe")
-        self.assertEqual(rows[0]["project_code"], "403240")
+        self.assertEqual(len(rows), 2)
+        self.assertEqual([r["minutes"] for r in rows], [300, 180])
+        self.assertTrue(all(r["client_name"] == "Coruripe" and
+                            r["project_code"] == "403240" for r in rows))
+
+    def test_editar_fracionando_um_bloco(self):
+        """Editar com blocos extras: o 1º atualiza o registro, os demais viram
+        apontamentos novos (ex.: tirar o almoço de uma sugestão 08:00-17:00)."""
+        self._seed()
+        win = self._data_window()
+        alvo = tsdb.list_entries(day="2026-07-13", status="confirmed")[0]
+        win._save_entry_fields({
+            "work_date": "2026-07-13",
+            "blocks": [("08:00", "12:00"), ("13:00", "17:00")],
+            "_client": "Coruripe", "_project": "403240",
+            "description": "manha", "overtime": False, "location": ""},
+            entry_id=alvo["id"], accept_after=False)
+        rows = tsdb.list_entries(day="2026-07-13", status="confirmed")
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["id"], alvo["id"])          # 1º bloco atualizou
+        self.assertEqual(rows[0]["start_time"], "08:00")
+        self.assertEqual(rows[0]["end_time"], "12:00")
+        self.assertEqual(rows[1]["start_time"], "13:00")     # extra virou novo
+        self.assertEqual(rows[1]["origin"], "manual")
 
     def test_defaults_do_novo_apontamento(self):
         """Emenda no dia: início = fim do último apontamento de HOJE; cliente =
