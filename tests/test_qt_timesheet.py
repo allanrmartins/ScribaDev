@@ -106,7 +106,8 @@ class TimesheetWindowTests(unittest.TestCase):
             "client_text": "Cliente Novo", "description": "call sugerida",
             "meeting_started_at": "2026-07-13T14:00:00"})
         tsdb.add_entry(work_date="2026-07-14", start_time="09:00", end_time="10:00",
-                       client_text="Delta", description="dia seguinte")
+                       client_text="Delta", project_text="MM03",
+                       description="dia seguinte")
         return cid, eid
 
     def _data_window(self):
@@ -179,18 +180,24 @@ class TimesheetWindowTests(unittest.TestCase):
 
         self._seed()
         win = self._data_window()
-        # diálogo em modo NOVO: título próprio, data de hoje, horários vazios
-        # (obrigam preenchimento correto) e combo com cadastro + nomes crus
-        dlg = _EntryDialog(win, None, win._data, default_client="Coruripe")
+        # diálogo em modo NOVO: título próprio, horários vazios (obrigam
+        # preenchimento correto) e combo com cadastro + nomes crus
+        defaults = dict(work_date="2026-07-15", start_time="", end_time="",
+                        client_name=None, client_text="Coruripe", project_code=None,
+                        project_text="", description="", overtime=0, location="")
+        dlg = _EntryDialog(win, None, win._data, defaults=defaults)
         self.assertEqual(dlg.windowTitle(), "Novo apontamento")
         self.assertEqual(dlg._start.text(), "")
         self.assertEqual(dlg._client.currentText(), "Coruripe")
         names = [dlg._client.itemText(i) for i in range(dlg._client.count())]
         self.assertIn("Cliente Novo", names)
         self.assertIn("Delta", names)
-        # projetos seguem o cliente (Coruripe cadastrado tem o 403240)
-        codes = [dlg._project.itemText(i) for i in range(dlg._project.count())]
-        self.assertIn("403240", codes)
+        # inteligência: o projeto mais recente do cliente já vem PREENCHIDO,
+        # e trocar o cliente troca o projeto junto (histórico, não só cadastro)
+        self.assertEqual(dlg._project.currentText(), "403240")
+        dlg._client.setCurrentText("Delta")
+        self.assertEqual(dlg._project.currentText(), "MM03")
+        self.assertIn("dia seguinte", dlg._desc_model.stringList())
         # persistência: mesmos campos que o diálogo produz -> add_entry
         win._save_entry_fields({
             "work_date": "2026-07-15", "start_time": "08:00", "end_time": "09:30",
@@ -201,6 +208,24 @@ class TimesheetWindowTests(unittest.TestCase):
         self.assertEqual(rows[0]["minutes"], 90)
         self.assertEqual(rows[0]["client_name"], "Coruripe")
         self.assertEqual(rows[0]["project_code"], "403240")
+
+    def test_defaults_do_novo_apontamento(self):
+        """Emenda no dia: início = fim do último apontamento de HOJE; cliente =
+        último usado (o apontamento manual não depende de call)."""
+        from datetime import date
+
+        self._seed()
+        today = date.today().isoformat()
+        tsdb.add_entry(work_date=today, start_time="08:00", end_time="10:15",
+                       client_text="Gencau", description="analise programas z")
+        win = self._data_window()
+        win._month = today[:7]
+        win.refresh()
+        d = win._new_entry_defaults()
+        self.assertEqual(d["work_date"], today)
+        self.assertEqual(d["start_time"], "10:15")
+        self.assertTrue(d["end_time"] == "" or d["end_time"] > "10:15")
+        self.assertEqual(d["client_text"], "Gencau")
 
     def test_restyle_theme_re_renderiza_do_cache(self):
         self._seed()

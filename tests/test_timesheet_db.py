@@ -162,6 +162,25 @@ class TimesheetDbTests(unittest.TestCase):
         self.assertEqual([c["name"] for c in tsdb.list_clients()], ["Cellera"])
         self.assertIsNotNone(eid)
 
+    def test_client_history_recencia_e_dedupe(self):
+        """Pré-preenchimento da UI: projetos/descrições por cliente vêm do
+        HISTÓRICO (recência), com dedupe NOCASE; cadastrado sem uso entra."""
+        self._entry(client_text="Coruripe", project_text="403240",
+                    description="analise notas")
+        self._entry(start_time="14:00", end_time="15:00", client_text="coruripe",
+                    project_text="GAP 1", description="Analise Notas")
+        self._entry(work_date="2026-07-14", client_text="Delta",
+                    project_text="MM03", status="discarded")
+        kid = tsdb.add_client("Kyly")
+        tsdb.add_project(kid, "11695")
+        hist = tsdb.client_history()
+        keys = list(hist)
+        self.assertEqual(keys[0].casefold(), "coruripe")           # último usado 1º
+        self.assertEqual(hist[keys[0]]["projects"], ["GAP 1", "403240"])  # recência
+        self.assertEqual(len(hist[keys[0]]["descriptions"]), 1)    # dedupe NOCASE
+        self.assertNotIn("Delta", keys)                            # descartado fora
+        self.assertEqual(hist["Kyly"]["projects"], ["11695"])      # cadastrado s/ uso
+
     def test_known_client_names_uniao_cadastro_e_crus(self):
         tsdb.add_client("Coruripe")
         inativo = tsdb.add_client("Antiga")

@@ -136,6 +136,7 @@ class TimesheetWindow(QWidget):
             data = {
                 "month": month,
                 "client_names": tsdb.known_client_names(),
+                "client_history": tsdb.client_history(),
                 "entries": [e for e in tsdb.list_entries(month=month)
                             if e["status"] != "discarded"],
                 "totals": tsdb.day_totals(month),
@@ -242,12 +243,35 @@ class TimesheetWindow(QWidget):
 
     def _add_manual(self) -> None:
         """Novo apontamento manual pelo diálogo completo (mesmo do duplo clique)."""
-        default_client = ""
-        if getattr(self.app, "cfg", None) is not None:
-            default_client = self.app.cfg.timesheet.default_client or ""
-        dlg = _EntryDialog(self, None, self._data or {}, default_client=default_client)
+        dlg = _EntryDialog(self, None, self._data or {},
+                           defaults=self._new_entry_defaults())
         if dlg.exec() == QDialog.Accepted:
             self._save_entry_fields(dlg.fields())
+
+    def _new_entry_defaults(self) -> dict:
+        """Pré-preenchimento do lançamento manual: o apontamento não depende de
+        call (análises, e-mails, notas SAP...), então o programa emenda o dia -
+        início = fim do último apontamento de hoje, fim = agora (arredondado ao
+        passo) - e retoma o último cliente usado (ou o default do config)."""
+        data = self._data or {}
+        cfg = getattr(self.app, "cfg", None)
+        ts = cfg.timesheet if cfg is not None else None
+        today = date.today().isoformat()
+        todays = [e for e in data.get("entries", ()) if e["work_date"] == today]
+        start = max((e["end_time"] for e in todays), default="")
+        end = ""
+        if start:
+            from .. import timesheet_suggest
+
+            now = timesheet_suggest.round_hhmm(
+                datetime.now().strftime("%H:%M"), ts.round_minutes if ts else 15)
+            if now > start:
+                end = now
+        client = (ts.default_client if ts else "") or next(iter(data.get(
+            "client_history", {})), "")
+        return {"work_date": today, "start_time": start, "end_time": end,
+                "client_name": None, "client_text": client, "project_code": None,
+                "project_text": "", "description": "", "overtime": 0, "location": ""}
 
     def _mark_day(self) -> None:
         """Dia especial (feriado, férias…): diálogo próprio com data + nota."""
@@ -759,19 +783,23 @@ class TimesheetWindow(QWidget):
 
 
 class _EntryDialog(QDialog):
-    """Diálogo de lançamento: novo apontamento (entry=None), edição (duplo
-    clique na grade) e 'Editar e aceitar' das sugestões."""
+    """Diálogo de lançamento: novo apontamento (entry=None, com os defaults
+    inteligentes de _new_entry_defaults), edição (duplo clique na grade) e
+    'Editar e aceitar' das sugestões. Projeto e sugestões de descrição seguem o
+    cliente escolhido, vindos do HISTÓRICO (client_history) - funciona também
+    para cliente ainda sem cadastro."""
 
-    def __init__(self, parent, entry: dict | None, data: dict, default_client: str = ""):
+    def __init__(self, parent, entry: dict | None, data: dict, defaults: dict | None = None):
         super().__init__(parent)
         self._data = data
-        new = entry is None
-        entry = entry or {
+        self._new = entry is None
+        self._auto_project = ""
+        entry = entry or defaults or {
             "work_date": date.today().isoformat(), "start_time": "", "end_time": "",
-            "client_name": None, "client_text": default_client, "project_code": None,
+            "client_name": None, "client_text": "", "project_code": None,
             "project_text": "", "description": "", "overtime": 0, "location": "",
         }
-        self.setWindowTitle("Novo apontamento" if new else "Editar apontamento")
+        self.setWindowTitle("Novo apontamento" if self._new else "Editar apontamento")
         lay = QVBoxLayout(self)
         from PySide6.QtWidgets import QFormLayout
 
@@ -796,14 +824,26 @@ class _EntryDialog(QDialog):
         for name in data.get("client_names", ()):  # cadastro + textos crus já usados
             self._client.addItem(name)
         self._client.setCurrentText(entry["client_name"] or entry["client_text"] or "")
-        self._client.currentTextChanged.connect(self._reload_projects)
         widgets.no_wheel_steal(self._client)
         self._project = QComboBox()
         self._project.setEditable(True)
-        self._reload_projects(self._client.currentText())
-        self._project.setCurrentText(entry["project_code"] or entry["project_text"] or "")
         widgets.no_wheel_steal(self._project)
         self._desc = widgets.make_entry("")
+        # sugestões de descrição do cliente (frases recorrentes do histórico)
+        from PySide6.QtCore import QStringListModel
+        from PySide6.QtWidgets import QCompleter
+
+        self._desc_model = QStringListModel(self)
+        completer = QCompleter(self._desc_model, self)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchContains)
+        self._desc.setCompleter(completer)
+        # projeto/descrições seguem o cliente; no modo novo, o projeto mais
+        # recente do cliente já vem preenchido (pedido do uso real)
+        self._client.currentTextChanged.connect(self._on_client_changed)
+        self._on_client_changed(self._client.currentText())
+        if entry["project_code"] or entry["project_text"]:
+            self._project.setCurrentText(entry["project_code"] or entry["project_text"])
         self._desc.setText(entry["description"] or "")
         self._extra = widgets.AnimatedCheckBox("hora extra")
         self._extra.setChecked(bool(entry["overtime"]))
@@ -826,15 +866,29 @@ class _EntryDialog(QDialog):
         buttons.rejected.connect(self.reject)
         lay.addWidget(buttons)
 
-    def _reload_projects(self, client_name: str) -> None:
-        """Projetos do combo seguem o cliente escolhido (só cadastrados têm)."""
-        current = self._project.currentText()
+    def _hist_for(self, client_name: str) -> dict:
+        """Histórico do cliente (projetos/descrições), casando o nome sem caixa."""
+        key = client_name.strip().casefold()
+        return next((h for name, h in self._data.get("client_history", {}).items()
+                     if name.casefold() == key), {})
+
+    def _on_client_changed(self, client_name: str) -> None:
+        """Projetos e sugestões de descrição seguem o cliente - via HISTÓRICO
+        (qualquer projeto já apontado com ele, mais recente primeiro), não só o
+        cadastro. No modo novo, o projeto mais recente já vem preenchido; texto
+        digitado pelo usuário nunca é sobrescrito."""
+        hist = self._hist_for(client_name)
+        projects = hist.get("projects", [])
+        current = self._project.currentText().strip()
         self._project.clear()
-        cid = next((c["id"] for c in self._data.get("clients", ())
-                    if c["name"].casefold() == client_name.strip().casefold()), None)
-        for p in self._data.get("projects", {}).get(cid, ()):
-            self._project.addItem(p["code"])
-        self._project.setCurrentText(current)
+        for code in projects:
+            self._project.addItem(code)
+        if self._new and (not current or current == self._auto_project):
+            self._auto_project = projects[0] if projects else ""
+            self._project.setCurrentText(self._auto_project)
+        else:
+            self._project.setCurrentText(current)
+        self._desc_model.setStringList(hist.get("descriptions", []))
 
     def _validate_accept(self) -> None:
         start = util.format_time_hhmm(self._start.text())

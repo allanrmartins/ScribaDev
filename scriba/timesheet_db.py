@@ -511,6 +511,58 @@ def known_client_names() -> list[str]:
         return [r[0] for r in rows]
 
 
+def client_history() -> dict[str, dict]:
+    """Histórico por cliente para o pré-preenchimento da UI (#118): projetos e
+    descrições já usados em apontamentos, MAIS RECENTES PRIMEIRO.
+
+    Chaves = nome exibido do cliente (canônico quando resolvido, senão o texto
+    cru), na ordem de recência - a primeira chave é o último cliente usado. Vale
+    para cliente ainda sem cadastro: a inteligência vem do que o usuário já
+    apontou, não do cadastro. Projetos CADASTRADOS sem uso entram no fim da
+    lista; descartados ficam de fora; dedupe NOCASE.
+    """
+    with closing(connect()) as conn, conn:
+        rows = conn.execute(
+            """SELECT COALESCE(c.name, e.client_text) AS cname,
+                      COALESCE(p.code, e.project_text) AS pcode,
+                      e.description AS descr,
+                      MAX(e.id) AS recency
+               FROM entries e
+               LEFT JOIN clients c ON c.id = e.client_id
+               LEFT JOIN projects p ON p.id = e.project_id
+               WHERE e.status != 'discarded'
+                 AND COALESCE(c.name, e.client_text) != ''
+               GROUP BY cname COLLATE NOCASE, pcode COLLATE NOCASE,
+                        descr COLLATE NOCASE
+               ORDER BY recency DESC"""
+        )
+        hist: dict[str, dict] = {}
+        for r in rows:
+            name = _norm(r["cname"])
+            entry = next((h for k, h in hist.items() if k.casefold() == name.casefold()),
+                         None)
+            if entry is None:
+                entry = hist.setdefault(name, {"projects": [], "descriptions": []})
+            code, descr = _norm(r["pcode"] or ""), (r["descr"] or "").strip()
+            if code and code.casefold() not in (x.casefold() for x in entry["projects"]):
+                entry["projects"].append(code)
+            if descr and len(entry["descriptions"]) < 15 and \
+                    descr.casefold() not in (x.casefold() for x in entry["descriptions"]):
+                entry["descriptions"].append(descr)
+        for r in conn.execute(
+                """SELECT c.name AS cname, p.code AS pcode FROM projects p
+                   JOIN clients c ON c.id = p.client_id
+                   WHERE p.active = 1 AND c.active = 1"""):
+            name = _norm(r["cname"])
+            entry = next((h for k, h in hist.items() if k.casefold() == name.casefold()),
+                         None)
+            if entry is None:
+                entry = hist.setdefault(name, {"projects": [], "descriptions": []})
+            if r["pcode"].casefold() not in (x.casefold() for x in entry["projects"]):
+                entry["projects"].append(r["pcode"])
+        return hist
+
+
 def list_clients(active_only: bool = True) -> list[dict]:
     sql = "SELECT * FROM clients"
     if active_only:
