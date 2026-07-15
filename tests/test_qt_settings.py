@@ -85,6 +85,32 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(win._ts_off.isHidden())
         self.assertEqual(win._tabs.tabText(win._ts_tab_index), "Apontamento")
 
+    def test_timesheet_ajustes_round_trip(self):
+        """#125 (fase 2): a seção [timesheet] editável pela UI; salvar não perde
+        nenhuma outra seção do config.toml (nem o enabled, que não é campo)."""
+        from scriba import config as config_mod
+        from scriba.qt.settings_ui import SettingsWindow
+
+        win = SettingsWindow(self._app())
+        self._field(win, "timesheet", "suggest")[0].setChecked(False)
+        self._field(win, "timesheet", "round_minutes")[0].setValue(5)
+        self._field(win, "timesheet", "min_meeting_minutes")[0].setValue(20)
+        self._field(win, "timesheet", "default_client")[0].setText("Coruripe")
+        self._field(win, "timesheet", "export_dir")[0].setText(r"C:\temp\apontamentos")
+        win._save()
+        r = config_mod.load()
+        self.assertFalse(r.timesheet.suggest)
+        self.assertEqual(r.timesheet.round_minutes, 5)
+        self.assertEqual(r.timesheet.min_meeting_minutes, 20)
+        self.assertEqual(r.timesheet.default_client, "Coruripe")
+        self.assertEqual(r.timesheet.export_dir, r"C:\temp\apontamentos")
+        self.assertFalse(r.timesheet.enabled)              # ativação não é campo
+        self.assertEqual(r.whisper.model, "large-v3-turbo")  # outras seções intactas
+        self.assertEqual(r.whisper.language, "pt")
+        # db_path fica DELIBERADAMENTE fora da UI (OneDrive corrompe o banco)
+        with self.assertRaises(KeyError):
+            self._field(win, "timesheet", "db_path")
+
     def test_load_preenche_dos_defaults(self):
         from scriba.qt.settings_ui import SettingsWindow
 

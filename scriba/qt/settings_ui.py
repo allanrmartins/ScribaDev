@@ -651,12 +651,34 @@ class SettingsWindow(QWidget):
         ok = QLabel("Apontamento de horas está ativado ✓")
         ok.setProperty("role", "ok")
         hint = QLabel("Banco local em %LOCALAPPDATA%\\ScribaDev\\timesheet.db (backup diário "
-                      "automático). Ajustes finos ficam na seção [timesheet] do config.toml; "
-                      "a UI de ajustes chega na fase 2 (#125). Desativar NÃO apaga seus dados.")
+                      "automático). Desativar NÃO apaga seus dados.")
         hint.setProperty("role", "muted")
         hint.setWordWrap(True)
         on.addWidget(ok)
         on.addWidget(hint)
+        # ajustes finos (#125, fase 2): campos padrão da tela (seção 'timesheet'
+        # no _fields), gravados pelo Salvar como as demais abas. db_path fica
+        # DELIBERADAMENTE só no TOML (apontar para OneDrive corrompe o banco).
+        box = QGroupBox("Ajustes")
+        gl = QFormLayout(box)
+        gl.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        self._check(gl, "Sugestões automáticas:", "timesheet", "suggest",
+                    hint="Reuniões processadas viram sugestões de apontamento.")
+        self._int(gl, "Arredondar horários (min):", "timesheet", "round_minutes",
+                  lo=0, hi=60,
+                  hint="Início/fim sugeridos em passos de N minutos (0 = exato).")
+        self._int(gl, "Reunião mínima (min):", "timesheet", "min_meeting_minutes",
+                  lo=0, hi=240,
+                  hint="Reunião mais curta que isto não vira sugestão.")
+        self._text(gl, "Cliente padrão:", "timesheet", "default_client",
+                   placeholder="(vazio = o último usado)",
+                   hint="Pré-seleção do lançamento manual.")
+        self._text(gl, "Pasta do export Excel:", "timesheet", "export_dir",
+                   placeholder="(vazio = Documentos\\ScribaDev\\Apontamentos)")
+        self._text(gl, "Pasta do backup diário:", "timesheet", "backup_dir",
+                   placeholder="(vazio = %LOCALAPPDATA%\\ScribaDev\\backups)",
+                   hint="Arquivo morto - pode apontar para OneDrive.")
+        on.addWidget(box)
         orow = QHBoxLayout()
         orow.setSpacing(6)
         orow.addWidget(widgets.ModernButton(
