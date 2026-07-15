@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import unicodedata
 from contextlib import closing
 from datetime import date, datetime
 from pathlib import Path
@@ -35,7 +36,7 @@ log = logging.getLogger("scriba.timesheet_db")
 # (mesmo racional do meetings_index.DB_PATH: isolar APP_DIR num teste já redireciona
 # o banco). O boot do app aponta para cá o override de [timesheet].db_path.
 DB_PATH = None
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _DDL_V1 = (
     """CREATE TABLE clients (
@@ -99,8 +100,40 @@ _DDL_V1 = (
     )""",
 )
 
-# Migrações incrementais: {versão alvo: DDLs que levam da versão anterior até ela}.
-_MIGRATIONS: dict[int, tuple[str, ...]] = {1: _DDL_V1}
+def _fold(raw: str) -> str:
+    """Chave de comparação caixa E acento-insensível (v2, #125): normaliza
+    espaços, decompõe NFD, descarta combinantes e casefolda - "Célera",
+    "celera" e "CÉLERA" caem na mesma chave. Feita em Python: o NOCASE do
+    SQLite só entende ASCII."""
+    text = unicodedata.normalize("NFD", _norm(raw))
+    return "".join(ch for ch in text if not unicodedata.combining(ch)).casefold()
+
+
+def _migrate_v2(conn: sqlite3.Connection) -> None:
+    """v2 (#125): alias acento-insensível. Nova coluna alias_norm (chave _fold)
+    com backfill em Python; aliases REDUNDANTES do mesmo cliente (mesma chave)
+    caem no backfill. Chave igual em clientes DIFERENTES é dado do usuário e é
+    preservada (o resolve pega a mais antiga) - daí índice comum, não único; a
+    unicidade de novos aliases é garantida em add_alias."""
+    conn.execute(
+        "ALTER TABLE client_aliases ADD COLUMN alias_norm TEXT NOT NULL DEFAULT ''")
+    seen: set[tuple[int, str]] = set()
+    for row in conn.execute(
+            "SELECT id, client_id, alias FROM client_aliases ORDER BY id").fetchall():
+        key = (row["client_id"], _fold(row["alias"]))
+        if key in seen:
+            conn.execute("DELETE FROM client_aliases WHERE id = ?", (row["id"],))
+        else:
+            seen.add(key)
+            conn.execute("UPDATE client_aliases SET alias_norm = ? WHERE id = ?",
+                         (key[1], row["id"]))
+    conn.execute("CREATE INDEX ix_alias_norm ON client_aliases(alias_norm)")
+
+
+# Migrações incrementais: {versão alvo: passos que levam da versão anterior até
+# ela}. Cada passo é um SQL (DDL) ou um callable(conn) quando precisa de Python
+# (ex.: backfill do alias_norm, que o SQLite não calcula).
+_MIGRATIONS: dict[int, tuple] = {1: _DDL_V1, 2: (_migrate_v2,)}
 
 _ENTRY_STATUSES = ("suggested", "confirmed", "discarded")
 
@@ -154,8 +187,8 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         )
     for target in range(version + 1, SCHEMA_VERSION + 1):
         with conn:  # cada passo de migração é atômico
-            for ddl in _MIGRATIONS[target]:
-                conn.execute(ddl)
+            for step in _MIGRATIONS[target]:
+                step(conn) if callable(step) else conn.execute(step)
             conn.execute(f"PRAGMA user_version = {target}")
 
 
@@ -432,22 +465,27 @@ def resolve_client(raw: str) -> tuple[int | None, str]:
     """Casa um nome cru (da IA ou digitado) com o cadastro.
 
     Devolve (id, nome canônico) quando resolve — por clients.name ou por alias,
-    ambos NOCASE — e (None, texto normalizado) quando não; o texto cru preservado
+    ambos caixa E acento-insensíveis pela chave _fold (v2, #125: "Célera" casa
+    "celera") — e (None, texto normalizado) quando não; o texto cru preservado
     é o que a UI mostra com a oferta de cadastrar cliente/alias.
     """
     text = _norm(raw)
     if not text:
         return None, ""
+    key = _fold(text)
     with closing(connect()) as conn, conn:
-        row = conn.execute(
-            "SELECT id, name FROM clients WHERE name = ? AND active = 1", (text,)
-        ).fetchone()
+        # nome canônico: comparação _fold em Python (a tabela é pequena e o
+        # NOCASE do SQLite não enxerga acento)
+        row = next((r for r in conn.execute(
+            "SELECT id, name FROM clients WHERE active = 1 ORDER BY id")
+            if _fold(r["name"]) == key), None)
         if row is None:
             row = conn.execute(
                 """SELECT c.id, c.name FROM client_aliases a
                    JOIN clients c ON c.id = a.client_id
-                   WHERE a.alias = ? AND c.active = 1""",
-                (text,),
+                   WHERE a.alias_norm = ? AND c.active = 1
+                   ORDER BY a.id""",
+                (key,),
             ).fetchone()
         if row is None:
             return None, text
@@ -455,12 +493,16 @@ def resolve_client(raw: str) -> tuple[int | None, str]:
 
 
 def add_client(name: str) -> int:
-    """Cadastra um cliente canônico; idempotente por nome (NOCASE)."""
+    """Cadastra um cliente canônico; idempotente por nome (chave _fold: caixa e
+    acento-insensível - cadastrar "Celera" com "Célera" existente NÃO duplica)."""
     text = _norm(name)
     if not text:
         raise ValueError("nome de cliente vazio")
+    key = _fold(text)
     with closing(connect()) as conn, conn:
-        row = conn.execute("SELECT id FROM clients WHERE name = ?", (text,)).fetchone()
+        row = next((r for r in conn.execute(
+            "SELECT id, name FROM clients ORDER BY id")
+            if _fold(r["name"]) == key), None)
         if row is not None:
             return row["id"]
         cur = conn.execute(
@@ -471,13 +513,16 @@ def add_client(name: str) -> int:
 
 def add_alias(client_id: int, alias: str) -> int:
     """Liga uma grafia alternativa a um cliente; idempotente para o MESMO cliente,
-    erro (IntegrityError) se o alias já pertence a outro."""
+    erro (IntegrityError) se um alias equivalente (chave _fold: caixa e acento-
+    insensível) já pertence a outro."""
     text = _norm(alias)
     if not text:
         raise ValueError("alias vazio")
+    key = _fold(text)
     with closing(connect()) as conn, conn:
         row = conn.execute(
-            "SELECT id, client_id FROM client_aliases WHERE alias = ?", (text,)
+            "SELECT id, client_id FROM client_aliases WHERE alias_norm = ? "
+            "ORDER BY id", (key,)
         ).fetchone()
         if row is not None:
             if row["client_id"] != client_id:
@@ -486,8 +531,8 @@ def add_alias(client_id: int, alias: str) -> int:
                 )
             return row["id"]
         cur = conn.execute(
-            "INSERT INTO client_aliases (client_id, alias) VALUES (?, ?)",
-            (client_id, text),
+            "INSERT INTO client_aliases (client_id, alias, alias_norm) VALUES (?, ?, ?)",
+            (client_id, text, key),
         )
         return cur.lastrowid
 
@@ -613,8 +658,14 @@ def merge_client(src_id: int, dst_id: int) -> None:
         # junto com o cliente (cascade) — UPDATE OR IGNORE pula só os conflitantes.
         conn.execute("UPDATE OR IGNORE projects SET client_id = ? WHERE client_id = ?",
                      (dst_id, src_id))
-        conn.execute("INSERT OR IGNORE INTO client_aliases (client_id, alias) VALUES (?, ?)",
-                     (dst_id, src["name"]))
+        # nome antigo vira alias do destino - só se um equivalente (chave _fold)
+        # ainda não existir (os aliases do src acabaram de ser re-apontados)
+        key = _fold(src["name"])
+        if conn.execute("SELECT 1 FROM client_aliases WHERE alias_norm = ?",
+                        (key,)).fetchone() is None:
+            conn.execute(
+                "INSERT INTO client_aliases (client_id, alias, alias_norm) "
+                "VALUES (?, ?, ?)", (dst_id, src["name"], key))
         conn.execute("DELETE FROM clients WHERE id = ?", (src_id,))
 
 

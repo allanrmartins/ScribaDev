@@ -80,6 +80,46 @@ class TimesheetDbTests(unittest.TestCase):
         # toda versão de 1..SCHEMA_VERSION tem migração (caminho incremental completo)
         self.assertEqual(set(tsdb._MIGRATIONS), set(range(1, tsdb.SCHEMA_VERSION + 1)))
 
+    def test_migracao_v1_para_v2_preserva_e_backfilla(self):
+        """Banco v1 REAL (DDL congelado) migra no connect(): dados preservados,
+        alias_norm backfillado e redundância do MESMO cliente (mesma chave
+        _fold) deduplicada - sem drop de nada (#125)."""
+        with sqlite3.connect(str(tsdb.DB_PATH)) as c:
+            for ddl in tsdb._DDL_V1:
+                c.execute(ddl)
+            c.execute("PRAGMA user_version = 1")
+            c.execute("INSERT INTO clients (id, name, created_at) "
+                      "VALUES (1, 'Cellera', 'x')")
+            for alias in ("célera", "celera", "celera sa"):
+                c.execute("INSERT INTO client_aliases (client_id, alias) "
+                          "VALUES (1, ?)", (alias,))
+            c.execute("""INSERT INTO entries (work_date, start_time, end_time,
+                             minutes, client_id, created_at, updated_at)
+                         VALUES ('2026-07-01', '08:00', '09:00', 60, 1, 'x', 'x')""")
+        tsdb.connect().close()  # migra v1 -> v2
+        with sqlite3.connect(str(tsdb.DB_PATH)) as c:
+            self.assertEqual(c.execute("PRAGMA user_version").fetchone()[0], 2)
+        self.assertEqual(len(tsdb.list_entries(day="2026-07-01")), 1)
+        cid = tsdb.list_clients()[0]["id"]
+        self.assertEqual(tsdb.resolve_client("CÉLERA SA"), (cid, "Cellera"))
+        aliases = tsdb.list_aliases(cid)
+        self.assertEqual(len(aliases), 2)  # 'célera' + 'celera' viraram um só
+        self.assertTrue(all(a["alias_norm"] for a in aliases))
+
+    def test_resolve_acento_insensivel(self):
+        """v2 (#125): "Célera" resolve alias "celera" e vice-versa; nome
+        canônico, idempotência de cadastro e conflito de alias idem."""
+        cid = tsdb.add_client("Célera")
+        aid = tsdb.add_alias(cid, "celera farma")
+        self.assertEqual(tsdb.resolve_client("celera"), (cid, "Célera"))
+        self.assertEqual(tsdb.resolve_client("CELERA"), (cid, "Célera"))
+        self.assertEqual(tsdb.resolve_client("Célera Fárma"), (cid, "Célera"))
+        self.assertEqual(tsdb.add_client("  celera "), cid)      # não duplica
+        self.assertEqual(tsdb.add_alias(cid, "CÉLERA FARMA"), aid)  # mesmo dono
+        outro = tsdb.add_client("Delta")
+        with self.assertRaises(sqlite3.IntegrityError):
+            tsdb.add_alias(outro, "célera farma")  # equivalente de outro cliente
+
     # -- entries: CRUD + validação --------------------------------------------
     def test_add_entry_minutos_derivados_e_validacao(self):
         eid = self._entry()
