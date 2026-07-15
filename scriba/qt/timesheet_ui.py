@@ -939,8 +939,9 @@ class _EntryDialog(QDialog):
         completer.setCaseSensitivity(Qt.CaseInsensitive)
         completer.setFilterMode(Qt.MatchContains)
         self._desc = _DescEdit(completer)
-        # projeto/descrições seguem o cliente; no modo novo, o projeto mais
-        # recente do cliente já vem preenchido (pedido do uso real)
+        # projeto/descrições seguem o cliente; campo de projeto vazio já vem
+        # com o mais recente do cliente - também no "Editar e aceitar" de
+        # sugestão sem projeto (pedido do uso real)
         self._client.currentTextChanged.connect(self._on_client_changed)
         self._on_client_changed(self._client.currentText())
         if entry["project_code"] or entry["project_text"]:
@@ -1007,15 +1008,17 @@ class _EntryDialog(QDialog):
     def _on_client_changed(self, client_name: str) -> None:
         """Projetos e sugestões de descrição seguem o cliente - via HISTÓRICO
         (qualquer projeto já apontado com ele, mais recente primeiro), não só o
-        cadastro. No modo novo, o projeto mais recente já vem preenchido; texto
-        digitado pelo usuário nunca é sobrescrito."""
+        cadastro. Campo vazio (ou ainda no valor de um autofill anterior) recebe
+        o projeto mais recente do cliente - tanto no novo quanto na edição
+        ('Editar e aceitar' de sugestão sem projeto); texto digitado pelo
+        usuário nunca é sobrescrito."""
         hist = self._hist_for(client_name)
         projects = hist.get("projects", [])
         current = self._project.currentText().strip()
         self._project.clear()
         for code in projects:
             self._project.addItem(code)
-        if self._new and (not current or current == self._auto_project):
+        if not current or current == self._auto_project:
             self._auto_project = projects[0] if projects else ""
             self._project.setCurrentText(self._auto_project)
         else:

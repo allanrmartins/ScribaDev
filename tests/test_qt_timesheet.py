@@ -277,6 +277,30 @@ class TimesheetWindowTests(unittest.TestCase):
         self.assertEqual(rows[1]["start_time"], "13:00")     # extra virou novo
         self.assertEqual(rows[1]["origin"], "manual")
 
+    def test_editar_e_aceitar_preenche_projeto(self):
+        """'Editar e aceitar' de sugestão sem projeto: o projeto mais recente
+        do cliente vem preenchido também na EDIÇÃO (mesma inteligência do modo
+        novo); projeto salvo ou digitado pelo usuário nunca é sobrescrito."""
+        from scriba.qt.timesheet_ui import _EntryDialog
+
+        self._seed()
+        win = self._data_window()
+        sug = win._sug_items[win._sug_tree.topLevelItem(0)]
+        dlg = _EntryDialog(win, sug, win._data)
+        self.assertEqual(dlg.windowTitle(), "Editar apontamento")
+        # cliente da sugestão sem histórico de projeto: campo fica vazio...
+        self.assertEqual(dlg._project.currentText(), "")
+        # ...e corrigir o cliente para um conhecido puxa o projeto do histórico
+        dlg._client.setCurrentText("Coruripe")
+        self.assertEqual(dlg._project.currentText(), "403240")
+        # apontamento com projeto salvo abre intocado; texto do usuário idem
+        delta = tsdb.list_entries(day="2026-07-14")[0]
+        dlg2 = _EntryDialog(win, delta, win._data)
+        self.assertEqual(dlg2._project.currentText(), "MM03")
+        dlg2._project.setCurrentText("ZMANUAL")
+        dlg2._client.setCurrentText("Coruripe")
+        self.assertEqual(dlg2._project.currentText(), "ZMANUAL")
+
     def test_defaults_do_novo_apontamento(self):
         """Emenda no dia: início = fim do último apontamento de HOJE; cliente =
         último usado (o apontamento manual não depende de call)."""
