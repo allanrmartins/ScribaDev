@@ -166,6 +166,11 @@ def main(argv: list[str] | None = None) -> int:
     p_te.add_argument("--month", metavar="AAAA-MM", default=None, help="mês (default: o corrente)")
     p_te.add_argument("--out", metavar="PASTA", default=None,
                       help="pasta de destino (default: [timesheet].export_dir)")
+    p_ti = ts_sub.add_parser("import",
+                             help="importa o histórico da planilha de apontamento (todas as abas mensais)")
+    p_ti.add_argument("xlsx", metavar="PLANILHA.xlsx", help="planilha de apontamento a importar")
+    p_ti.add_argument("--dry-run", action="store_true",
+                      help="só imprime o relatório do que seria importado, sem gravar nada")
 
     args = parser.parse_args(argv)
 
@@ -309,7 +314,9 @@ def cmd_timesheet(args) -> int:
         return _ts_backup(ts, tsdb)
     if args.ts_cmd == "export":
         return _ts_export(args, ts)
-    print("uso: scribadev timesheet {list,add,sync,backup,export} (veja --help)")
+    if args.ts_cmd == "import":
+        return _ts_import(args)
+    print("uso: scribadev timesheet {list,add,sync,backup,export,import} (veja --help)")
     return 2
 
 
@@ -404,6 +411,25 @@ def _ts_export(args, ts) -> int:
         print(f"erro: {e}")
         return 1
     print(f"exportado: {out}")
+    return 0
+
+
+def _ts_import(args) -> int:
+    """Importa o histórico da planilha (#125). Idempotente: reimportar não duplica."""
+    from pathlib import Path as _P
+
+    from . import timesheet_xlsx
+
+    path = _P(args.xlsx).expanduser()
+    if not path.exists():
+        print(f"erro: planilha não encontrada: {path}")
+        return 2
+    try:
+        report = timesheet_xlsx.import_workbook(path, dry_run=args.dry_run)
+    except ValueError as e:
+        print(f"erro: {e}")
+        return 1
+    print(report.summary())
     return 0
 
 

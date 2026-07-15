@@ -230,10 +230,13 @@ def add_entry(*, work_date: str, start_time: str, end_time: str,
               client_id: int | None = None, client_text: str = "",
               project_id: int | None = None, project_text: str = "",
               description: str = "", overtime: bool = False, location: str = "",
-              origin: str = "manual", status: str = "confirmed",
-              meeting_folder: str | None = None,
+              posted: bool = False, origin: str = "manual",
+              status: str = "confirmed", meeting_folder: str | None = None,
               meeting_started_at: str | None = None) -> int:
-    """Insere um apontamento e devolve o id. Valida data/horas; minutes é derivado."""
+    """Insere um apontamento e devolve o id. Valida data/horas; minutes é derivado.
+
+    posted=True já nasce lançado (coluna J SIM do import do histórico, #125),
+    com posted_at coerente."""
     _check_date(work_date)
     minutes = _minutes_between(start_time, end_time)
     if status not in _ENTRY_STATUSES:
@@ -243,11 +246,12 @@ def add_entry(*, work_date: str, start_time: str, end_time: str,
         cur = conn.execute(
             """INSERT INTO entries (work_date, start_time, end_time, minutes,
                    client_id, client_text, project_id, project_text, description,
-                   overtime, location, status, origin, meeting_folder,
-                   meeting_started_at, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   overtime, location, posted, posted_at, status, origin,
+                   meeting_folder, meeting_started_at, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (work_date, start_time, end_time, minutes, client_id, client_text,
              project_id, project_text, description, int(bool(overtime)), location,
+             int(bool(posted)), now if posted else None,
              status, origin, meeting_folder, meeting_started_at, now, now),
         )
         return cur.lastrowid

@@ -14,20 +14,27 @@ Generalizações deliberadas sobre o original:
   SUMIF de coluna inteira, em formato [h]:mm (totais de mês passam de 24 h).
 
 Só apontamentos `confirmed` entram; `day_notes` (feriado etc.) viram linha com
-data + nota na coluna Cliente, sem horas. A importação do histórico (fase 2,
-#125) morará neste mesmo módulo.
+data + nota na coluna Cliente, sem horas.
+
+A IMPORTAÇÃO do histórico (fase 2, #125) vive aqui também: import_workbook()
+lê as abas mensais da planilha real e converte em entries com origin='import'.
+Autoridade de data: o NOME da aba manda no mês/ano (a planilha real tem abas
+copiadas com ano errado nas células); da coluna A só sai o DIA.
 
 Dependência: openpyxl (puro Python; a stdlib não escreve xlsx) — a única lib
-nova do épico, também usada para LER na importação da fase 2.
+nova do épico, usada para escrever (export) e ler (import).
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+import re
+from collections import Counter
+from dataclasses import dataclass, field
+from datetime import date, datetime, time
 from pathlib import Path
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -164,3 +171,236 @@ def export_month(month: str, dest: Path | None = None) -> Path:
     wb.save(out)
     log.info("timesheet: mês %s exportado para %s", month, out)
     return out
+
+
+# -- importação do histórico (fase 2, #125) ------------------------------------
+
+_MONTH_NAMES = {"janeiro": 1, "fevereiro": 2, "marco": 3, "abril": 4, "maio": 5,
+                "junho": 6, "julho": 7, "agosto": 8, "setembro": 9,
+                "outubro": 10, "novembro": 11, "dezembro": 12}
+
+
+@dataclass
+class ImportReport:
+    """Relatório do import - é ele que o --dry-run imprime e que alimenta o
+    cadastro de aliases (grafias cruas de cliente com contagem)."""
+    source: str
+    dry_run: bool
+    months: list[tuple[str, str, int]] = field(default_factory=list)  # (aba, mês, importadas)
+    imported: int = 0
+    duplicates: int = 0        # chave natural já existia (reimport = no-op)
+    day_notes: int = 0
+    fixed_dates: int = 0       # células com mês/ano divergente da aba (aba manda)
+    ignored: list[tuple[str, int, str, str]] = field(default_factory=list)
+    unresolved: Counter = field(default_factory=Counter)   # grafia crua -> contagem
+    h_reaproveitada: Counter = field(default_factory=Counter)  # col H que não é hora extra
+    skipped_sheets: list[str] = field(default_factory=list)
+
+    def summary(self) -> str:
+        head = "DRY-RUN (nada gravado)" if self.dry_run else "importado"
+        out = [f"{self.source} - {head}:"]
+        for sheet, month, n in self.months:
+            out.append(f"  {month}  {n:>4} apontamento(s)  (aba {sheet!r})")
+        out.append(f"total: {self.imported} importado(s), {self.duplicates} já "
+                   f"existia(m), {self.day_notes} dia(s) especial(is), "
+                   f"{len(self.ignored)} linha(s) ignorada(s)")
+        if self.fixed_dates:
+            out.append(f"datas com mês/ano divergente da aba (a aba manda): "
+                       f"{self.fixed_dates}")
+        if self.unresolved:
+            out.append("clientes não resolvidos (cadastre/aliase e o histórico "
+                       "unifica):")
+            for raw, n in self.unresolved.most_common():
+                out.append(f"  {n:>4}x  {raw}")
+        if self.h_reaproveitada:
+            out.append("coluna H ignorada (não é marca de hora extra): " + ", ".join(
+                f"{v!r} ({n}x)" for v, n in self.h_reaproveitada.most_common()))
+        if self.ignored:
+            out.append("linhas ignoradas:")
+            for sheet, line, reason, preview in self.ignored:
+                out.append(f"  {sheet!r} linha {line}: {reason}  [{preview}]")
+        if self.skipped_sheets:
+            out.append("abas puladas (não são mês): " +
+                       ", ".join(repr(s) for s in self.skipped_sheets))
+        return "\n".join(out)
+
+
+def _clean(value) -> str:
+    """Célula -> texto normalizado (apara e colapsa espaços, inclusive NBSP -
+    a planilha real tem '401442\\xa0' e '\\xa0GAP\\xa04.1.03-G0')."""
+    if value is None:
+        return ""
+    return " ".join(str(value).split())
+
+
+def _cell_time(value) -> str | None:
+    """Célula de horário -> 'HH:MM' (time, datetime ou texto); None se não é hora."""
+    if isinstance(value, time):
+        return f"{value.hour:02d}:{value.minute:02d}"
+    if isinstance(value, datetime):
+        return f"{value.hour:02d}:{value.minute:02d}"
+    text = _clean(value)
+    for fmt in ("%H:%M", "%H:%M:%S"):
+        try:
+            t = datetime.strptime(text, fmt)
+            return f"{t.hour:02d}:{t.minute:02d}"
+        except ValueError:
+            pass
+    return None
+
+
+def _sheet_month(name: str, year_votes: list[int]) -> str | None:
+    """Nome da aba -> 'AAAA-MM'; None se a aba não é um mês (ex.: 'Modelo (3)').
+
+    O mês vem do NOME (acento e caixa-insensível: 'março(25)', 'Julho ( 26)');
+    o ano, do sufixo numérico (25 -> 2025). Aba sem sufixo (os meses de 2024)
+    usa a MAIORIA dos anos das datas da própria aba - não confiar em célula
+    individual: abas copiadas carregam datas com ano errado.
+    """
+    folded = timesheet_db._fold(name)
+    month = next((n for token, n in _MONTH_NAMES.items() if token in folded), None)
+    if month is None:
+        return None
+    m = re.search(r"\d{4}|\d{2}", folded)
+    if m:
+        year = int(m.group())
+        year = year if year >= 2000 else 2000 + year
+    elif year_votes:
+        year = Counter(year_votes).most_common(1)[0][0]
+    else:
+        return None
+    return f"{year:04d}-{month:02d}"
+
+
+def import_workbook(path: Path | str, dry_run: bool = False) -> ImportReport:
+    """Importa o histórico da planilha de apontamento (todas as abas mensais).
+
+    Cada linha com horário vira um entry origin='import' status='confirmed'
+    (histórico é fato consumado), posted pela coluna J (SIM/NÃO); linha de dia
+    especial (data + texto no Cliente, sem horas: 'feriado'...) vira day_note.
+    Idempotente pela chave natural (dia, início, fim, cliente _fold): reimportar
+    - ou importar por cima do que o app já registrou - não duplica.
+    Com dry_run, NADA é gravado: só o relatório.
+    """
+    path = Path(path)
+    try:
+        wb = load_workbook(path, read_only=True, data_only=True)
+    except PermissionError:
+        raise ValueError(f"não consegui abrir {path.name!r} — feche o arquivo no "
+                         "Excel e tente de novo") from None
+    report = ImportReport(source=str(path), dry_run=dry_run)
+
+    # chaves naturais do que JÁ existe (qualquer origem; descartada não conta)
+    existing = {
+        (e["work_date"], e["start_time"], e["end_time"],
+         timesheet_db._fold(e["client_name"] or e["client_text"] or ""))
+        for e in timesheet_db.list_entries() if e["status"] != "discarded"
+    }
+    resolved: dict[str, tuple[int | None, str]] = {}   # cache: _fold -> (id, canônico)
+
+    try:
+        for sheet in wb.sheetnames:
+            rows = [(r + (None,) * 10)[:10] for r in
+                    wb[sheet].iter_rows(min_row=1, max_col=10, values_only=True)]
+            votes = [a.year for a, *_ in rows if isinstance(a, (datetime, date))]
+            month = _sheet_month(sheet, votes)
+            if month is None:
+                report.skipped_sheets.append(sheet)
+                continue
+            n0 = report.imported
+            _import_sheet(sheet, month, rows, report, existing, resolved, dry_run)
+            report.months.append((sheet, month, report.imported - n0))
+    finally:
+        wb.close()
+    log.info("timesheet: import de %s -> %d novos, %d duplicados, %d ignorados%s",
+             path, report.imported, report.duplicates, len(report.ignored),
+             " (dry-run)" if dry_run else "")
+    return report
+
+
+def _import_sheet(sheet: str, month: str, rows: list, report: ImportReport,
+                  existing: set, resolved: dict, dry_run: bool) -> None:
+    year, month_num = int(month[:4]), int(month[5:7])
+    current_day: str | None = None
+
+    for line, row in enumerate(rows, start=1):
+        a, b, c, _total, e, f, g, h, loc, j = row
+        cliente, projeto, desc = _clean(e), _clean(f), _clean(g)
+        start, end = _cell_time(b), _cell_time(c)
+        if cliente == "Cliente" or _clean(a) == "Data":
+            continue                       # cabeçalho
+        preview = " | ".join(x for x in (cliente, projeto, desc) if x)[:60]
+
+        if a is not None and _clean(a):    # célula de data abre um dia novo
+            if isinstance(a, (datetime, date)):
+                if (a.month, a.year) != (month_num, year):
+                    report.fixed_dates += 1      # aba manda; da célula sai só o DIA
+                day = a.day
+            else:
+                m = re.fullmatch(r"(\d{1,2})([/-]\d{1,2}([/-]\d{2,4})?)?",
+                                 _clean(a))
+                day = int(m.group(1)) if m else None
+            try:
+                current_day = date(year, month_num, day).isoformat() if day else None
+            except (ValueError, TypeError):
+                current_day = None
+            if current_day is None:
+                report.ignored.append((sheet, line, f"data ilegível: {a!r}", preview))
+                continue
+
+        if not (cliente or desc or start or end):
+            continue                       # sobra do template (só D=0:00 e J)
+
+        if start is None and end is None:
+            if current_day and cliente and a is not None:
+                # dia especial na própria linha da data: feriado, férias...
+                note = cliente + (f" - {desc}" if desc else "")
+                if not dry_run:
+                    timesheet_db.set_day_note(current_day, note)
+                report.day_notes += 1
+            else:
+                report.ignored.append((sheet, line, "sem horas", preview))
+            continue
+        if start is None or end is None or current_day is None:
+            reason = "sem data válida" if current_day is None else "horário incompleto"
+            report.ignored.append((sheet, line, reason, preview))
+            continue
+        if end <= start:
+            report.ignored.append(
+                (sheet, line, f"fim ({end}) não é depois do início ({start})", preview))
+            continue
+
+        overtime = "extra" in timesheet_db._fold(h or "")
+        h_txt = _clean(h)
+        if h_txt and not overtime and h_txt != "Responsavel":
+            report.h_reaproveitada[h_txt] += 1
+
+        ckey = timesheet_db._fold(cliente)
+        if ckey not in resolved:
+            resolved[ckey] = timesheet_db.resolve_client(cliente)
+        cid, cname = resolved[ckey]     # canônico quando resolve; senão o cru
+        if cid is None and cliente:     # grafias fold-iguais contam juntas
+            report.unresolved[cname] += 1
+
+        # chave natural pelo nome que fica no banco (canônico p/ resolvido):
+        # 'Usina Coruripe' via alias deduplica contra 'Coruripe' já gravado
+        key = (current_day, start, end, timesheet_db._fold(cname))
+        if key in existing:
+            report.duplicates += 1
+            continue
+        existing.add(key)                  # dedupe também DENTRO da planilha
+
+        pid, ptext = None, projeto
+        if cid is not None and projeto:
+            match = [p for p in timesheet_db.list_projects(cid)
+                     if p["code"].casefold() == projeto.casefold()]
+            if match:
+                pid, ptext = match[0]["id"], ""
+        if not dry_run:
+            timesheet_db.add_entry(
+                work_date=current_day, start_time=start, end_time=end,
+                client_id=cid, client_text="" if cid is not None else cname,
+                project_id=pid, project_text=ptext, description=desc,
+                overtime=overtime, location=_clean(loc),
+                posted=timesheet_db._fold(j or "") == "sim", origin="import")
+        report.imported += 1

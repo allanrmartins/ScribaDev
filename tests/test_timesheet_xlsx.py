@@ -1,4 +1,4 @@
-"""Testes da exportação Excel do timesheet (épico #118, #122).
+"""Testes da exportação e importação Excel do timesheet (épico #118, #122/#125).
 
 Exporta um mês sintético (feriado + dias com 1, 2 e 3 blocos) e RELÊ com
 openpyxl validando: layout A-M (cabeçalhos exatos da planilha real, incluindo
@@ -6,6 +6,11 @@ openpyxl validando: layout A-M (cabeçalhos exatos da planilha real, incluindo
 (Total dia generalizado para N blocos), L/M de resumo, marca 'hora extra' na H,
 SIM/NÃO refletindo `posted`, dropdowns (data validation), exclusão de
 suggested/discarded e não-sobrescrita (sufixo _2).
+
+A importação (#125) é testada com uma planilha sintética que REPRODUZ as
+pegadinhas da real: aba com ano só no nome, células de data com ano errado
+(aba copiada), NBSP em projeto, coluna H reaproveitada, linhas de anotação sem
+horas, sobras de template (D=0:00 + J) e aba 'Modelo'.
 
 Roda sem dependências externas além do openpyxl (dependência do projeto):
 python -m unittest discover -s tests
@@ -15,7 +20,7 @@ import shutil
 import sys
 import tempfile
 import unittest
-from datetime import time
+from datetime import datetime, time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -153,6 +158,122 @@ class TimesheetXlsxTests(unittest.TestCase):
         ws = load_workbook(tsx.export_month("2026-08", self.out_dir))["2026-08"]
         self.assertEqual(ws.max_row, 2)
         self.assertEqual(ws["E2"].value, "férias")
+
+
+class TimesheetImportTests(unittest.TestCase):
+    """Importação do histórico (#125) sobre planilha com as pegadinhas reais."""
+
+    _HEAD = ["Data", "Início", "Fim", "Total", "Cliente", "Projeto",
+             "Descrição", "Responsavel", "Local", None]
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="scriba_tsi_"))
+        self._app0, self._logs0, self._db0 = util.APP_DIR, util.LOGS_DIR, tsdb.DB_PATH
+        util.APP_DIR = self.tmp / "app"
+        util.LOGS_DIR = util.APP_DIR / "logs"
+        tsdb.DB_PATH = self.tmp / "timesheet.db"
+
+    def tearDown(self):
+        util.APP_DIR, util.LOGS_DIR, tsdb.DB_PATH = self._app0, self._logs0, self._db0
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _planilha(self) -> Path:
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Julho ( 26)"           # nome de aba irregular da planilha real
+        ws.append(self._HEAD)
+        # célula com ANO ERRADO (aba copiada): o nome da aba manda -> 2026-07-01
+        ws.append([datetime(2025, 7, 1), time(8, 0), time(13, 0), time(5, 0),
+                   "Coruripe", "403240\xa0", "aplicacao de notas", None, None, "SIM"])
+        ws.append([None, time(14, 0), time(17, 0), time(3, 0), "coruripe",
+                   "403240", "aplicacao de notas", "hora extra", None, "NÃO"])
+        ws.append([None, None, None, time(0, 0), None, None, None, None, None,
+                   "NÃO"])                 # sobra do template: some em silêncio
+        ws.append([datetime(2026, 7, 2), None, None, time(0, 0), "feriado",
+                   None, None, None, None, "NÃO"])   # dia especial -> day_note
+        ws.append([datetime(2026, 7, 3), time(8, 0), time(12, 0), time(4, 0),
+                   "Usina Coruripe", None, "call kickoff",
+                   "solicitado monique", None, None])  # H reaproveitada, J vazio
+        ws.append([None, None, None, time(0, 0), "Simpar", "FM / WF",
+                   "anotacao sem horas", None, None, "NÃO"])  # ignorada c/ motivo
+        ws.append([None, time(15, 0), time(14, 0), None, "Delta", None,
+                   "fim antes do inicio", None, None, "NÃO"])  # ignorada c/ motivo
+        ws2 = wb.create_sheet("agosto")    # SEM ano no nome: maioria das datas
+        ws2.append(self._HEAD)
+        ws2.append([datetime(2026, 8, 3), time(9, 0), time(11, 0), None,
+                    "Célera", "\xa0GAP\xa04.1.03-G01", "dev relatorio", None,
+                    "Remoto", "SIM"])
+        wb.create_sheet("Modelo (3)").append(self._HEAD)   # não é mês: pulada
+        path = self.tmp / "Apontamento.xlsx"
+        wb.save(path)
+        return path
+
+    def test_import_completo(self):
+        report = tsx.import_workbook(self._planilha())
+        self.assertEqual(report.imported, 4)
+        self.assertEqual(report.duplicates, 0)
+        self.assertEqual(report.day_notes, 1)
+        self.assertEqual(report.fixed_dates, 1)       # 2025-07-01 na aba de 2026
+        self.assertEqual(report.skipped_sheets, ["Modelo (3)"])
+        self.assertEqual([m[1] for m in report.months], ["2026-07", "2026-08"])
+        self.assertEqual(sorted(r[2] for r in report.ignored),
+                         ["fim (14:00) não é depois do início (15:00)", "sem horas"])
+        # grafias fold-iguais contam juntas; Célera com acento preservado
+        self.assertEqual(report.unresolved,
+                         {"Coruripe": 2, "Usina Coruripe": 1, "Célera": 1})
+        self.assertIn("solicitado monique", report.h_reaproveitada)
+
+        # o que caiu no banco: dia com ano corrigido, NBSP normalizado, posted
+        # da coluna J, hora extra da H, origin='import'
+        dia1 = tsdb.list_entries(day="2026-07-01")
+        self.assertEqual(len(dia1), 2)
+        self.assertEqual(dia1[0]["project_text"], "403240")
+        self.assertEqual((dia1[0]["posted"], dia1[1]["posted"]), (1, 0))
+        self.assertIsNotNone(dia1[0]["posted_at"])
+        self.assertEqual(dia1[1]["overtime"], 1)
+        self.assertTrue(all(e["origin"] == "import" and e["status"] == "confirmed"
+                            for e in dia1))
+        self.assertEqual(tsdb.day_notes_month("2026-07"), {"2026-07-02": "feriado"})
+        ago = tsdb.list_entries(day="2026-08-03")[0]
+        self.assertEqual(ago["project_text"], "GAP 4.1.03-G01")
+        self.assertEqual(ago["location"], "Remoto")
+
+    def test_dry_run_nao_grava_e_reimport_nao_duplica(self):
+        path = self._planilha()
+        dry = tsx.import_workbook(path, dry_run=True)
+        self.assertTrue(dry.dry_run)
+        self.assertEqual(dry.imported, 4)
+        self.assertEqual(tsdb.list_entries(), [])                 # nada gravado
+        self.assertEqual(tsdb.day_notes_month("2026-07"), {})
+
+        tsx.import_workbook(path)
+        again = tsx.import_workbook(path)                         # reimport: no-op
+        self.assertEqual(again.imported, 0)
+        self.assertEqual(again.duplicates, 4)
+        self.assertEqual(len(tsdb.list_entries()), 4)
+
+    def test_resolucao_e_dedupe_contra_o_banco(self):
+        # cliente cadastrado + alias: import resolve (acento-insensível) e a
+        # chave natural deduplica contra o que o APP já registrou no mesmo slot
+        cid = tsdb.add_client("Coruripe")
+        tsdb.add_alias(cid, "usina coruripe")
+        tsdb.add_client("Celera")           # sem acento: casa "Célera" via _fold
+        tsdb.add_entry(work_date="2026-07-01", start_time="08:00",
+                       end_time="13:00", client_id=cid,
+                       description="registrado pelo app")
+        report = tsx.import_workbook(self._planilha())
+        self.assertEqual(report.unresolved, {})                   # tudo resolvido
+        self.assertEqual(report.duplicates, 1)                    # slot já existia
+        self.assertEqual(report.imported, 3)
+        kick = tsdb.list_entries(day="2026-07-03")[0]
+        self.assertEqual(kick["client_id"], cid)                  # via alias
+        self.assertEqual(kick["client_name"], "Coruripe")
+
+    def test_planilha_inexistente_ou_travada(self):
+        with self.assertRaises(Exception):
+            tsx.import_workbook(self.tmp / "nao-existe.xlsx")
 
 
 if __name__ == "__main__":
