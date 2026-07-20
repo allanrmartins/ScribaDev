@@ -144,8 +144,8 @@ class TimesheetWindowTests(unittest.TestCase):
         day13 = win._tree.topLevelItem(1)
         confirmed = next(day13.child(i) for i in range(day13.childCount())
                          if win._entry_items[day13.child(i)]["status"] == "confirmed")
-        self.assertEqual(confirmed.checkState(5), Qt.Unchecked)
-        confirmed.setCheckState(5, Qt.Checked)
+        self.assertEqual(confirmed.checkState(6), Qt.Unchecked)
+        confirmed.setCheckState(6, Qt.Checked)
         # a mutação é diferida (singleShot 0) para fora da pilha do setCheckState
         # - o refresh inline aqui destruiria o item AINDA EM USO (use-after-free
         # que segfaultava a suíte); processEvents dispara o timer com segurança
@@ -155,7 +155,7 @@ class TimesheetWindowTests(unittest.TestCase):
         day13 = win._tree.topLevelItem(1)   # itens recriados pelo refresh
         sug = next(day13.child(i) for i in range(day13.childCount())
                    if win._entry_items[day13.child(i)]["status"] == "suggested")
-        sug.setCheckState(5, Qt.Checked)
+        sug.setCheckState(6, Qt.Checked)
         self.qapp.processEvents()
         self.assertEqual(len(tsdb.list_entries(status="suggested")), 0)
         self.assertEqual(len(tsdb.list_entries(status="confirmed", posted=True)), 2)
@@ -169,15 +169,15 @@ class TimesheetWindowTests(unittest.TestCase):
         win = self._data_window()
         day13 = win._tree.topLevelItem(1)
         self.assertIn(day13, win._day_items)
-        self.assertEqual(day13.checkState(5), Qt.Unchecked)
-        day13.setCheckState(5, Qt.Checked)
+        self.assertEqual(day13.checkState(6), Qt.Unchecked)
+        day13.setCheckState(6, Qt.Checked)
         self.qapp.processEvents()
         rows = tsdb.list_entries(day="2026-07-13")
         self.assertTrue(all(r["status"] == "confirmed" and r["posted"] for r in rows))
         # desmarca o dia: continuam confirmados, só saem do 'lançado'
         day13 = win._tree.topLevelItem(1)
-        self.assertEqual(day13.checkState(5), Qt.Checked)
-        day13.setCheckState(5, Qt.Unchecked)
+        self.assertEqual(day13.checkState(6), Qt.Checked)
+        day13.setCheckState(6, Qt.Unchecked)
         self.qapp.processEvents()
         rows = tsdb.list_entries(day="2026-07-13")
         self.assertTrue(all(r["status"] == "confirmed" and not r["posted"] for r in rows))
@@ -318,6 +318,78 @@ class TimesheetWindowTests(unittest.TestCase):
         self.assertEqual(d["start_time"], "10:15")
         self.assertTrue(d["end_time"] == "" or d["end_time"] > "10:15")
         self.assertEqual(d["client_text"], "Gencau")
+
+    def test_coluna_extra_flag_proprio(self):
+        """Hora extra é COLUNA própria (flag "extra" destacado), não mais
+        concatenada na descrição - na grade e na fila A lançar."""
+        cid, _eid = self._seed()
+        tsdb.add_entry(work_date="2026-07-13", start_time="18:00", end_time="19:00",
+                       client_id=cid, description="plantao faturamento", overtime=True)
+        win = self._data_window()
+        self.assertEqual(win._tree.columnCount(), 7)
+        self.assertEqual(win._tree.headerItem().text(5), "Extra")
+        self.assertEqual(win._tree.headerItem().text(6), "Lançado")
+        day13 = win._tree.topLevelItem(1)
+        rows = {win._entry_items[day13.child(i)]["start_time"]: day13.child(i)
+                for i in range(day13.childCount())}
+        self.assertEqual(rows["18:00"].text(5), "extra")
+        self.assertNotIn("(extra)", rows["18:00"].text(4))   # descrição limpa
+        self.assertEqual(rows["08:00"].text(5), "")          # sem extra: vazio
+        # fila A lançar: mesma coluna, mesmo flag
+        self.assertEqual(win._queue_tree.headerItem().text(5), "Extra")
+        node13 = next(win._queue_tree.topLevelItem(i) for i in
+                      range(win._queue_tree.topLevelItemCount())
+                      if "13/07" in win._queue_tree.topLevelItem(i).text(0))
+        texts = [node13.child(i).text(5) for i in range(node13.childCount())]
+        self.assertIn("extra", texts)
+
+    def test_agrupar_sugestoes_num_apontamento(self):
+        """Agrupar: N sugestões fragmentadas do dia viram UM apontamento -
+        horário min→max, descrições concatenadas (dedupe), extra se qualquer
+        um; no aplicar, o mais cedo vira o definitivo confirmado e o resto
+        vira tombstone (reunião) ou é apagado (manual)."""
+        from scriba.qt.timesheet_ui import _merge_entries
+
+        cid = tsdb.add_client("Coruripe")
+        tsdb.add_project(cid, "403240")
+        for start, end, desc, key in (
+                ("08:00", "10:00", "Reforma tributária NF-e", "2026-07-20T08:00:00"),
+                ("10:00", "10:30", "Status Report", "2026-07-20T10:00:00"),
+                ("10:30", "11:00", "Debug BAdI fiscal", "2026-07-20T10:30:00"),
+                ("10:30", "11:00", "debug badi fiscal", "2026-07-20T10:31:00")):
+            tsdb.upsert_suggestion({
+                "work_date": "2026-07-20", "start_time": start, "end_time": end,
+                "client_id": cid, "description": desc, "meeting_started_at": key})
+        win = self._data_window()
+        sel = tsdb.list_entries(status="suggested")
+        self.assertEqual(len(sel), 4)
+        merged = _merge_entries(sel)
+        self.assertEqual((merged["start_time"], merged["end_time"]), ("08:00", "11:00"))
+        # concatenação na ordem do dia, com dedupe sem caixa (a repetida cai)
+        self.assertEqual(merged["description"],
+                         "Reforma tributária NF-e; Status Report; Debug BAdI fiscal")
+        self.assertEqual(merged["overtime"], 0)
+        self.assertEqual(merged["client_name"], "Coruripe")
+        # aplicar (o que o Salvar do diálogo dispara): 1 confirmado, 3 tombstones
+        win._apply_group({
+            "work_date": "2026-07-20", "blocks": [("08:00", "11:00")],
+            "_client": "Coruripe", "_project": "403240",
+            "description": merged["description"], "overtime": False, "location": ""},
+            sel[0], sel[1:])
+        self.assertEqual(tsdb.list_entries(status="suggested"), [])
+        rows = tsdb.list_entries(day="2026-07-20", status="confirmed")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["id"], sel[0]["id"])
+        self.assertEqual((rows[0]["start_time"], rows[0]["end_time"]), ("08:00", "11:00"))
+        self.assertEqual(rows[0]["project_code"], "403240")
+        # tombstones seguram o reprocesso: meeting_started_at preservado
+        dead = tsdb.list_entries(day="2026-07-20", status="discarded")
+        self.assertEqual(len(dead), 3)
+        self.assertTrue(all(d["meeting_started_at"] for d in dead))
+        # guarda: com menos de 2 selecionados o agrupar é no-op silencioso
+        # (não abre diálogo nem toca no banco)
+        win._group_entries(rows)
+        self.assertEqual(len(tsdb.list_entries(day="2026-07-20", status="confirmed")), 1)
 
     def test_restyle_theme_re_renderiza_do_cache(self):
         self._seed()

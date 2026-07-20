@@ -7,7 +7,8 @@ via app.ui):
 1. Apontamentos - grade do mês agrupada por dia (QTreeWidget multi-coluna) com
    entrada rápida no topo e totais no rodapé; duplo clique edita.
 2. Sugestões - fila de revisão do que o motor (#120) criou: aceitar, editar e
-   aceitar, descartar, cadastrar cliente não resolvido, abrir a reunião.
+   aceitar, agrupar e aceitar (N sugestões fragmentadas viram UM apontamento),
+   descartar, cadastrar cliente não resolvido, abrir a reunião.
 3. A lançar - confirmados ainda não lançados no sistema de horas do usuário
    (Multi Dados etc.), com checkbox por linha e o export Excel do mês (#122).
 4. Cadastro - clientes (novo/renomear/desativar/mesclar), aliases e projetos.
@@ -40,6 +41,9 @@ log = logging.getLogger("scriba.qt.timesheet")
 
 _WEEK = ("seg", "ter", "qua", "qui", "sex", "sáb", "dom")
 _LOCATIONS = ("", "Base", "In Loco", "Remoto")
+_COL_EXTRA = 5    # flag de hora extra (grade e fila) - coluna própria, não
+                  # mais concatenada na descrição (a coluna H da planilha)
+_COL_POSTED = 6   # checkbox "Lançado" da grade (a coluna J da planilha)
 
 
 def _fmt_min(minutes: int) -> str:
@@ -66,6 +70,30 @@ def _shift_month(month: str, delta: int) -> str:
     y, m = d.year, d.month + delta
     y, m = y + (m - 1) // 12, (m - 1) % 12 + 1
     return f"{y:04d}-{m:02d}"
+
+
+def _merge_entries(entries: list[dict]) -> dict:
+    """Rascunho da FUSÃO de N apontamentos do mesmo dia (agrupar): horário do
+    primeiro início ao último fim, descrições concatenadas com "; " (dedupe sem
+    caixa, na ordem do dia), extra se QUALQUER um for extra; cliente, projeto e
+    local vêm do primeiro que tiver. O resultado alimenta o _EntryDialog - o
+    usuário revisa e ajusta antes de qualquer gravação."""
+    sel = sorted(entries, key=lambda e: (e["start_time"], e["end_time"]))
+    merged = dict(sel[0])
+    merged["end_time"] = max(e["end_time"] for e in sel)
+    descs: list[str] = []
+    for e in sel:
+        d = (e["description"] or "").strip()
+        if d and d.casefold() not in (x.casefold() for x in descs):
+            descs.append(d)
+    merged["description"] = "; ".join(descs)
+    merged["overtime"] = int(any(e["overtime"] for e in sel))
+    merged["client_name"] = next((e["client_name"] for e in sel if e["client_name"]), None)
+    merged["client_text"] = next((e["client_text"] for e in sel if e["client_text"]), "")
+    merged["project_code"] = next((e["project_code"] for e in sel if e["project_code"]), None)
+    merged["project_text"] = next((e["project_text"] for e in sel if e["project_text"]), "")
+    merged["location"] = next((e["location"] for e in sel if e["location"]), "")
+    return merged
 
 
 class TimesheetWindow(QWidget):
@@ -202,8 +230,11 @@ class TimesheetWindow(QWidget):
         lay.addLayout(nav)
 
         self._tree = self._make_tree(
-            ["Horário", "Total", "Cliente", "Projeto", "Descrição", "Lançado"],
-            widths=(150, 48, 140, 120, 0, 64), stretch=4)
+            ["Horário", "Total", "Cliente", "Projeto", "Descrição", "Extra", "Lançado"],
+            widths=(150, 48, 140, 120, 0, 52, 64), stretch=4)
+        # multi-seleção: "Agrupar selecionados…" do menu de contexto funde
+        # apontamentos fragmentados do dia num lançamento só
+        self._tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._tree.itemDoubleClicked.connect(self._edit_item)
         self._tree.itemChanged.connect(self._on_entry_check)
         self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -310,6 +341,11 @@ class TimesheetWindow(QWidget):
             return
         menu = QMenu(self)
         menu.addAction(theme.qicon("edit"), "Editar…", lambda: self._edit_item(item, 0))
+        sel = [self._entry_items[i] for i in self._tree.selectedItems()
+               if i in self._entry_items]
+        if len(sel) > 1:
+            menu.addAction(f"Agrupar selecionados ({len(sel)})…",
+                           lambda: self._group_entries(sel))
         if entry["posted"]:
             menu.addAction("Desmarcar lançado",
                            lambda: self._bg(lambda: tsdb.set_posted([entry["id"]], False)))
@@ -348,7 +384,7 @@ class TimesheetWindow(QWidget):
         (modo inline dos testes) faria tree.clear() destruir o próprio item ainda
         em uso na pilha - use-after-free real, capturado pelo faulthandler na
         caça ao segfault intermitente da suíte."""
-        if col != 5 or self._rendering:
+        if col != _COL_POSTED or self._rendering:
             return
         from PySide6.QtCore import QTimer
 
@@ -356,11 +392,11 @@ class TimesheetWindow(QWidget):
         if day_entries is not None:
             # checkbox do DIA: marcar consolida (confirma+lança) o dia inteiro;
             # desmarcar só tira o "lançado" dos confirmados (sugestão fica como está)
-            if item.checkState(5) == Qt.Checked:
+            if item.checkState(_COL_POSTED) == Qt.Checked:
                 ids = [e["id"] for e in day_entries]
                 QTimer.singleShot(
                     0, lambda: self._bg(lambda: tsdb.confirm_and_post(ids)))
-            elif item.checkState(5) == Qt.Unchecked:
+            elif item.checkState(_COL_POSTED) == Qt.Unchecked:
                 ids = [e["id"] for e in day_entries
                        if e["status"] == "confirmed" and e["posted"]]
                 if ids:
@@ -370,7 +406,7 @@ class TimesheetWindow(QWidget):
         e = self._entry_items.get(item)
         if e is None:
             return
-        posted = item.checkState(5) == Qt.Checked
+        posted = item.checkState(_COL_POSTED) == Qt.Checked
         if e["status"] == "suggested":
             if posted:  # marcar sugestão = confirmar E lançar num gesto
                 QTimer.singleShot(
@@ -393,32 +429,70 @@ class TimesheetWindow(QWidget):
 
     def _save_entry_fields(self, fields: dict, entry_id: int | None = None,
                            accept_after: bool = False) -> None:
+        self._bg(lambda: self._persist_fields(fields, entry_id, accept_after))
+
+    def _persist_fields(self, fields: dict, entry_id: int | None = None,
+                        accept_after: bool = False) -> None:
         """Persiste os campos do diálogo: resolve cliente/projeto e grava um
         apontamento POR BLOCO de horário (lançamento fracionado). Na edição, o
         1º bloco atualiza o registro; blocos extras viram apontamentos novos
-        (fracionar um bloco existente - ex.: tirar o almoço do meio). Fora da GUI."""
-        def work():
-            cid, text = tsdb.resolve_client(fields.pop("_client"))
-            project = fields.pop("_project")
-            pid, ptext = None, project
-            if cid is not None and project:
-                match = [p for p in tsdb.list_projects(cid)
-                         if p["code"].casefold() == project.casefold()]
-                if match:
-                    pid, ptext = match[0]["id"], ""
-            blocks = fields.pop("blocks")
-            common = dict(fields, client_id=cid, client_text="" if cid else text,
-                          project_id=pid, project_text=ptext)
-            if entry_id is None:
-                for start, end in blocks:
-                    tsdb.add_entry(start_time=start, end_time=end, **common)
-                return
-            upd = dict(common, start_time=blocks[0][0], end_time=blocks[0][1])
-            if accept_after:
-                upd["status"] = "confirmed"
-            tsdb.update_entry(entry_id, **upd)
-            for start, end in blocks[1:]:  # extras: apontamentos novos (manuais)
+        (fracionar um bloco existente - ex.: tirar o almoço do meio). Roda FORA
+        da GUI (dentro de _bg) e consome `fields` (pop)."""
+        cid, text = tsdb.resolve_client(fields.pop("_client"))
+        project = fields.pop("_project")
+        pid, ptext = None, project
+        if cid is not None and project:
+            match = [p for p in tsdb.list_projects(cid)
+                     if p["code"].casefold() == project.casefold()]
+            if match:
+                pid, ptext = match[0]["id"], ""
+        blocks = fields.pop("blocks")
+        common = dict(fields, client_id=cid, client_text="" if cid else text,
+                      project_id=pid, project_text=ptext)
+        if entry_id is None:
+            for start, end in blocks:
                 tsdb.add_entry(start_time=start, end_time=end, **common)
+            return
+        upd = dict(common, start_time=blocks[0][0], end_time=blocks[0][1])
+        if accept_after:
+            upd["status"] = "confirmed"
+        tsdb.update_entry(entry_id, **upd)
+        for start, end in blocks[1:]:  # extras: apontamentos novos (manuais)
+            tsdb.add_entry(start_time=start, end_time=end, **common)
+
+    # ------------------------------------------------------------- agrupar ----
+
+    def _group_entries(self, sel: list[dict]) -> None:
+        """Agrupa 2+ apontamentos do MESMO dia num só (a manhã fragmentada em 4
+        sugestões era UM lançamento): abre o diálogo com o rascunho fundido
+        (_merge_entries) para revisar - horário, descrição concatenada, tudo
+        editável - e só grava no Salvar, via _apply_group. Cancelar não toca em
+        nada."""
+        if len(sel) < 2:
+            return
+        if len({e["work_date"] for e in sel}) > 1:
+            QMessageBox.warning(self, "Agrupar",
+                                "Selecione apontamentos do mesmo dia para agrupar.")
+            return
+        sel = sorted(sel, key=lambda e: (e["start_time"], e["end_time"]))
+        dlg = _EntryDialog(self, _merge_entries(sel), self._data or {})
+        if dlg.exec() == QDialog.Accepted:
+            self._apply_group(dlg.fields(), sel[0], sel[1:])
+
+    def _apply_group(self, fields: dict, primary: dict, rest: list[dict]) -> None:
+        """Grava o agrupamento: o apontamento MAIS CEDO vira o definitivo
+        (atualizado com os campos do diálogo e confirmado - agrupar é validar);
+        os demais somem da grade - os de reunião viram status='discarded' (o
+        tombstone preserva o meeting_started_at e segura o reprocesso), os
+        manuais são apagados. O primário mantém o vínculo com a SUA reunião
+        ("Abrir reunião" continua funcionando para ela)."""
+        def work():
+            self._persist_fields(fields, entry_id=primary["id"], accept_after=True)
+            for e in rest:
+                if e["meeting_started_at"]:
+                    tsdb.update_entry(e["id"], status="discarded")
+                else:
+                    tsdb.delete_entry(e["id"])
 
         self._bg(work)
 
@@ -430,8 +504,8 @@ class TimesheetWindow(QWidget):
         lay.setContentsMargins(4, 8, 4, 4)
         lay.setSpacing(6)
 
-        hint = QLabel("Reuniões processadas viram sugestões - revise, ajuste e confirme. "
-                      "Cliente em destaque = não cadastrado.")
+        hint = QLabel("Reuniões processadas viram sugestões - revise, ajuste, agrupe e "
+                      "confirme. Cliente em destaque = não cadastrado.")
         hint.setProperty("role", "muted")
         lay.addWidget(hint)
 
@@ -450,10 +524,16 @@ class TimesheetWindow(QWidget):
         self._b_accept = widgets.ModernButton("Aceitar", self._sug_accept, kind="primary")
         self._b_edit = widgets.ModernButton("Editar e aceitar…",
                                             lambda: self._sug_edit_accept(None))
+        self._b_group = widgets.ModernButton("Agrupar e aceitar…", self._sug_group_accept)
+        widgets.add_tooltip(self._b_group,
+                            "Funde as sugestões selecionadas num apontamento só - "
+                            "horário do primeiro ao último, descrições concatenadas - "
+                            "e abre para revisar antes de confirmar")
         self._b_discard = widgets.ModernButton("Descartar", self._sug_discard)
         self._b_client = widgets.ModernButton("Cadastrar cliente…", self._sug_register_client)
         self._b_open = widgets.ModernButton("Abrir reunião", self._sug_open_meeting)
-        for b in (self._b_accept, self._b_edit, self._b_discard, self._b_client, self._b_open):
+        for b in (self._b_accept, self._b_edit, self._b_group, self._b_discard,
+                  self._b_client, self._b_open):
             btns.addWidget(b)
         btns.addStretch(1)
         lay.addLayout(btns)
@@ -476,6 +556,15 @@ class TimesheetWindow(QWidget):
         e = self._sug_items.get(item) if item is not None else self._sug_selected()
         if e:
             self._open_editor(e, accept_after=True)
+
+    def _sug_group_accept(self) -> None:
+        sel = self._sug_selection()
+        if len(sel) < 2:
+            QMessageBox.information(self, "Agrupar",
+                                    "Selecione duas ou mais sugestões para agrupar "
+                                    "(Ctrl/Shift + clique).")
+            return
+        self._group_entries(sel)
 
     def _sug_discard(self) -> None:
         sel = self._sug_selection()
@@ -557,8 +646,8 @@ class TimesheetWindow(QWidget):
         lay.addWidget(hint)
 
         self._queue_tree = self._make_tree(
-            ["Horário", "Total", "Cliente", "Projeto", "Descrição"],
-            widths=(150, 48, 140, 120, 0), stretch=4)
+            ["Horário", "Total", "Cliente", "Projeto", "Descrição", "Extra"],
+            widths=(150, 48, 140, 120, 0, 52), stretch=4)
         lay.addWidget(self._queue_tree, 1)
 
         btns = QHBoxLayout()
@@ -725,13 +814,26 @@ class TimesheetWindow(QWidget):
                               if data["queue"] else "A lançar")
 
     def _entry_cells(self, e: dict, with_date: bool = False) -> list[str]:
-        desc = (e["description"] or "") + (" (extra)" if e["overtime"] else "")
+        # hora extra tem coluna própria (flag "extra" destacado), não entra
+        # mais concatenada na descrição
         cells = [f"{e['start_time']}-{e['end_time']}", _fmt_min(e["minutes"]),
                  e["client_name"] or e["client_text"] or "-",
-                 e["project_code"] or e["project_text"] or "", desc.strip()]
+                 e["project_code"] or e["project_text"] or "",
+                 (e["description"] or "").strip(),
+                 "extra" if e["overtime"] else ""]
         if with_date:
             cells.insert(0, _day_label(e["work_date"]))
         return cells
+
+    def _mark_extra(self, item: QTreeWidgetItem, e: dict) -> None:
+        """Destaque do flag de hora extra: azul (info) e negrito - vence
+        inclusive o âmbar de linha sugerida (aplicar DEPOIS)."""
+        if not e["overtime"]:
+            return
+        item.setForeground(_COL_EXTRA, QBrush(QColor(theme.active().info)))
+        f = item.font(_COL_EXTRA)
+        f.setBold(True)
+        item.setFont(_COL_EXTRA, f)
 
     def _render_entries(self, data: dict) -> None:
         t = theme.active()
@@ -748,23 +850,24 @@ class TimesheetWindow(QWidget):
             total = data["totals"].get(day)
             node = QTreeWidgetItem(self._tree, [
                 _day_label(day), _fmt_min(total) if total else "", "", "",
-                data["notes"].get(day, ""), ""])
+                data["notes"].get(day, ""), "", ""])
             for col in (0, 1):
                 node.setFont(col, bold)
             for e in by_day.get(day, ()):
                 # checkbox "Lançado" em TODAS as linhas (a coluna J da planilha):
                 # numa sugestão, marcar = confirmar E lançar num gesto só
                 item = QTreeWidgetItem(node, self._entry_cells(e) + [""])
-                item.setCheckState(5, Qt.Checked if e["posted"] else Qt.Unchecked)
+                item.setCheckState(_COL_POSTED, Qt.Checked if e["posted"] else Qt.Unchecked)
                 if e["status"] == "suggested":
                     for col in range(item.columnCount()):
                         item.setForeground(col, QBrush(QColor(t.warn)))
+                self._mark_extra(item, e)
                 self._entry_items[item] = e
             entries = by_day.get(day, [])
             if entries:
                 # checkbox do DIA: consolidar tudo de uma vez ("marcar esse dia")
                 posted = sum(1 for e in entries if e["posted"])
-                node.setCheckState(5, Qt.Checked if posted == len(entries)
+                node.setCheckState(_COL_POSTED, Qt.Checked if posted == len(entries)
                                    else Qt.PartiallyChecked if posted else Qt.Unchecked)
                 self._day_items[node] = entries
             else:
@@ -806,6 +909,7 @@ class TimesheetWindow(QWidget):
                 item = QTreeWidgetItem(node, self._entry_cells(e))
                 item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
                 item.setCheckState(0, Qt.Unchecked)
+                self._mark_extra(item, e)
                 self._queue_items[item] = e
             node.setExpanded(True)  # só expande DEPOIS dos filhos existirem
 
