@@ -577,6 +577,11 @@ def qss(theme: Theme | None = None) -> str:
     QTreeWidget::item {{ padding: 3px 2px; }}
     QTreeWidget::item:selected, QTreeView::item:selected {{ background: {t.accent}; color: {t.on_accent}; }}
     QTreeWidget::item:hover, QTreeView::item:hover {{ background: {t.surface}; }}
+    /* selecionada E sob o mouse: sem esta regra o :hover (surface, quase o fundo)
+       vence o :selected e a linha "perde" a seleção no Shift+clique da grade */
+    QTreeWidget::item:selected:hover, QTreeView::item:selected:hover {{
+        background: {t.accent_hover}; color: {t.on_accent};
+    }}
 
     QSplitter::handle {{ background: {t.border}; }}
     QSplitter::handle:horizontal {{ width: 4px; }}
