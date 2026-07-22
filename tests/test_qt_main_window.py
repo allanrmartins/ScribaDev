@@ -430,6 +430,38 @@ class LivePollRobustnessTests(unittest.TestCase):
         self.assertFalse(any("Teams" in t for t in textos))
 
 
+class RefreshTimesheetTests(unittest.TestCase):
+    """Sugestão criada no fim de uma call tem que APARECER na janela de
+    Apontamentos aberta, sem fechar e reabrir - mesmo padrão do refresh da capa:
+    só toca a janela se ela existe e está visível (fechada/oculta o show()
+    recarrega ao abrir)."""
+
+    def _app(self, timesheet_win):
+        from scriba.main import ScribaApp
+
+        app = ScribaApp.__new__(ScribaApp)
+        app.timesheet_win = timesheet_win
+        app.ui = lambda fn: fn()   # marshal síncrono nos testes
+        return app
+
+    def test_refresh_quando_visivel(self):
+        from unittest import mock
+
+        win = mock.Mock()
+        win.isVisible.return_value = True
+        self._app(win).refresh_timesheet()
+        win.refresh.assert_called_once()
+
+    def test_nao_refresca_oculta_nem_inexistente(self):
+        from unittest import mock
+
+        win = mock.Mock()
+        win.isVisible.return_value = False
+        self._app(win).refresh_timesheet()
+        win.refresh.assert_not_called()
+        self._app(None).refresh_timesheet()   # janela nunca aberta: não estoura
+
+
 class RefreshHomeAfterProcessTests(unittest.TestCase):
     """#90 (corrida rename x refresh): o worker agenda um refresh autoritativo da capa
     DEPOIS do reindex_renamed; o helper só toca a janela se ela existe e está visível."""

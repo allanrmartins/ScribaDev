@@ -454,6 +454,20 @@ class ScribaApp:
             self.timesheet_win = TimesheetWindow(self)
         self.timesheet_win.show()
 
+    def refresh_timesheet(self) -> None:
+        """Reflete NA HORA, na janela de Apontamentos ABERTA, mudanças feitas no
+        banco por fora dela - sugestão nova no fim de uma call, varredura do
+        boot. Sem isso a janela só recarregava no show() (fechar e reabrir).
+        Chamável de qualquer thread; mesmo padrão do _refresh_home_after_process:
+        o teste de existe+visível roda NA thread da GUI, e janela fechada/oculta
+        é no-op (o show() dela já recarrega ao abrir)."""
+        def _do() -> None:
+            win = self.timesheet_win
+            if win is not None and win.isVisible():
+                win.refresh()
+
+        self.ui(_do)
+
     def show_log(self) -> None:
         """Abre a janela de Log/diagnóstico (chamável de qualquer thread)."""
         self.ui(self._open_log_ui)
@@ -858,7 +872,12 @@ class ScribaApp:
             try:
                 from . import timesheet_suggest
 
-                if timesheet_suggest.suggest_for_folder(folder, ts) == "created":
+                result = timesheet_suggest.suggest_for_folder(folder, ts)
+                if result in ("created", "updated"):
+                    # janela de Apontamentos aberta vê a sugestão no ato,
+                    # sem precisar fechar e reabrir
+                    self.refresh_timesheet()
+                if result == "created":
                     try:
                         m = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
                     except (OSError, ValueError):
@@ -991,6 +1010,7 @@ class ScribaApp:
                     if n:
                         self._toast("Apontamento de horas",
                                     f"{n} sugestão(ões) nova(s) para revisar")
+                        self.refresh_timesheet()
                 timesheet_db.backup_daily(ts)
             except Exception:
                 log.exception("boot do timesheet falhou")
