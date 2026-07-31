@@ -136,6 +136,15 @@ def main(argv: list[str] | None = None) -> int:
     p_search.add_argument("--until", metavar="AAAA-MM-DD", help="reuniões até esta data")
     p_search.add_argument("--status", default="done", help="status (default: done; use '' p/ todos)")
     p_search.add_argument("--limit", type=int, default=20, help="máximo de resultados (default: 20)")
+    p_search.add_argument("--json", action="store_true",
+                          help="saída JSON p/ agentes/skills (inclui id p/ o `show` e o snippet do trecho que casou)")
+
+    p_show = sub.add_parser("show", help="mostra a nota de uma reunião (resumo; --transcript p/ a transcrição completa)")
+    p_show.add_argument("target", help="pasta da gravação OU id numérico do índice (o id sai no `search --json`)")
+    p_show.add_argument("--transcript", action="store_true",
+                        help="imprime a transcrição completa em vez do resumo")
+    p_show.add_argument("--json", action="store_true",
+                        help="saída JSON (meta + participantes + pendências + resumo; com --transcript inclui a transcrição)")
 
     p_upd = sub.add_parser("update", help="checa atualizações (e aplica via git pull, se for instalação via git)")
     p_upd.add_argument("--check", action="store_true", help="só verifica se há nova versão, sem aplicar")
@@ -253,6 +262,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "search":
         return cmd_search(args)
+    if args.cmd == "show":
+        return cmd_show(args)
     if args.cmd == "update":
         return cmd_update(args)
     if args.cmd == "timesheet":
@@ -447,8 +458,27 @@ def _ts_backup(ts, tsdb) -> int:
     return 0
 
 
+def _utf8_out() -> None:
+    """Força stdout em UTF-8: o console/pipe do Windows costuma ser cp1252, que
+    estoura UnicodeEncodeError com qualquer caractere da transcrição fora do code
+    page. Agentes (skill scriba-reunioes) leem UTF-8 sem drama."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+    except (AttributeError, OSError):
+        pass
+
+
+def _print_json(data) -> None:
+    import json
+
+    _utf8_out()
+    print(json.dumps(data, ensure_ascii=False, indent=2))
+
+
 def cmd_search(args) -> int:
-    """`scribadev search`: lista as reuniões do índice (#10) que casam os filtros."""
+    """`scribadev search`: lista as reuniões do índice (#10) que casam os filtros.
+    `--json` é a saída p/ agentes (skill scriba-reunioes): registros completos com
+    `id` (aceito pelo `show`) e `snippet` do trecho onde os termos casaram."""
     from .meetings_index import search
 
     results = search(
@@ -459,7 +489,11 @@ def cmd_search(args) -> int:
         until=args.until,
         status=(args.status or None),
         limit=args.limit,
+        snippets=args.json,
     )
+    if args.json:
+        _print_json(results)
+        return 0
     if not results:
         print("nenhuma reunião encontrada.")
         return 0
@@ -475,6 +509,69 @@ def cmd_search(args) -> int:
         if r.get("export_path"):
             print(f"    {r['export_path']}")
     print(f"\n{len(results)} resultado(s)")
+    return 0
+
+
+def cmd_show(args) -> int:
+    """`scribadev show`: imprime a nota de UMA reunião — resumo por padrão,
+    `--transcript` p/ a transcrição completa, `--json` p/ a saída estruturada que a
+    skill scriba-reunioes consome (meta + participantes + pendências + resumo).
+    Aceita a pasta da gravação OU o id numérico que o `search --json` devolve."""
+    import json
+
+    from . import notes
+    from .meetings_index import get_folder, split_note
+
+    folder = Path(args.target)
+    if not folder.is_dir() and str(args.target).isdigit():
+        found = get_folder(int(args.target))
+        if found:
+            folder = Path(found)
+    if not folder.is_dir():
+        print(f"erro: pasta ou id de reunião não encontrado: {args.target}")
+        return 2
+    notas = folder / "notas.md"
+    if not notas.exists():
+        print(f"erro: {notas} não existe — a nota ainda não foi gerada (veja `scribadev summarize`)")
+        return 1
+    _utf8_out()
+    md = notas.read_text(encoding="utf-8")
+    summary, transcript = split_note(md)
+    try:
+        meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        meta = {}
+    if args.json:
+        presentes, mencionados = notes.parse_participants(md)
+        state = notes.load_action_state(folder)
+        items = [{**it, "state": state.get(it["key"], "open")}
+                 for it in notes.parse_action_items(md)]
+        dur = meta.get("duration_seconds")
+        out = {
+            "folder": str(folder),
+            "title": (meta.get("title") or "").strip(),
+            "client": (meta.get("client") or "").strip(),
+            "meeting_title": (meta.get("meeting_title") or "").strip(),
+            "started_at": meta.get("started_at") or "",
+            "ended_at": meta.get("ended_at") or "",
+            "duration_s": int(float(dur)) if dur else None,
+            "status": meta.get("status") or "",
+            "export_path": meta.get("export_path") or "",
+            "participants": {
+                "present": [{"name": n, "role": (r or "").strip()} for n, r in presentes.items()],
+                "mentioned": list(mencionados),
+            },
+            "action_items": items,
+            "summary": summary,
+        }
+        if args.transcript:
+            out["transcript"] = transcript
+        _print_json(out)
+        return 0
+    if args.transcript:
+        print(transcript or "(a nota não tem a seção de transcrição completa)")
+        return 0
+    print(summary or md.strip())
     return 0
 
 

@@ -397,7 +397,7 @@ _FTS_NO_TRANSCRIPT = "{title client participants body}"  # colunas exceto `trans
 
 
 def search(query=None, participant=None, client=None, since=None, until=None,
-           status=None, limit=50, include_transcript=True) -> list[dict]:
+           status=None, limit=50, include_transcript=True, snippets=False) -> list[dict]:
     """Busca reuniões no índice. Filtros opcionais combinam (AND):
 
     - `query`       — full-text (FTS5) em título/cliente/participantes/resumo;
@@ -407,12 +407,16 @@ def search(query=None, participant=None, client=None, since=None, until=None,
     - `status`      — status exato (ex.: 'done');
     - `include_transcript` — quando False, a busca de texto IGNORA a transcrição
       (só resumo/título/cliente/participantes). True = tudo (default).
+    - `snippets`    — quando True E há `query`, cada resultado ganha `snippet`: o
+      trecho indexado onde os termos casaram (snippet() do FTS5, termos entre « »),
+      p/ um consumidor (ex.: `search --json` da CLI) julgar relevância sem abrir a nota.
 
     Devolve dicts (com a lista `participants`) ordenados por `started_at` desc.
     """
     conn = _connect()
     try:
         where, params, joins = [], [], ""
+        select_extra = ""
         if query and str(query).strip():
             # FTS5 exige o NOME da tabela no MATCH (alias vira "no such column")
             joins += " JOIN meetings_fts ON meetings_fts.rowid = m.id"
@@ -422,6 +426,9 @@ def search(query=None, participant=None, client=None, since=None, until=None,
                 # filtro de coluna do FTS5: restringe os termos às colunas != transcript
                 fq = f"{_FTS_NO_TRANSCRIPT} : ({fq})"
             params.append(fq)
+            if snippets:
+                # coluna -1 = o FTS escolhe a coluna que melhor casou os termos
+                select_extra = ", snippet(meetings_fts, -1, '«', '»', ' … ', 14) AS snippet"
         if participant:
             where.append("m.id IN (SELECT meeting_id FROM participants WHERE name LIKE ?)")
             params.append(f"%{participant}%")
@@ -437,7 +444,7 @@ def search(query=None, participant=None, client=None, since=None, until=None,
         if status:
             where.append("m.status = ?")
             params.append(status)
-        sql = "SELECT m.* FROM meetings m" + joins
+        sql = "SELECT m.*" + select_extra + " FROM meetings m" + joins
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY m.started_at DESC LIMIT ?"
@@ -464,6 +471,25 @@ def count() -> int:
         return conn.execute("SELECT COUNT(*) FROM meetings").fetchone()[0]
     finally:
         conn.close()
+
+
+def get_folder(meeting_id: int) -> str | None:
+    """Pasta da reunião com este id do índice, ou None se o id não existe.
+    Ponte do `scribadev show <id>`: o `search --json` expõe o `id` e o show
+    resolve de volta p/ a pasta sem o chamador conhecer o layout em disco."""
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT folder FROM meetings WHERE id = ?", (int(meeting_id),)).fetchone()
+        return row["folder"] if row else None
+    finally:
+        conn.close()
+
+
+def split_note(md: str) -> tuple[str, str]:
+    """Divide um `notas.md` em (resumo, transcrição) pelo marcador padrão que o
+    build_notes sempre escreve. Versão pública dos helpers internos, p/ a CLI
+    (`show`) não depender do formato do arquivo."""
+    return _summary_body(md), _transcript_text(md)
 
 
 # -- pendências (action items): consulta do snapshot (#76) ------------------
