@@ -661,7 +661,6 @@ def cmd_doctor(args) -> int:
     native = [
         ("faster_whisper", "transcrição"),
         ("ctranslate2", "motor do Whisper"),
-        ("pystray", "ícone de bandeja"),
     ]
     if sys.platform == "win32":
         native = [("pyaudiowpatch", "captura de áudio"), *native, ("windows_toasts", "notificações")]

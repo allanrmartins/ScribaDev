@@ -852,7 +852,6 @@ class SettingsWindow(QWidget):
             ("GPU", self._gpu_str(), "ok"),
             core("Áudio (WASAPI)", f"pyaudiowpatch {pa or '?'}", bool(pa)),
             ("Compressão de áudio", *self._ffmpeg_health()),
-            ("Bandeja / imagens", f"pystray {ver('pystray') or '—'} · Pillow {ver('Pillow') or '—'}", "ok"),
         ]
 
     def _diar_health(self, ver) -> tuple:
