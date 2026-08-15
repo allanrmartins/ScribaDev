@@ -476,6 +476,36 @@ class TestAutostartMac(unittest.TestCase):
             self.assertEqual(autostart.label(), "Iniciar com o sistema")
 
 
+@unittest.skipUnless(sys.platform == "darwin", "hotkey_mac carrega o Carbon de verdade")
+class TestHotkeyMacParse(unittest.TestCase):
+    """M7: parse do spec p/ (modificadores Carbon, kVK) — tabelas ≠ Win32."""
+
+    def test_specs_validos(self):
+        from scriba import hotkey_mac
+
+        self.assertEqual(hotkey_mac.parse_mac("ctrl+alt+r"), (0x1000 | 0x0800, 0x0F))
+        self.assertEqual(hotkey_mac.parse_mac("cmd+shift+g"), (0x0100 | 0x0200, 0x05))
+        self.assertEqual(hotkey_mac.parse_mac("win+f5"), (0x0100, 0x60))  # win = cmd
+
+    def test_specs_invalidos(self):
+        from scriba import hotkey_mac
+
+        self.assertIsNone(hotkey_mac.parse_mac("r"))          # sem modificador
+        self.assertIsNone(hotkey_mac.parse_mac("ctrl+a+b"))   # duas teclas
+        self.assertIsNone(hotkey_mac.parse_mac("ctrl+ç"))     # tecla desconhecida
+        self.assertIsNone(hotkey_mac.parse_mac(""))
+
+
+class TestExcludeFromCaptureGuard(unittest.TestCase):
+    def test_offscreen_devolve_false_sem_tocar_objc(self):
+        # sob QPA != cocoa o winId() não é NSView — o guard TEM que barrar antes do objc
+        from scriba.qt import widgets
+
+        with _darwin(), mock.patch("PySide6.QtGui.QGuiApplication.platformName",
+                                   return_value="offscreen"):
+            self.assertFalse(widgets.exclude_from_capture(mock.Mock()))
+
+
 class TestSoNome(unittest.TestCase):
     def test_por_plataforma(self):
         with mock.patch.object(sys, "platform", "win32"):

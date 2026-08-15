@@ -47,12 +47,23 @@ class GlobalHotkey:
         self.callback = callback
         self.ok = False
         self._tid: int | None = None
+        self._mac_id: int | None = None  # id no hotkey_mac (darwin, #104 M7)
         self._ready = threading.Event()
         self._thread: threading.Thread | None = None
 
     def start(self) -> bool:
+        if sys.platform == "darwin":
+            # Carbon RegisterEventHotKey (hotkey_mac): eventos bombeados pelo run
+            # loop Cocoa do Qt — chamar na thread da GUI (main._setup_hotkey chama)
+            from . import hotkey_mac
+
+            self._mac_id = hotkey_mac.register(self.spec, self.callback)
+            self.ok = self._mac_id is not None
+            if self.ok:
+                log.info("hotkey global ativa: %s", self.spec)
+            return self.ok
         if sys.platform != "win32":
-            # RegisterHotKey é Win32; atalho global POSIX vem em marcos futuros (#104)
+            # RegisterHotKey é Win32; atalho global Linux vem em marco futuro (#104)
             log.info("hotkey global não suportada neste SO ainda — '%s' ignorado", self.spec)
             return False
         parsed = parse(self.spec)
@@ -83,6 +94,12 @@ class GlobalHotkey:
         user32.UnregisterHotKey(None, 1)
 
     def stop(self) -> None:
+        if self._mac_id is not None:
+            from . import hotkey_mac
+
+            hotkey_mac.unregister(self._mac_id)
+            self._mac_id = None
+            return
         if self._tid:
             ctypes.windll.user32.PostThreadMessageW(self._tid, _WM_QUIT, 0, 0)
             self._tid = None
