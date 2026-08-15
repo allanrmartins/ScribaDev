@@ -17,9 +17,9 @@ from .config import Config
 
 log = logging.getLogger("scriba.recorder")
 
-# captura ao vivo = WASAPI loopback (pyaudiowpatch), Windows-only por ora; a
-# captura POSIX (PipeWire/PulseAudio, CoreAudio) vem em marcos futuros (#104)
-_CAPTURE_UNSUPPORTED_MSG = "captura de áudio ao vivo não suportada neste SO ainda (Windows-only por ora)"
+# captura ao vivo: WASAPI loopback (pyaudiowpatch) no Windows; process tap do
+# CoreAudio (recorder_mac) no macOS; Linux (PipeWire/PulseAudio) em marco futuro (#104)
+_CAPTURE_UNSUPPORTED_MSG = "captura de áudio ao vivo não suportada neste SO ainda"
 
 _HEADER_PATCH_INTERVAL = 5.0  # s
 _SILENCE_THRESHOLD = 0.5  # s atrás do relógio antes de injetar silêncio
@@ -235,7 +235,18 @@ def peak_level(pcm: bytes) -> float:
     return max((abs(x) for x in a), default=0) / 32768.0
 
 
-class LevelProbe:
+def LevelProbe(audio_cfg):
+    """Fábrica do medidor de nível por SO (a UI continua chamando recorder.LevelProbe):
+    Windows → _LevelProbeWin (WASAPI); macOS → LevelProbeMac (tap); senão, o erro de
+    import do pyaudiowpatch sobe como hoje (a UI já trata como 'sem captura')."""
+    if sys.platform == "darwin":
+        from .recorder_mac import LevelProbeMac
+
+        return LevelProbeMac(audio_cfg)
+    return _LevelProbeWin(audio_cfg)
+
+
+class _LevelProbeWin:
     """Abre streams de TESTE do mic e do loopback escolhidos e expõe o pico (0..1) de
     cada um — para o botão 'Testar microfone' das Configurações. Não grava nada.
 
@@ -292,34 +303,52 @@ class Recording:
     """Uma gravação de reunião: mic + loopback numa pasta com meta.json."""
 
     def __init__(self, cfg: Config):
-        if sys.platform != "win32":
+        if sys.platform not in ("win32", "darwin"):
             # protege também o caminho da GUI (start_recording): erro claro em
-            # vez de ModuleNotFoundError de pyaudiowpatch
+            # vez de ModuleNotFoundError de pyaudiowpatch/sounddevice
             raise RuntimeError(_CAPTURE_UNSUPPORTED_MSG)
-        import pyaudiowpatch as pyaudio
-
         util.ensure_app_dirs()
         self.cfg = cfg.audio
         self.base_dir = cfg.output.resolved_recordings_dir()  # cria se não existir
         self.started_at = datetime.now()
         self.folder = self._new_folder()
-        self.pa = pyaudio.PyAudio()
-        try:
-            mic_info = _pick_mic(self.cfg, self.pa)
-            lb_info = _pick_loopback(self.cfg, self.pa)
-            self.t0 = time.monotonic()
-            self.mic = _StreamRecorder(self.pa, "mic", self.folder / "mic.wav", mic_info, self.t0, pad_silence=False)
-            self.loopback = _StreamRecorder(
-                self.pa, "loopback", self.folder / "loopback.wav", lb_info, self.t0, pad_silence=True
-            )
-            # watcher de troca de dispositivo (#22): reabre streams que caírem no meio da call
-            self._switches: list = []
-            self._stop_watch = threading.Event()
-            self._watcher = threading.Thread(target=self._device_watch, daemon=True, name="devwatch")
-            self._watcher.start()
-        except Exception:
-            self.pa.terminate()
-            raise
+        if sys.platform == "win32":
+            import pyaudiowpatch as pyaudio
+
+            self.pa = pyaudio.PyAudio()
+            try:
+                mic_info = _pick_mic(self.cfg, self.pa)
+                lb_info = _pick_loopback(self.cfg, self.pa)
+                self.t0 = time.monotonic()
+                self.mic = _StreamRecorder(self.pa, "mic", self.folder / "mic.wav", mic_info, self.t0, pad_silence=False)
+                self.loopback = _StreamRecorder(
+                    self.pa, "loopback", self.folder / "loopback.wav", lb_info, self.t0, pad_silence=True
+                )
+            except Exception:
+                self.pa.terminate()
+                raise
+        else:  # darwin (#104): mesmo desenho, streams do recorder_mac
+            from . import recorder_mac
+
+            self.pa = recorder_mac.MacAudioEngine()  # duck-type do PyAudio (.terminate())
+            try:
+                # loopback ANTES do mic: criar o aggregate re-inicializa o
+                # PortAudio e invalidaria um índice de mic escolhido antes
+                lb_info = recorder_mac.pick_loopback(self.cfg, self.pa)
+                mic_info = recorder_mac.pick_mic(self.cfg, self.pa)
+                self.t0 = time.monotonic()
+                self.mic = recorder_mac.MacStreamRecorder("mic", self.folder / "mic.wav", mic_info, self.t0, pad_silence=False)
+                self.loopback = recorder_mac.MacStreamRecorder(
+                    "loopback", self.folder / "loopback.wav", lb_info, self.t0, pad_silence=True
+                )
+            except Exception:
+                self.pa.terminate()
+                raise
+        # watcher de troca de dispositivo (#22): reabre streams que caírem no meio da call
+        self._switches: list = []
+        self._stop_watch = threading.Event()
+        self._watcher = threading.Thread(target=self._device_watch, daemon=True, name="devwatch")
+        self._watcher.start()
         # Título da reunião é COSMÉTICO e vem de EnumWindows, que pode pendurar se
         # outro processo estiver travado (#114). A gravação nasce JÁ (meta escrito,
         # pílula aparece); o título é capturado em thread e regrava o meta ao chegar.
@@ -381,7 +410,12 @@ class Recording:
         # PortAudio não vai abortar com assert de CRT durante a troca de dispositivo
         if util.run_audio_probe() is None:
             return  # ainda instável — tenta na próxima ronda
-        pickers = {"mic": _pick_mic, "loopback": _pick_loopback}
+        if sys.platform == "darwin":
+            from . import recorder_mac
+
+            pickers = {"mic": recorder_mac.pick_mic, "loopback": recorder_mac.pick_loopback}
+        else:
+            pickers = {"mic": _pick_mic, "loopback": _pick_loopback}
         for name, s in dead:
             try:
                 info = pickers[name](self.cfg, self.pa)
@@ -488,7 +522,7 @@ def repair_folder(folder: Path) -> float:
 
 def record_for(seconds: int, show_ui: bool = True) -> int:
     """`scriba record N`: gravação manual (com a pílula flutuante, se habilitada)."""
-    if sys.platform != "win32":
+    if sys.platform not in ("win32", "darwin"):
         print(_CAPTURE_UNSUPPORTED_MSG)
         return 1
     from .config import load
@@ -525,7 +559,11 @@ def record_for(seconds: int, show_ui: bool = True) -> int:
 
 
 def list_devices() -> int:
-    """`scriba devices`: lista mics e loopbacks WASAPI."""
+    """`scriba devices`: lista mics e saídas capturáveis do SO."""
+    if sys.platform == "darwin":
+        from .recorder_mac import list_devices_text
+
+        return list_devices_text()
     if sys.platform != "win32":
         print(_CAPTURE_UNSUPPORTED_MSG)
         return 1

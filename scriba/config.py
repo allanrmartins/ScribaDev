@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import sys
 import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -16,13 +17,59 @@ log = logging.getLogger("scriba.config")
 # chega aqui como TOMLDecodeError; lixo binário, como UnicodeDecodeError.
 _DECODE_ERRORS = (tomllib.TOMLDecodeError, UnicodeDecodeError)
 
-DEFAULT_CONFIG = """\
+# -- textos por SO nos comentários dos templates (#104) -----------------------
+# No Windows o texto histórico fica intacto (byte a byte — há teste); no POSIX os
+# caminhos/termos fazem sentido no SO. Computado no import (como o wintitles):
+# o SO não muda em runtime.
+if sys.platform == "win32":
+    _H = {
+        "fonte_mic": "o registro de uso do microfone do\n# Windows",
+        "fonte_mic_save": "no registro de uso do microfone do Windows",
+        "padrao_mic": "microfone padrão do Windows",
+        "padrao_saida": "saída padrão do Windows",
+        "cifra": "fica cifrada (DPAPI)",
+        "cifra_longa": "fica cifrada (DPAPI do Windows)",
+        "cifra_save": "cifrada (DPAPI)",
+        "engine": "# Motor de transcrição: local (faster-whisper, 100% na máquina) ou cloud (envia o\n"
+                  "# áudio a um endpoint OpenAI-compatível /audio/transcriptions — opt-in explícito).",
+        "engine_save": "local | cloud (envia o áudio à nuvem — opt-in)",
+        "dir_notas": r"%LOCALAPPDATA%\ScribaDev\Notas",
+        "dir_gravacoes": r"C:\temp\scribadev\gravacoes",
+        "dir_db": r"%LOCALAPPDATA%\ScribaDev\timesheet.db",
+        "dir_apont": r"Documentos\ScribaDev\Apontamentos",
+        "dir_backups": r"%LOCALAPPDATA%\ScribaDev\backups",
+    }
+else:
+    _APP = "~/Library/Application Support/ScribaDev" if sys.platform == "darwin" else "~/.local/share/ScribaDev"
+    _MAC = sys.platform == "darwin"
+    _H = {
+        "fonte_mic": "quais apps estão com o microfone\n# aberto",
+        "fonte_mic_save": "no uso do microfone pelos apps",
+        "padrao_mic": "microfone padrão do sistema",
+        "padrao_saida": "saída padrão do sistema",
+        "cifra": "fica no Keychain" if _MAC else "fica como digitada (sem cifra neste SO)",
+        "cifra_longa": "fica no Keychain do macOS" if _MAC else "fica como digitada (sem cifra neste SO)",
+        "cifra_save": "no Keychain" if _MAC else "sem cifra neste SO",
+        "dir_notas": f"{_APP}/Notas",
+        "dir_gravacoes": f"{_APP}/gravacoes",
+        "dir_db": f"{_APP}/timesheet.db",
+        "dir_apont": "~/Documents/ScribaDev/Apontamentos",
+        "dir_backups": f"{_APP}/backups",
+        "engine": ("# Motor de transcrição: local (100% na máquina; no Apple Silicon usa MLX/Metal\n"
+                   '# sozinho; "mlx" força) ou cloud (endpoint OpenAI-compatível — opt-in explícito).'
+                   if _MAC else
+                   "# Motor de transcrição: local (faster-whisper, 100% na máquina) ou cloud (envia o\n"
+                   "# áudio a um endpoint OpenAI-compatível /audio/transcriptions — opt-in explícito)."),
+        "engine_save": ("local (MLX auto no Apple Silicon) | mlx | cloud (nuvem — opt-in)"
+                        if _MAC else "local | cloud (envia o áudio à nuvem — opt-in)"),
+    }
+
+DEFAULT_CONFIG = f"""\
 # Configuração do ScribaDev.
 # Este arquivo é criado uma única vez com os padrões; edite à vontade.
 
 [detection]
-# Apps desktop monitorados: o ScribaDev observa o registro de uso do microfone do
-# Windows e considera "call ativa" quando um app cujo nome contenha um destes
+# Apps desktop monitorados: o ScribaDev observa {_H["fonte_mic"]} e considera "call ativa" quando um app cujo nome contenha um destes
 # padrões está com o mic aberto.
 apps = "teams, zoom"
 # Reuniões no navegador (Meet, Teams web, Zoom web...): quando um destes
@@ -43,8 +90,8 @@ max_call_hours = 4       # parada de segurança
 auto_record = true       # gravar sozinho ao detectar a call; desligado, a pílula espera o ⏺
 
 [audio]
-mic_device = ""          # vazio = microfone padrão do Windows; senão, parte do nome (veja: scribadev devices)
-loopback_device = ""     # vazio = saída padrão do Windows; senão, parte do nome (veja: scribadev devices)
+mic_device = ""          # vazio = {_H["padrao_mic"]}; senão, parte do nome (veja: scribadev devices)
+loopback_device = ""     # vazio = {_H["padrao_saida"]}; senão, parte do nome (veja: scribadev devices)
 keep_audio = true        # manter o áudio depois de transcrever
 # Formato do áudio guardado (só com keep_audio=true). Whisper/pyannote usam 16 kHz
 # mono, então comprimir não afeta o resultado. opus ~20 MB/h · flac ~110 MB/h · wav = cru.
@@ -66,11 +113,10 @@ vad_min_silence_ms = 0   # silêncio mínimo para cortar um trecho (ms); 0 = pad
 vad_threshold = 0        # limiar de detecção de voz (0..1); 0 = padrão
 # Vocabulário para guiar a transcrição (troque pelo jargão da sua área):
 hotwords = "SAP ABAP BAPI BAdI CDS RAP Fiori OData ALV IDoc SE80 SE11 SE16N SE37 SE38 SM30 SM37 ST22 VA01 ME21N MIGO MARA MATNR VBAK VBAP EKKO BSEG KNA1 SmartForms HANA user exit enhancement request transporte mandante tabela Z campo Z SU01 SU53 PFCG ST01 SAP_ALL"
-# Motor de transcrição: local (faster-whisper, 100% na máquina) ou cloud (envia o
-# áudio a um endpoint OpenAI-compatível /audio/transcriptions — opt-in explícito).
+{_H["engine"]}
 engine = "local"
 cloud_base_url = ""                # vazio = Groq (https://api.groq.com/openai/v1)
-cloud_api_key = ""                 # só engine=cloud; chave BYO. Definida pela UI, fica cifrada (DPAPI).
+cloud_api_key = ""                 # só engine=cloud; chave BYO. Definida pela UI, {_H["cifra"]}.
 cloud_model = "whisper-large-v3-turbo"
 
 [diarization]
@@ -101,7 +147,7 @@ chat_model = ""              # chat "Perguntar à reunião"; vazio = mesmo do re
 # URLs/chave POR PROVIDER (a UI grava aqui; permite alternar sem recolar):
 ollama_base_url = ""         # provider ollama: vazio = http://localhost:11434
 openai_base_url = ""         # provider openai: endpoint completo (inclua /v1)
-# chave BYO do provider openai. Definida pela UI, fica cifrada (DPAPI do Windows).
+# chave BYO do provider openai. Definida pela UI, {_H["cifra_longa"]}.
 openai_api_key = ""
 timeout_seconds = 600
 
@@ -111,10 +157,10 @@ hotkey = ""              # atalho global gravar/parar (ex.: "ctrl+alt+r"); vazio
 hotkey_split = ""        # atalho global "nova call" (divide a gravação, #38); vazio desativa
 
 [output]
-# Pasta para onde o notas.md final é copiado. Vazio = %LOCALAPPDATA%\\ScribaDev\\Notas
+# Pasta para onde o notas.md final é copiado. Vazio = {_H["dir_notas"]}
 # (local, fora do OneDrive — evita congelamento por hidratação de arquivo na thread da GUI)
 export_dir = ""
-# Pasta das gravações (áudio + transcrição de cada reunião). Vazio = C:\\temp\\scribadev\\gravacoes
+# Pasta das gravações (áudio + transcrição de cada reunião). Vazio = {_H["dir_gravacoes"]}
 recordings_dir = ""
 
 [timesheet]
@@ -125,9 +171,9 @@ suggest = true            # sugestões automáticas a partir das reuniões pront
 round_minutes = 15        # arredonda início/fim sugeridos p/ passos de N min (0 = exato)
 min_meeting_minutes = 10  # reunião mais curta que isto não vira sugestão
 default_client = ""       # pré-seleção da entrada manual
-db_path = ""              # vazio = %LOCALAPPDATA%\\ScribaDev\\timesheet.db (NUNCA OneDrive/rede)
-export_dir = ""           # export Excel; vazio = Documentos\\ScribaDev\\Apontamentos
-backup_dir = ""           # vazio = %LOCALAPPDATA%\\ScribaDev\\backups (pode apontar p/ OneDrive)
+db_path = ""              # vazio = {_H["dir_db"]} (NUNCA OneDrive/rede)
+export_dir = ""           # export Excel; vazio = {_H["dir_apont"]}
+backup_dir = ""           # vazio = {_H["dir_backups"]} (pode apontar p/ OneDrive)
 """
 
 
@@ -298,21 +344,29 @@ def _b(v: bool) -> str:
     return "true" if v else "false"
 
 
-# -- segredos (chaves de API) cifrados com DPAPI: nunca em texto plano no disco ----
+# -- segredos (chaves de API) protegidos por SO: nunca em texto plano no disco ----
+# Windows: DPAPI (token "dpapi:<base64>" no TOML). macOS: Keychain (o TOML guarda
+# só a referência "keychain:<conta>"). Demais SOs: plaintext (degradação graciosa).
 
-def _maybe_protect(v: str) -> str:
-    """Cifra um segredo plaintext (DPAPI) para gravar; vazio/já-cifrado passa direto.
-    Se a DPAPI falhar (não-Windows), grava plaintext — degradação graciosa."""
-    if not v or v.startswith(util.DPAPI_PREFIX):
+def _maybe_protect(v: str, account: str = "") -> str:
+    """Protege um segredo plaintext para gravar; vazio/já-protegido passa direto.
+    `account` identifica o campo no Keychain do macOS (ex.: "summary.openai_api_key").
+    Se a proteção falhar (SO sem cifra, chaveiro trancado), grava plaintext."""
+    if not v or v.startswith(util.DPAPI_PREFIX) or v.startswith(util.KEYCHAIN_PREFIX):
         return v
+    if sys.platform == "darwin" and account:
+        return util.keychain_store(account, v) or v
     return util.dpapi_encrypt(v) or v
 
 
 def _maybe_unprotect(v: str) -> str:
-    """Decifra um 'dpapi:...' ao carregar; plaintext/vazio passa direto. Falha (token
-    de outra máquina/usuário) → vazio (chave inutilizável aqui)."""
+    """Resolve um segredo protegido ao carregar; plaintext/vazio passa direto.
+    Falha (token de outra máquina/usuário, item removido do Keychain) → vazio
+    (chave inutilizável aqui)."""
     if v and v.startswith(util.DPAPI_PREFIX):
         return util.dpapi_decrypt(v) or ""
+    if v and v.startswith(util.KEYCHAIN_PREFIX):
+        return util.keychain_lookup(v) or ""
     return v
 
 
@@ -337,7 +391,7 @@ def save(cfg: Config) -> None:
 # Edite à vontade — ou use a janela de Configurações (duplo clique no ícone da bandeja).
 
 [detection]
-# Apps desktop monitorados (padrões de nome no registro de uso do microfone do Windows).
+# Apps desktop monitorados (padrões de nome {_H["fonte_mic_save"]}).
 apps = {_s(d.apps)}
 # Reuniões no navegador: mic aberto + título de janela casando browser_titles.
 # browsers = "" desliga; browser_titles = "" grava qualquer site usando o mic.
@@ -351,8 +405,8 @@ max_call_hours = {_n(d.max_call_hours)}       # parada de segurança
 auto_record = {_b(d.auto_record)}       # gravar sozinho ao detectar a call; desligado, a pílula espera o ⏺
 
 [audio]
-mic_device = {_s(a.mic_device)}          # vazio = microfone padrão do Windows (veja: scribadev devices)
-loopback_device = {_s(a.loopback_device)}     # vazio = saída padrão do Windows (veja: scribadev devices)
+mic_device = {_s(a.mic_device)}          # vazio = {_H["padrao_mic"]} (veja: scribadev devices)
+loopback_device = {_s(a.loopback_device)}     # vazio = {_H["padrao_saida"]} (veja: scribadev devices)
 keep_audio = {_b(a.keep_audio)}        # manter o áudio depois de transcrever
 archive_format = {_s(a.archive_format)}  # opus (~20 MB/h) | flac (~110 MB/h) | wav (cru ~1,3 GB/h)
 retention_days = {_n(a.retention_days)}  # apaga gravação transcrita após N dias (0 = nunca)
@@ -368,9 +422,9 @@ vad_min_silence_ms = {_n(w.vad_min_silence_ms)}   # silêncio mínimo para corta
 vad_threshold = {_n(w.vad_threshold)}        # limiar de detecção de voz (0..1); 0 = padrão
 # Vocabulário para guiar a transcrição (troque pelo jargão da sua área):
 hotwords = {_s(w.hotwords)}
-engine = {_s(w.engine)}          # local | cloud (envia o áudio à nuvem — opt-in)
+engine = {_s(w.engine)}          # {_H["engine_save"]}
 cloud_base_url = {_s(w.cloud_base_url)}   # vazio = Groq (.../openai/v1)
-cloud_api_key = {_s(_maybe_protect(w.cloud_api_key))}     # só engine=cloud; chave BYO, cifrada (DPAPI)
+cloud_api_key = {_s(_maybe_protect(w.cloud_api_key, "whisper.cloud_api_key"))}     # só engine=cloud; chave BYO, {_H["cifra_save"]}
 cloud_model = {_s(w.cloud_model)}
 
 [diarization]
@@ -378,7 +432,7 @@ cloud_model = {_s(w.cloud_model)}
 # Requer token gratuito do Hugging Face (hf.co/settings/tokens) com os termos
 # do modelo aceitos na página dele.
 enabled = {_b(dz.enabled)}
-hf_token = {_s(_maybe_protect(dz.hf_token))}
+hf_token = {_s(_maybe_protect(dz.hf_token, "diarization.hf_token"))}
 model = {_s(dz.model)}
 max_speakers = {_n(dz.max_speakers)}         # 0 = automático (máx. de vozes)
 min_speakers = {_n(dz.min_speakers)}         # 0 = automático (mín. de vozes)
@@ -398,7 +452,7 @@ openai_model = {_s(s.openai_model)}  # provider openai-compatível
 chat_model = {_s(s.chat_model)}      # chat "Perguntar à reunião"; vazio = mesmo do resumo
 ollama_base_url = {_s(s.ollama_base_url)}   # provider ollama: vazio = http://localhost:11434
 openai_base_url = {_s(s.openai_base_url)}   # provider openai: endpoint (inclua /v1)
-openai_api_key = {_s(_maybe_protect(s.openai_api_key))}   # provider openai: chave BYO, cifrada (DPAPI)
+openai_api_key = {_s(_maybe_protect(s.openai_api_key, "summary.openai_api_key"))}   # provider openai: chave BYO, {_H["cifra_save"]}
 timeout_seconds = {_n(s.timeout_seconds)}
 
 [ui]
@@ -408,9 +462,9 @@ hotkey_split = {_s(u.hotkey_split)}        # atalho global "nova call" (divide a
 pending_window_days = {_n(u.pending_window_days)}       # capa: só pendências de reuniões dos últimos N dias contam (0 = sem recorte)
 
 [output]
-# Pasta para onde o notas.md final é copiado. Vazio = Documentos\\ScribaDev
+# Pasta para onde o notas.md final é copiado. Vazio = {_H["dir_notas"]}
 export_dir = {_s(o.export_dir)}
-# Pasta das gravações (áudio + transcrição de cada reunião). Vazio = C:\\temp\\scribadev\\gravacoes
+# Pasta das gravações (áudio + transcrição de cada reunião). Vazio = {_H["dir_gravacoes"]}
 recordings_dir = {_s(o.recordings_dir)}
 
 [timesheet]
@@ -421,9 +475,9 @@ suggest = {_b(ts.suggest)}            # sugestões automáticas a partir das reu
 round_minutes = {_n(ts.round_minutes)}        # arredonda início/fim sugeridos p/ passos de N min (0 = exato)
 min_meeting_minutes = {_n(ts.min_meeting_minutes)}  # reunião mais curta que isto não vira sugestão
 default_client = {_s(ts.default_client)}       # pré-seleção da entrada manual
-db_path = {_s(ts.db_path)}              # vazio = %LOCALAPPDATA%\\ScribaDev\\timesheet.db (NUNCA OneDrive/rede)
-export_dir = {_s(ts.export_dir)}           # export Excel; vazio = Documentos\\ScribaDev\\Apontamentos
-backup_dir = {_s(ts.backup_dir)}           # vazio = %LOCALAPPDATA%\\ScribaDev\\backups (pode apontar p/ OneDrive)
+db_path = {_s(ts.db_path)}              # vazio = {_H["dir_db"]} (NUNCA OneDrive/rede)
+export_dir = {_s(ts.export_dir)}           # export Excel; vazio = {_H["dir_apont"]}
+backup_dir = {_s(ts.backup_dir)}           # vazio = {_H["dir_backups"]} (pode apontar p/ OneDrive)
 """
     # Rede de segurança contra sobrescrita acidental: antes de reescrever, guarda
     # uma cópia do config atual em config.toml.bak (mesma pasta). Falha ao gravar

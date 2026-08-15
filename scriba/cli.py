@@ -661,10 +661,11 @@ def cmd_doctor(args) -> int:
     native = [
         ("faster_whisper", "transcrição"),
         ("ctranslate2", "motor do Whisper"),
-        ("pystray", "ícone de bandeja"),
     ]
     if sys.platform == "win32":
         native = [("pyaudiowpatch", "captura de áudio"), *native, ("windows_toasts", "notificações")]
+    elif sys.platform == "darwin":
+        native = [("sounddevice", "captura de áudio (CoreAudio)"), *native]
     for mod, why in native:
         try:
             __import__(mod)
@@ -673,21 +674,36 @@ def cmd_doctor(args) -> int:
             _print(_FAIL, f"import {mod}", f"({why}) {e}")
             failures += 1
     if sys.platform != "win32":
-        _print(_OK, "import pyaudiowpatch", "não se aplica neste SO (captura é Windows-only por ora)")
+        if sys.platform != "darwin":
+            _print(_OK, "import pyaudiowpatch", "não se aplica neste SO (captura é Windows-only por ora)")
         _print(_OK, "import windows_toasts", "não se aplica neste SO (toasts são Windows-only)")
 
-    # CUDA
-    try:
-        util.bootstrap_cuda_dlls()
-        import ctranslate2
+    # GPU — CUDA no Windows/Linux; Metal via MLX no Apple Silicon (#104, M5)
+    if sys.platform == "darwin":
+        try:
+            import platform as _platform
 
-        n = ctranslate2.get_cuda_device_count()
-        if n > 0:
-            _print(_OK, "GPU CUDA", f"{n} dispositivo(s) — transcrição acelerada")
-        else:
-            _print(_WARN, "GPU CUDA", "nenhuma — transcrição usará CPU (mais lenta)")
-    except Exception as e:
-        _print(_WARN, "GPU CUDA", f"indisponível ({e}) — transcrição usará CPU")
+            from .stt_mlx import mlx_disponivel
+
+            if _platform.machine() == "arm64" and mlx_disponivel():
+                _print(_OK, "GPU (Metal/MLX)", "transcrição local acelerada no Apple Silicon")
+            else:
+                _print(_WARN, "GPU (Metal/MLX)",
+                       "mlx-whisper indisponível — transcrição local em CPU (mais lenta)")
+        except Exception as e:
+            _print(_WARN, "GPU (Metal/MLX)", f"erro ao checar ({e})")
+    else:
+        try:
+            util.bootstrap_cuda_dlls()
+            import ctranslate2
+
+            n = ctranslate2.get_cuda_device_count()
+            if n > 0:
+                _print(_OK, "GPU CUDA", f"{n} dispositivo(s) — transcrição acelerada")
+            else:
+                _print(_WARN, "GPU CUDA", "nenhuma — transcrição usará CPU (mais lenta)")
+        except Exception as e:
+            _print(_WARN, "GPU CUDA", f"indisponível ({e}) — transcrição usará CPU")
 
     # motor de transcrição (STT): local (Whisper) ou nuvem (Groq/OpenAI-compat)
     try:
@@ -721,9 +737,29 @@ def cmd_doctor(args) -> int:
     except Exception as e:
         _print(_WARN, "Resumo (IA)", f"erro ao checar o provider ({e})")
 
-    # Registro dos apps monitorados — a detecção lê o ConsentStore do Windows;
-    # fora dele ainda não há detecção automática (#98; stubs na #102)
-    if sys.platform != "win32":
+    # Apps monitorados — Windows lê o ConsentStore; macOS os process objects do
+    # CoreAudio (#104 M4); nos demais SOs ainda não há detecção automática
+    if sys.platform == "darwin":
+        try:
+            from . import mactitles
+            from .detector import browser_patterns_from, patterns_from
+
+            pats = patterns_from(cfg.detection) if cfg else ["teams"]
+            _print(_OK, "Detecção de calls", f"via CoreAudio (apps: {', '.join(pats)})")
+            bpats = browser_patterns_from(cfg.detection) if cfg else []
+            if bpats:
+                if mactitles.available():
+                    _print(_OK, "Detecção no navegador",
+                           f"{', '.join(bpats)} — permissão de Acessibilidade OK")
+                else:
+                    _print(_WARN, "Detecção no navegador",
+                           "SEM a permissão de Acessibilidade (títulos invisíveis): calls no "
+                           "navegador não são detectadas e a ata sai sem nome da reunião; apps "
+                           "desktop (Teams/Zoom) funcionam normal. Conceda em Ajustes → "
+                           "Privacidade e Segurança → Acessibilidade")
+        except Exception as e:
+            _print(_WARN, "Detecção de calls", f"erro ao checar ({e})")
+    elif sys.platform != "win32":
         _print(_OK, "Detecção de calls", "não suportada neste SO ainda — use a gravação manual")
     else:
         try:
@@ -767,9 +803,31 @@ def cmd_doctor(args) -> int:
         except Exception as e:
             _print(_WARN, "Detecção no navegador", str(e))
 
-    # Áudio — enumeração WASAPI (pyaudiowpatch); fora do Windows a captura ainda
-    # não existe e o item é não-aplicável (#98)
-    if sys.platform != "win32":
+    # macOS (#104): segredos no Keychain + orientação de permissões. Os itens de
+    # captura/detecção nativas entram aqui quando os marcos M3/M4 chegarem.
+    if sys.platform == "darwin":
+        if util.keychain_ok():
+            _print(_OK, "Segredos (Keychain)", "chaveiro acessível — chaves de API ficam fora do config.toml")
+        else:
+            _print(_WARN, "Segredos (Keychain)",
+                   "chaveiro inacessível (trancado? sessão SSH?) — chaves de API serão gravadas em texto plano")
+        _print(_WARN, "Permissões do macOS",
+               "captura exige Microfone e 'Gravação de Áudio do Sistema' (Ajustes → Privacidade e "
+               "Segurança). Rodando de terminal/venv o pedido de áudio do sistema é NEGADO em "
+               "silêncio — adicione o app do terminal manualmente no painel; sem isso o loopback "
+               "grava zeros (só a sua voz entra na ata)")
+
+    # Áudio — Windows: enumeração WASAPI (pyaudiowpatch); macOS: sonda sounddevice
+    # (o loopback é o tap de sistema — o nome mostrado é o clock); senão n/a (#98)
+    if sys.platform == "darwin":
+        probe = util.run_audio_probe()
+        if probe:
+            _print(_OK, "Microfone padrão", probe.get("mic") or "?")
+            _print(_OK, "Áudio do sistema", f"tap CoreAudio (clock: {probe.get('loopback') or '?'})")
+        else:
+            _print(_FAIL, "Dispositivos de áudio", "sonda de áudio falhou (veja o log)")
+            failures += 1
+    elif sys.platform != "win32":
         _print(_OK, "Dispositivos de áudio", "captura não suportada neste SO ainda (Windows-only)")
     else:
         try:
@@ -845,7 +903,8 @@ def cmd_doctor(args) -> int:
         if cached:
             _print(_OK, "Modelo Whisper", f"{model} (em cache)")
         else:
-            _print(_WARN, "Modelo Whisper", f"{model} ainda não baixado — baixa (~1,6 GB) na primeira transcrição ou no setup.ps1")
+            setup_script = "setup.ps1" if sys.platform == "win32" else "setup.sh"
+            _print(_WARN, "Modelo Whisper", f"{model} ainda não baixado — baixa (~1,6 GB) na primeira transcrição ou no {setup_script}")
     except Exception as e:
         _print(_WARN, "Modelo Whisper", str(e))
 
@@ -857,6 +916,9 @@ def cmd_doctor(args) -> int:
             Notifier().test()
             if sys.platform == "win32":
                 _print(_OK, "Toast", "notificação de teste disparada")
+            elif sys.platform == "darwin":
+                _print(_OK, "Toast", "notificação disparada via osascript — se não apareceu, habilite "
+                                     "as notificações do 'Editor de Scripts' em Ajustes → Notificações")
             else:
                 _print(_OK, "Toast", "no-op neste SO (toasts nativos ainda não suportados) — logado")
         except Exception as e:

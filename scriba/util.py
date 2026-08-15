@@ -49,6 +49,17 @@ ASSETS_DIR = resource_path("assets")
 ICON_ICO = ASSETS_DIR / "scriba.ico"
 ICON_PNG = ASSETS_DIR / "scriba.png"
 ICON_REC_PNG = ASSETS_DIR / "scriba_rec.png"
+ICON_TEMPLATE_PNG = ASSETS_DIR / "scriba_template.png"  # menu bar do macOS (máscara)
+
+def so_nome() -> str:
+    """Nome de exibição do SO atual, para textos de UI ("padrão do Windows",
+    "segue o macOS"...). Não usar para lógica — para isso é sys.platform."""
+    if sys.platform == "win32":
+        return "Windows"
+    if sys.platform == "darwin":
+        return "macOS"
+    return "Linux"
+
 
 # Identidade do app no Windows (taskbar + toasts). Sem ela, a barra de tarefas
 # casa a janela (que vive num pythonw.exe filho) com o atalho do IDLE e mostra
@@ -569,3 +580,82 @@ def dpapi_decrypt(token: str) -> str | None:
         return dec.decode("utf-8")
     except Exception:
         return None
+
+
+# Segredos no macOS: Keychain via /usr/bin/security (#104). O TOML guarda só a
+# REFERÊNCIA "keychain:<conta>"; o segredo vive no chaveiro de login, service
+# "ScribaDev". O binário security entra na ACL do item ao criá-lo, então as
+# leituras seguintes não abrem prompt. Mesmo contrato de degradação da DPAPI:
+# qualquer falha devolve None e o chamador grava/lê plaintext.
+KEYCHAIN_PREFIX = "keychain:"
+_KEYCHAIN_SERVICE = "ScribaDev"
+
+
+def _keychain_texto_seguro(s: str) -> bool:
+    """O tokenizer do `security -i` entende aspas duplas com escapes, mas segredo
+    é coisa séria demais para apostar em escaping: só aceitamos conta/segredo sem
+    aspas, barras ou controle (chaves de API reais são ASCII simples). Fora disso,
+    degrada para plaintext em vez de gravar um valor possivelmente truncado."""
+    return bool(s) and not any(c in s for c in '"\\\n\r\t') and s.isprintable()
+
+
+def keychain_store(account: str, secret: str) -> str | None:
+    """Guarda `secret` no Keychain (service ScribaDev, conta `account`) e devolve
+    o token 'keychain:<conta>' para gravar no TOML. None se indisponível (não-macOS,
+    chaveiro trancado, texto arriscado) — o chamador grava plaintext nesse caso.
+
+    O comando vai por STDIN (`security -i`), nunca por argv: argumentos de
+    processo são visíveis no `ps` de qualquer usuário."""
+    if sys.platform != "darwin" or not _keychain_texto_seguro(account) or not _keychain_texto_seguro(secret):
+        return None
+    import subprocess
+
+    try:
+        cmd = f'add-generic-password -U -s "{_KEYCHAIN_SERVICE}" -a "{account}" -w "{secret}"\n'
+        out = subprocess.run(["/usr/bin/security", "-i"], input=cmd.encode("utf-8"),
+                             capture_output=True, timeout=15)
+        if out.returncode != 0:
+            log.warning("keychain_store falhou p/ %s (rc=%s) — gravando plaintext", account, out.returncode)
+            return None
+        return KEYCHAIN_PREFIX + account
+    except Exception as e:
+        log.warning("keychain_store indisponível (%s) — gravando plaintext", e)
+        return None
+
+
+def keychain_lookup(token: str) -> str | None:
+    """Resolve um 'keychain:<conta>' lendo o Keychain. None se falhar (item
+    removido, chaveiro trancado, não-macOS) — chave inutilizável nesta máquina."""
+    if sys.platform != "darwin" or not token or not token.startswith(KEYCHAIN_PREFIX):
+        return None
+    account = token[len(KEYCHAIN_PREFIX):]
+    if not _keychain_texto_seguro(account):
+        return None
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["/usr/bin/security", "find-generic-password", "-s", _KEYCHAIN_SERVICE, "-a", account, "-w"],
+            capture_output=True, timeout=15,
+        )
+        if out.returncode != 0:
+            return None
+        return out.stdout.decode("utf-8").rstrip("\n") or None
+    except Exception:
+        return None
+
+
+def keychain_ok() -> bool:
+    """O Keychain responde? (sonda do doctor). `find-generic-password` do service
+    ScribaDev: rc 0 (já há item) e rc 44 (nada gravado ainda) contam como OK;
+    qualquer outro rc/erro = chaveiro inacessível."""
+    if sys.platform != "darwin":
+        return False
+    import subprocess
+
+    try:
+        out = subprocess.run(["/usr/bin/security", "find-generic-password", "-s", _KEYCHAIN_SERVICE],
+                             capture_output=True, timeout=15)
+        return out.returncode in (0, 44)
+    except Exception:
+        return False

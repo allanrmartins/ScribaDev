@@ -24,6 +24,23 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: python -m unittest discover -s tests -v
 
+  test-macos:
+    # Port macOS (épico #104, docs/port-mac.md): runner arm64, mesmo contrato do
+    # test-linux. Sem brew install ffmpeg de partida — nenhum teste exige o binário
+    # (ffmpeg_status só consulta o PATH).
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar deps do projeto
+        run: pip install -e .
+      - name: Rodar a suite de testes
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m unittest discover -s tests -v
+
   test-linux:
     # Port multiplataforma (épico #104): trava regressões de portabilidade a cada
     # push. Os markers do pyproject deixam pyaudiowpatch/windows-toasts de fora;

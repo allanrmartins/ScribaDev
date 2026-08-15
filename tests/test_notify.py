@@ -1,4 +1,5 @@
-"""#101: notificações por SO — toasts no Windows, no-op logado no POSIX."""
+"""#101: notificações por SO — toasts no Windows, osascript no macOS (#104 M6),
+no-op logado nos demais."""
 
 import sys
 import unittest
@@ -9,7 +10,12 @@ from scriba import notify
 
 class TestSelecaoPorSO(unittest.TestCase):
     def test_notifier_do_so_atual(self):
-        esperado = notify._WindowsNotifier if sys.platform == "win32" else notify._NoopNotifier
+        if sys.platform == "win32":
+            esperado = notify._WindowsNotifier
+        elif sys.platform == "darwin":
+            esperado = notify._MacNotifier
+        else:
+            esperado = notify._NoopNotifier
         self.assertIs(notify.Notifier, esperado)
 
 

@@ -118,8 +118,25 @@ def exclude_from_capture(widget) -> bool:
     (Windows < 10 2004, sandbox): a janela segue funcionando, só não fica oculta no
     compartilhamento. Chamar DEPOIS de show() (o HWND precisa existir).
 
+    macOS (#104, M7): NSWindow.sharingType = None via qt/mac.py. GUARD obrigatório
+    no platformName: sob QPA offscreen (CI) o winId() NÃO é um NSView — chamar o
+    objc com esse valor derruba o processo.
+
     Porta `scriba/overlay.py:_exclude_from_capture`. Em Qt o `winId()` de um top-level
     já é o HWND real (no Tk era a janela-filha, que exigia GetAncestor(GA_ROOT))."""
+    import sys
+
+    if sys.platform == "darwin":
+        try:
+            from PySide6.QtGui import QGuiApplication
+
+            if QGuiApplication.platformName() != "cocoa":
+                return False
+            from .mac import set_window_sharing_none
+
+            return set_window_sharing_none(int(widget.winId()))
+        except Exception:
+            return False
     try:
         import ctypes
         import ctypes.wintypes as wt

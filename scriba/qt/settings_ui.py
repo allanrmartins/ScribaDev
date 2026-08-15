@@ -18,6 +18,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import threading
+from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -42,7 +43,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QTimer, Signal
 
 from .. import config as config_mod
-from .. import util
+from .. import plat, util
 from . import theme, widgets
 
 log = logging.getLogger("scriba.qt.settings_ui")
@@ -114,7 +115,7 @@ def _mini_home(th: theme.Theme) -> QWidget:
     dados fictícios: header + pílulas, card de call com o botão de acento, stats e o card
     de Notas (a borda de ACENTO — o que o bug #70 sujava). Sem separadores/linhas e sem a
     seção de pendências: só o essencial p/ ler o tema, como a capa (que não tem linhas)."""
-    xs, xxs = "font-size:7pt;", "font-size:6pt;"
+    xs, xxs = f"font-size:{theme.zpt(7)}pt;", f"font-size:{theme.zpt(6)}pt;"
     # Seletor #id em CADA QFrame: um stylesheet sem seletor vaza `border`/`background`
     # para os QLabels filhos (era o que desenhava "linhas"/caixas em volta das notas).
     root = QFrame(); root.setObjectName("miniRoot")
@@ -149,7 +150,7 @@ def _mini_home(th: theme.Theme) -> QWidget:
 
 
 class _AutoOption(QFrame):
-    """Opção 'Automático' (segue o Windows) no topo do seletor — sem miniatura própria,
+    """Opção 'Automático' (segue o SO) no topo do seletor — sem miniatura própria,
     porque não é uma cor fixa. Clicar aplica o modo automático (on_pick(None))."""
 
     def __init__(self, selected, on_pick):
@@ -164,10 +165,11 @@ class _AutoOption(QFrame):
                            f" border-radius:9px; background:{act.surface}; }}")
         h = QHBoxLayout(self); h.setContentsMargins(12, 9, 12, 9); h.setSpacing(9)
         h.addWidget(_pl("●" if selected else "○",
-                        f"color:{act.accent if selected else act.muted}; font-size:12pt;"))
+                        f"color:{act.accent if selected else act.muted}; font-size:{theme.zpt(12)}pt;"))
         col = QVBoxLayout(); col.setSpacing(1)
-        col.addWidget(_pl("Automático", f"color:{act.text}; font-weight:bold; font-size:10pt;"))
-        col.addWidget(_pl("Segue o modo claro/escuro do Windows", f"color:{act.muted}; font-size:8pt;"))
+        col.addWidget(_pl("Automático", f"color:{act.text}; font-weight:bold; font-size:{theme.zpt(10)}pt;"))
+        col.addWidget(_pl(f"Segue o modo claro/escuro do {util.so_nome()}",
+                          f"color:{act.muted}; font-size:{theme.zpt(8)}pt;"))
         h.addLayout(col); h.addStretch(1)
 
     def mousePressEvent(self, event) -> None:
@@ -192,10 +194,10 @@ class _ThemeCard(QFrame):
                            f" border-radius:9px; background:{act.surface}; }}")
         v = QVBoxLayout(self); v.setContentsMargins(9, 8, 9, 9); v.setSpacing(6)
         top = QHBoxLayout()
-        top.addWidget(_pl(label, f"color:{act.text}; font-weight:bold; font-size:9.5pt;"))
+        top.addWidget(_pl(label, f"color:{act.text}; font-weight:bold; font-size:{theme.zpt(9.5)}pt;"))
         top.addStretch(1)
         top.addWidget(_pl("●" if selected else "○",
-                          f"color:{act.accent if selected else act.muted}; font-size:11pt;"))
+                          f"color:{act.accent if selected else act.muted}; font-size:{theme.zpt(11)}pt;"))
         v.addLayout(top)
         v.addWidget(_mini_home(mini_th))
 
@@ -339,11 +341,11 @@ class SettingsWindow(QWidget):
         return c
 
     def _device_choice(self, form, label, section, attr, key, tooltip=""):
-        """Combo EDITÁVEL de dispositivo de áudio: '(padrão do Windows)' [valor ''] + a
+        """Combo EDITÁVEL de dispositivo de áudio: '(padrão do SO)' [valor ''] + a
         lista enumerada (populada em thread no 1º show). Editável = passthrough do valor
         salvo mesmo se o aparelho não estiver conectado agora. `key`: 'mics'|'loopbacks'."""
         c = QComboBox(); widgets.no_wheel_steal(c)
-        c.addItem("(padrão do Windows)", "")
+        c.addItem(f"(padrão do {util.so_nome()})", "")
         if tooltip:
             widgets.add_tooltip(c, tooltip)
         self._fields.append((c, section, attr, "device", None))
@@ -369,9 +371,9 @@ class SettingsWindow(QWidget):
         f = self._tab("Gravação")
         au = self._group(f, "Áudio")
         self._device_choice(au, "Microfone", "audio", "mic_device", "mics",
-                             tooltip="Escolha o microfone na lista ou deixe no padrão do Windows.")
+                             tooltip=f"Escolha o microfone na lista ou deixe no padrão do {util.so_nome()}.")
         self._device_choice(au, "Áudio do sistema", "audio", "loopback_device", "loopbacks",
-                             tooltip="Escolha a saída a capturar (loopback) ou use o padrão do Windows.")
+                             tooltip=f"Escolha a saída a capturar (loopback) ou use o padrão do {util.so_nome()}.")
         self._check(au, "Manter o áudio após transcrever", "audio", "keep_audio")
         self._choice(au, "Formato do áudio", "audio", "archive_format", _ARCHIVE)
         self._int(au, "Apagar gravação após (dias)", "audio", "retention_days", 0, 3650,
@@ -463,7 +465,7 @@ class SettingsWindow(QWidget):
         self._prompt_editor = QPlainTextEdit()
         self._prompt_editor.setMinimumHeight(180)
         self._prompt_editor.setStyleSheet(
-            f"font-family:'{theme.active().font_mono}','Consolas',monospace; font-size:9pt;")
+            f"font-family:'{theme.active().font_mono}','Consolas',monospace; font-size:{theme.zpt(9)}pt;")
         pr.addRow(self._prompt_editor)
 
     def _open_wizard(self) -> None:
@@ -502,8 +504,9 @@ class SettingsWindow(QWidget):
     def _build_dirs_tab(self) -> None:
         f = self._tab("Pastas")
         self._dir_row(f, "Notas (.md)", "output", "export_dir",
-                      placeholder="%LOCALAPPDATA%\\ScribaDev\\Notas (padrão, local)")
-        self._dir_row(f, "Gravações", "output", "recordings_dir", placeholder="C:\\temp\\scribadev\\gravacoes (padrão)")
+                      placeholder=f"{util.APP_DIR / 'Notas'} (padrão, local)")
+        self._dir_row(f, "Gravações", "output", "recordings_dir",
+                      placeholder=f"{plat.default_recordings_dir()} (padrão)")
 
     def _dir_row(self, form, label, section, attr, placeholder="", tooltip="") -> None:
         e = QLineEdit()
@@ -539,7 +542,7 @@ class SettingsWindow(QWidget):
         for combo, key in self._device_combos:
             current = combo.currentData()   # valor atual (data); "" = padrão
             names = data.get(key) or []
-            while combo.count() > 1:        # mantém só o "(padrão do Windows)" no topo
+            while combo.count() > 1:        # mantém só o "(padrão do SO)" no topo
                 combo.removeItem(1)
             for n in names:
                 combo.addItem(n, n)
@@ -573,6 +576,40 @@ class SettingsWindow(QWidget):
         rl.addStretch(1)   # empurra os blocos p/ a esquerda; o excesso fica vazio à direita
         f.addRow(row)
         self._populate_theme_cards()
+
+        # tamanho da interface (#104): no macOS o Qt mapeia pontos a 72 dpi (vs 96 no
+        # Windows) e a UI "encolhe" — o padrão automático lá é 133%, que devolve a
+        # proporção visual do Windows. Escala os tokens do tema + os font-size via
+        # theme.zpt(); aplica a quente pelo mesmo caminho da troca de tema.
+        zrow = QWidget()
+        zl = QHBoxLayout(zrow); zl.setContentsMargins(0, 12, 0, 0); zl.setSpacing(8)
+        zl.addWidget(QLabel("Tamanho da interface:"))
+        self._zoom_combo = QComboBox(); widgets.no_wheel_steal(self._zoom_combo)
+        widgets.add_tooltip(self._zoom_combo,
+                            "Escala todo o texto da interface. Aplica na hora; janelas já "
+                            "abertas podem precisar ser reabertas para ajustar tudo.")
+        auto_pct = round(theme.default_zoom() * 100)
+        self._zoom_combo.addItem(f"Automático ({auto_pct}% — padrão do {util.so_nome()})", None)
+        for z in theme.ZOOM_OPTIONS:
+            self._zoom_combo.addItem(f"{round(z * 100)}%", z)
+        choice = theme.zoom_choice()
+        if choice is not None:
+            for i in range(1, self._zoom_combo.count()):
+                if abs(self._zoom_combo.itemData(i) - choice) < 0.005:
+                    self._zoom_combo.setCurrentIndex(i)
+                    break
+        self._zoom_combo.currentIndexChanged.connect(self._pick_zoom)
+        zl.addWidget(self._zoom_combo)
+        zhint = QLabel("Aplica na hora; janelas já abertas podem precisar ser reabertas.")
+        zhint.setProperty("role", "muted")
+        zl.addWidget(zhint)
+        zl.addStretch(1)
+        f.addRow(zrow)
+
+    def _pick_zoom(self, index: int) -> None:
+        """Persiste a escolha de zoom (state.json, não config.toml — preferência de
+        exibição é por máquina). None = automático do SO."""
+        theme.set_zoom_choice(self._zoom_combo.itemData(index))
 
     def _populate_theme_cards(self) -> None:
         """(Re)constrói o seletor: a opção 'Automático' no topo (largura cheia) + os 4
@@ -650,7 +687,7 @@ class SettingsWindow(QWidget):
         on.setSpacing(6)
         ok = QLabel("Apontamento de horas está ativado ✓")
         ok.setProperty("role", "ok")
-        hint = QLabel("Banco local em %LOCALAPPDATA%\\ScribaDev\\timesheet.db (backup diário "
+        hint = QLabel(f"Banco local em {util.APP_DIR / 'timesheet.db'} (backup diário "
                       "automático). Desativar NÃO apaga seus dados.")
         hint.setProperty("role", "muted")
         hint.setWordWrap(True)
@@ -674,9 +711,9 @@ class SettingsWindow(QWidget):
                    placeholder="(vazio = o último usado)",
                    hint="Pré-seleção do lançamento manual.")
         self._text(gl, "Pasta do export Excel:", "timesheet", "export_dir",
-                   placeholder="(vazio = Documentos\\ScribaDev\\Apontamentos)")
+                   placeholder=f"(vazio = {Path.home() / 'Documents' / 'ScribaDev' / 'Apontamentos'})")
         self._text(gl, "Pasta do backup diário:", "timesheet", "backup_dir",
-                   placeholder="(vazio = %LOCALAPPDATA%\\ScribaDev\\backups)",
+                   placeholder=f"(vazio = {util.APP_DIR / 'backups'})",
                    hint="Arquivo morto - pode apontar para OneDrive.")
         on.addWidget(box)
         orow = QHBoxLayout()
@@ -711,10 +748,10 @@ class SettingsWindow(QWidget):
             f" border-radius:{t.radius}px; }}"
             f"QFrame#tsActivateCard QLabel {{ border:none; background:transparent; }}"
             f"QPushButton#tsActivateBtn {{ background:{t.warn}; color:{fg}; font-weight:bold;"
-            f" font-size:11pt; padding:9px 20px; border:none; border-radius:{t.radius}px; }}"
+            f" font-size:{theme.zpt(11)}pt; padding:9px 20px; border:none; border-radius:{t.radius}px; }}"
             f"QPushButton#tsActivateBtn:hover {{ background:{t.accent}; color:{t.on_accent}; }}"
             f"QPushButton#tsActivateBtn:disabled {{ background:{t.border}; color:{t.muted}; }}")
-        self._ts_off_title.setStyleSheet(f"font-size:12pt; font-weight:bold; color:{t.warn};")
+        self._ts_off_title.setStyleSheet(f"font-size:{theme.zpt(12)}pt; font-weight:bold; color:{t.warn};")
         self._ts_off_desc.setStyleSheet(f"color:{t.muted};")
 
     def _timesheet_enabled(self) -> bool:
@@ -796,7 +833,7 @@ class SettingsWindow(QWidget):
         outer = QVBoxLayout(page); outer.setContentsMargins(0, 0, 0, 0)
         scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QScrollArea.NoFrame)
         inner = QWidget(); lay = QVBoxLayout(inner); lay.setContentsMargins(14, 14, 14, 14)
-        title = QLabel("ScribaDev"); title.setStyleSheet("font-size:18pt; font-weight:bold;")
+        title = QLabel("ScribaDev"); title.setStyleSheet(f"font-size:{theme.zpt(18)}pt; font-weight:bold;")
         lay.addWidget(title)
         ver = QLabel(updates.build_string()); ver.setProperty("role", "muted"); lay.addWidget(ver)
         desc = QLabel("Gravação e transcrição automática de reuniões (Teams, Zoom, Meet) — 100% local e privado.")
@@ -822,7 +859,7 @@ class SettingsWindow(QWidget):
         for label, value, level in self._about_components():
             color = {"ok": t.muted, "warn": t.warn, "err": t.accent}.get(level, t.muted)
             row = QLabel(f"<b>{label}:</b> {value}")
-            row.setWordWrap(True); row.setStyleSheet(f"color:{color}; font-size:9pt;")
+            row.setWordWrap(True); row.setStyleSheet(f"color:{color}; font-size:{theme.zpt(9)}pt;")
             lay.addWidget(row)
         lay.addStretch(1)
         scroll.setWidget(inner); outer.addWidget(scroll)
@@ -844,15 +881,21 @@ class SettingsWindow(QWidget):
 
         fw, ct, pa = ver("faster-whisper"), ver("ctranslate2"), ver("pyaudiowpatch")
         torch_v = ver("torch")
+        if sys.platform == "win32":
+            audio_row = core("Áudio (WASAPI)", f"pyaudiowpatch {pa or '?'}", bool(pa))
+        elif sys.platform == "darwin":
+            sd_v = ver("sounddevice")
+            audio_row = core("Áudio (CoreAudio)", f"sounddevice {sd_v or '?'} + process tap", bool(sd_v))
+        else:
+            audio_row = ("Áudio (captura)", "não suportada neste SO ainda", "warn")
         return [
             ("Python", sys.version.split()[0], "ok"),
             core("Transcrição", f"faster-whisper {fw or '?'} · ctranslate2 {ct or '?'}", bool(fw and ct)),
             ("Diarização", *self._diar_health(ver)),
             ("PyTorch", torch_v or "não instalado (opcional — só p/ a diarização)", "ok" if torch_v else "warn"),
             ("GPU", self._gpu_str(), "ok"),
-            core("Áudio (WASAPI)", f"pyaudiowpatch {pa or '?'}", bool(pa)),
+            audio_row,
             ("Compressão de áudio", *self._ffmpeg_health()),
-            ("Bandeja / imagens", f"pystray {ver('pystray') or '—'} · Pillow {ver('Pillow') or '—'}", "ok"),
         ]
 
     def _diar_health(self, ver) -> tuple:

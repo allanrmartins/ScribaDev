@@ -10,6 +10,10 @@ Para apps desktop (Teams, Zoom) o registro basta. Para o navegador ele só diz
 web (Meet, Teams web, Zoom web...) é confirmada pelo título de uma janela do
 navegador (browser_titles). Uma vez confirmada, a call segue viva enquanto o
 mic estiver aberto: trocar de aba não a derruba.
+
+No macOS (#104, M4) a MESMA máquina de estados roda sobre os process objects do
+CoreAudio (micusage_mac sintetiza os carimbos no formato FILETIME) e os títulos
+vêm da AX API (mactitles, atrás do wintitles.window_titles de sempre).
 """
 
 from __future__ import annotations
@@ -75,6 +79,13 @@ def _iter_mic_keys():
     o app está com o mic aberto. LastUsedTimeStart é reescrito toda vez que o app
     REABRE o mic — é o sinal de fronteira entre duas calls consecutivas (#34).
     """
+    # macOS (#104, M4): mesma interface, fonte = process objects do CoreAudio
+    # (micusage_mac sintetiza os carimbos em unidades FILETIME)
+    if sys.platform == "darwin":
+        from . import micusage_mac
+
+        yield from micusage_mac.snapshot()
+        return
     # lazy: winreg só existe no Windows; o import no topo quebrava o módulo (e a
     # cadeia scriba.main) em Linux/macOS antes de qualquer código rodar (#96)
     import winreg
@@ -146,6 +157,32 @@ def _key_basename(sub: str) -> str:
     return sub.rsplit("#", 1)[-1].lower()
 
 
+# darwin: pattern de navegador (nome estilo Windows) -> prefixos de bundle id.
+# Prefixo, e não igualdade: o áudio do Chrome roda num helper
+# ("com.google.chrome.helper..."). Sem tabela p/ um pattern, usa o próprio nome.
+_MAC_BROWSER_BUNDLES: dict[str, tuple[str, ...]] = {
+    "chrome": ("com.google.chrome",),
+    "msedge": ("com.microsoft.edgemac",),
+    "firefox": ("org.mozilla.firefox",),
+    "brave": ("com.brave.browser",),
+    "opera": ("com.operasoftware",),
+    "vivaldi": ("com.vivaldi",),
+    "safari": ("com.apple.safari",),  # fora do default: mic via WebKit.GPU (ver micusage_mac)
+}
+
+
+def _browser_key_match(sub: str, pattern: str) -> bool:
+    """A chave de sessão de mic `sub` é DO navegador `pattern`? Match exato por SO:
+    no Windows compara o basename do exe ("msedge" não pode casar o
+    msedgewebview2.exe que Teams/Outlook embutem); no darwin compara o bundle id
+    pela tabela acima (a chave do micusage_mac é o próprio bundle)."""
+    if sys.platform == "darwin":
+        bundle = sub.lower()
+        prefixes = _MAC_BROWSER_BUNDLES.get(pattern, (pattern,))
+        return any(bundle == p or bundle.startswith(p + ".") for p in prefixes)
+    return _key_basename(sub) == pattern + ".exe"
+
+
 def active_browser(browser_pats: list[str]) -> str | None:
     """Basename (sem .exe) do navegador monitorado com o mic aberto agora, ou None.
 
@@ -155,9 +192,8 @@ def active_browser(browser_pats: list[str]) -> str | None:
     for sub, _start, stop in _iter_mic_keys():
         if stop != 0:
             continue
-        base = _key_basename(sub)
         for p in browser_pats:
-            if base == p + ".exe":
+            if _browser_key_match(sub, p):
                 return p
     return None
 
@@ -166,9 +202,8 @@ def browser_key_status(browser_pats: list[str]) -> dict[str, bool]:
     """{navegador: já existe chave de mic no registro?} — para o doctor."""
     found = {p: False for p in browser_pats}
     for sub, _start, _stop in _iter_mic_keys():
-        base = _key_basename(sub)
         for p in browser_pats:
-            if base == p + ".exe":
+            if _browser_key_match(sub, p):
                 found[p] = True
     return found
 
@@ -328,10 +363,9 @@ class Detector:
         """{subchave: (start, stop)} das sessões de mic de apps e navegadores
         monitorados — a matéria-prima para detectar a call e rastrear sua sessão."""
         sessions = active_sessions(self.patterns)  # apps desktop (substring)
-        if self.browser_pats:  # navegadores: match exato do exe (não pega webview embutido)
+        if self.browser_pats:  # navegadores: match exato por SO (não pega webview embutido)
             for sub, start, stop in _iter_mic_keys():
-                base = _key_basename(sub)
-                if any(base == p + ".exe" for p in self.browser_pats):
+                if any(_browser_key_match(sub, p) for p in self.browser_pats):
                     sessions[sub] = (start, stop)
         return sessions
 
@@ -353,9 +387,8 @@ class Detector:
         for sub, (start, stop) in sessions.items():
             if stop != 0:
                 continue
-            base = _key_basename(sub)
             for p in self.browser_pats:
-                if base != p + ".exe":
+                if not _browser_key_match(sub, p):
                     continue
                 if self._web_call:
                     return (self.current_app or p.capitalize()), sub, start
@@ -572,9 +605,9 @@ class Detector:
 
     def run(self, stop_event) -> None:
         """Loop de detecção (roda em thread própria)."""
-        if sys.platform != "win32":
-            # o ConsentStore do registro não tem equivalente POSIX; a detecção
-            # automática fora do Windows é um marco futuro (#104)
+        if sys.platform not in ("win32", "darwin"):
+            # Windows: ConsentStore do registro; macOS: process objects do CoreAudio
+            # (micusage_mac); Linux é um marco futuro (#104)
             log.info("detecção automática de calls não suportada neste SO ainda — use a gravação manual")
             return
         while not stop_event.is_set():
@@ -597,8 +630,8 @@ class Detector:
 
 def debug_loop() -> int:
     """`scriba detect`: imprime as transições de estado para teste manual."""
-    if sys.platform != "win32":
-        print("detecção automática de calls não suportada neste SO ainda (Windows-only por ora)")
+    if sys.platform not in ("win32", "darwin"):
+        print("detecção automática de calls não suportada neste SO ainda")
         return 1
     from .config import load
 
@@ -615,7 +648,12 @@ def debug_loop() -> int:
     pats = patterns_from(cfg)
     status = app_key_status(pats)
     for name, exists in status.items():
-        marker = "OK" if exists else "ainda sem chave no registro (entre numa call dele uma vez)"
+        if exists:
+            marker = "OK"
+        elif sys.platform == "darwin":
+            marker = "nenhum uso de mic observado ainda nesta sessão"
+        else:
+            marker = "ainda sem chave no registro (entre numa call dele uma vez)"
         print(f"  {name}: {marker}")
     bpats = browser_patterns_from(cfg)
     tpats = title_patterns_from(cfg)

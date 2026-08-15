@@ -53,9 +53,18 @@ def _list(pa) -> dict:
 
 
 def main() -> int:
+    mode = sys.argv[1] if len(sys.argv) > 1 else ""
+    if sys.platform == "darwin":
+        # No macOS a sonda não precisa do isolamento anti-abort (pathologia do
+        # PortAudio/WASAPI), mas manter o subprocesso preserva os call sites e
+        # deixa o import do sounddevice fora do processo da GUI até precisar.
+        from . import recorder_mac
+
+        out = recorder_mac.probe_list() if mode == "list" else recorder_mac.probe_defaults()
+        print(json.dumps(out, ensure_ascii=False))
+        return 0
     import pyaudiowpatch as pyaudio
 
-    mode = sys.argv[1] if len(sys.argv) > 1 else ""
     pa = pyaudio.PyAudio()
     try:
         if mode == "list":

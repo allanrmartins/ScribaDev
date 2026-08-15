@@ -24,10 +24,21 @@ dependencies = [
     # captura WASAPI loopback e toasts WinRT: só existem (e só têm wheel) no Windows.
     # Fora dele o pip os ignora (épico #104); a captura POSIX vem em marcos futuros.
     "pyaudiowpatch==0.2.12.8 ; sys_platform == 'win32'",
+    # captura no macOS (#104, M3): data plane PortAudio (sounddevice, MIT) + control
+    # plane do process tap (CATapDescription via pyobjc; o resto é ctypes puro)
+    "sounddevice>=0.5 ; sys_platform == 'darwin'",
+    "pyobjc-framework-CoreAudio ; sys_platform == 'darwin'",
+    # títulos de janela p/ detecção no navegador + nome da reunião (#104, M4):
+    # AX API (precisa da permissão de Acessibilidade; degrada sem ela)
+    "pyobjc-framework-ApplicationServices ; sys_platform == 'darwin'",
+    # STT acelerado por Metal no Apple Silicon (#104, M5): provider stt_mlx atrás
+    # do make_transcriber; sem ele o local cai no faster-whisper CPU normalmente
+    "mlx-whisper ; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "faster-whisper==1.2.1",
     "ctranslate2~=4.8",
-    "pystray==0.19.5",
-    "Pillow>=11",
+    # pystray/Pillow saíram em 2026-08 (#104): a bandeja é QSystemTrayIcon desde o
+    # corte para Qt (#53) e nada mais importava os dois em runtime (o pystray, LGPL,
+    # ainda pesava na auditoria de licenças). Pillow segue só nos tools/ de dev.
     "windows-toasts==1.3.1 ; sys_platform == 'win32'",
     # UI: PySide6 virou dependência principal no corte para Qt (#53); antes era o extra `qt`.
     # 6.7 = piso com High-DPI por padrão + QSS estável.
