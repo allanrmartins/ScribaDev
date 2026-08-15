@@ -128,7 +128,7 @@ class Tray:
             self._theme_group.addAction(act)
             self._theme_acts.append((act, name))
 
-        add("Automático (segue o Windows)", None)
+        add(f"Automático (segue o {util.so_nome()})", None)
         for th in theme.themes():
             add(th.label, th.name)
         return menu

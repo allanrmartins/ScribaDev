@@ -161,8 +161,8 @@ _LIGHT = Theme(
 )
 
 _THEMES: dict[str, Theme] = {t.name: t for t in (_VSCODE, _SUBLIME, _CLAUDE, _LIGHT)}
-DEFAULT_DARK = "vscode"   # tema quando o Windows está no modo escuro
-DEFAULT_LIGHT = "light"   # tema quando o Windows está no modo claro
+DEFAULT_DARK = "vscode"   # tema quando o SO está no modo escuro
+DEFAULT_LIGHT = "light"   # tema quando o SO está no modo claro
 
 _STATE_KEY = "ui_theme"
 _active: Theme | None = None  # cache do tema vigente (evita reler o state a cada paint)
@@ -171,8 +171,35 @@ _active: Theme | None = None  # cache do tema vigente (evita reler o state a cad
 # --------------------------------------------------------- padrão por SO ------
 
 def _os_prefers_dark() -> bool:
-    """O Windows está no modo escuro para apps? (registro AppsUseLightTheme: 0=escuro,
-    1=claro). Padrão escuro se indisponível (não-Windows / falha)."""
+    """O SO está no modo escuro para apps? Windows: registro AppsUseLightTheme
+    (0=escuro, 1=claro). macOS: colorScheme do Qt (≥6.5), com fallback headless no
+    `defaults read` (a chave AppleInterfaceStyle SÓ existe no modo escuro — erro ao
+    ler = modo claro). Padrão escuro se indisponível (Linux / falha)."""
+    import sys
+
+    if sys.platform == "darwin":
+        try:
+            from PySide6.QtCore import Qt
+            from PySide6.QtGui import QGuiApplication
+
+            app = QGuiApplication.instance()
+            if app is not None:
+                scheme = app.styleHints().colorScheme()
+                if scheme == Qt.ColorScheme.Dark:
+                    return True
+                if scheme == Qt.ColorScheme.Light:
+                    return False
+                # Unknown: cai para o defaults read abaixo
+        except Exception:
+            pass
+        try:
+            import subprocess
+
+            out = subprocess.run(["defaults", "read", "-g", "AppleInterfaceStyle"],
+                                 capture_output=True, timeout=5)
+            return out.returncode == 0
+        except Exception:
+            return True
     try:
         import winreg
 
@@ -190,7 +217,7 @@ def _os_prefers_dark() -> bool:
 
 
 def os_default_theme() -> str:
-    """Slug do tema que casa com o tema atual do Windows (escuro->vscode, claro->light)."""
+    """Slug do tema que casa com o tema atual do SO (escuro->vscode, claro->light)."""
     return DEFAULT_DARK if _os_prefers_dark() else DEFAULT_LIGHT
 
 

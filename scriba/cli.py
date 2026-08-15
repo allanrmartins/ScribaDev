@@ -766,6 +766,17 @@ def cmd_doctor(args) -> int:
         except Exception as e:
             _print(_WARN, "Detecção no navegador", str(e))
 
+    # macOS (#104): segredos no Keychain + orientação de permissões. Os itens de
+    # captura/detecção nativas entram aqui quando os marcos M3/M4 chegarem.
+    if sys.platform == "darwin":
+        if util.keychain_ok():
+            _print(_OK, "Segredos (Keychain)", "chaveiro acessível — chaves de API ficam fora do config.toml")
+        else:
+            _print(_WARN, "Segredos (Keychain)",
+                   "chaveiro inacessível (trancado? sessão SSH?) — chaves de API serão gravadas em texto plano")
+        _print(_OK, "Permissões do macOS",
+               "nenhuma necessária por ora; captura (Microfone + Áudio do Sistema) chega em marcos futuros")
+
     # Áudio — enumeração WASAPI (pyaudiowpatch); fora do Windows a captura ainda
     # não existe e o item é não-aplicável (#98)
     if sys.platform != "win32":
@@ -844,7 +855,8 @@ def cmd_doctor(args) -> int:
         if cached:
             _print(_OK, "Modelo Whisper", f"{model} (em cache)")
         else:
-            _print(_WARN, "Modelo Whisper", f"{model} ainda não baixado — baixa (~1,6 GB) na primeira transcrição ou no setup.ps1")
+            setup_script = "setup.ps1" if sys.platform == "win32" else "setup.sh"
+            _print(_WARN, "Modelo Whisper", f"{model} ainda não baixado — baixa (~1,6 GB) na primeira transcrição ou no {setup_script}")
     except Exception as e:
         _print(_WARN, "Modelo Whisper", str(e))
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import threading
+from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -42,7 +43,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QTimer, Signal
 
 from .. import config as config_mod
-from .. import util
+from .. import plat, util
 from . import theme, widgets
 
 log = logging.getLogger("scriba.qt.settings_ui")
@@ -149,7 +150,7 @@ def _mini_home(th: theme.Theme) -> QWidget:
 
 
 class _AutoOption(QFrame):
-    """Opção 'Automático' (segue o Windows) no topo do seletor — sem miniatura própria,
+    """Opção 'Automático' (segue o SO) no topo do seletor — sem miniatura própria,
     porque não é uma cor fixa. Clicar aplica o modo automático (on_pick(None))."""
 
     def __init__(self, selected, on_pick):
@@ -167,7 +168,7 @@ class _AutoOption(QFrame):
                         f"color:{act.accent if selected else act.muted}; font-size:12pt;"))
         col = QVBoxLayout(); col.setSpacing(1)
         col.addWidget(_pl("Automático", f"color:{act.text}; font-weight:bold; font-size:10pt;"))
-        col.addWidget(_pl("Segue o modo claro/escuro do Windows", f"color:{act.muted}; font-size:8pt;"))
+        col.addWidget(_pl(f"Segue o modo claro/escuro do {util.so_nome()}", f"color:{act.muted}; font-size:8pt;"))
         h.addLayout(col); h.addStretch(1)
 
     def mousePressEvent(self, event) -> None:
@@ -339,11 +340,11 @@ class SettingsWindow(QWidget):
         return c
 
     def _device_choice(self, form, label, section, attr, key, tooltip=""):
-        """Combo EDITÁVEL de dispositivo de áudio: '(padrão do Windows)' [valor ''] + a
+        """Combo EDITÁVEL de dispositivo de áudio: '(padrão do SO)' [valor ''] + a
         lista enumerada (populada em thread no 1º show). Editável = passthrough do valor
         salvo mesmo se o aparelho não estiver conectado agora. `key`: 'mics'|'loopbacks'."""
         c = QComboBox(); widgets.no_wheel_steal(c)
-        c.addItem("(padrão do Windows)", "")
+        c.addItem(f"(padrão do {util.so_nome()})", "")
         if tooltip:
             widgets.add_tooltip(c, tooltip)
         self._fields.append((c, section, attr, "device", None))
@@ -369,9 +370,9 @@ class SettingsWindow(QWidget):
         f = self._tab("Gravação")
         au = self._group(f, "Áudio")
         self._device_choice(au, "Microfone", "audio", "mic_device", "mics",
-                             tooltip="Escolha o microfone na lista ou deixe no padrão do Windows.")
+                             tooltip=f"Escolha o microfone na lista ou deixe no padrão do {util.so_nome()}.")
         self._device_choice(au, "Áudio do sistema", "audio", "loopback_device", "loopbacks",
-                             tooltip="Escolha a saída a capturar (loopback) ou use o padrão do Windows.")
+                             tooltip=f"Escolha a saída a capturar (loopback) ou use o padrão do {util.so_nome()}.")
         self._check(au, "Manter o áudio após transcrever", "audio", "keep_audio")
         self._choice(au, "Formato do áudio", "audio", "archive_format", _ARCHIVE)
         self._int(au, "Apagar gravação após (dias)", "audio", "retention_days", 0, 3650,
@@ -502,8 +503,9 @@ class SettingsWindow(QWidget):
     def _build_dirs_tab(self) -> None:
         f = self._tab("Pastas")
         self._dir_row(f, "Notas (.md)", "output", "export_dir",
-                      placeholder="%LOCALAPPDATA%\\ScribaDev\\Notas (padrão, local)")
-        self._dir_row(f, "Gravações", "output", "recordings_dir", placeholder="C:\\temp\\scribadev\\gravacoes (padrão)")
+                      placeholder=f"{util.APP_DIR / 'Notas'} (padrão, local)")
+        self._dir_row(f, "Gravações", "output", "recordings_dir",
+                      placeholder=f"{plat.default_recordings_dir()} (padrão)")
 
     def _dir_row(self, form, label, section, attr, placeholder="", tooltip="") -> None:
         e = QLineEdit()
@@ -539,7 +541,7 @@ class SettingsWindow(QWidget):
         for combo, key in self._device_combos:
             current = combo.currentData()   # valor atual (data); "" = padrão
             names = data.get(key) or []
-            while combo.count() > 1:        # mantém só o "(padrão do Windows)" no topo
+            while combo.count() > 1:        # mantém só o "(padrão do SO)" no topo
                 combo.removeItem(1)
             for n in names:
                 combo.addItem(n, n)
@@ -650,7 +652,7 @@ class SettingsWindow(QWidget):
         on.setSpacing(6)
         ok = QLabel("Apontamento de horas está ativado ✓")
         ok.setProperty("role", "ok")
-        hint = QLabel("Banco local em %LOCALAPPDATA%\\ScribaDev\\timesheet.db (backup diário "
+        hint = QLabel(f"Banco local em {util.APP_DIR / 'timesheet.db'} (backup diário "
                       "automático). Desativar NÃO apaga seus dados.")
         hint.setProperty("role", "muted")
         hint.setWordWrap(True)
@@ -674,9 +676,9 @@ class SettingsWindow(QWidget):
                    placeholder="(vazio = o último usado)",
                    hint="Pré-seleção do lançamento manual.")
         self._text(gl, "Pasta do export Excel:", "timesheet", "export_dir",
-                   placeholder="(vazio = Documentos\\ScribaDev\\Apontamentos)")
+                   placeholder=f"(vazio = {Path.home() / 'Documents' / 'ScribaDev' / 'Apontamentos'})")
         self._text(gl, "Pasta do backup diário:", "timesheet", "backup_dir",
-                   placeholder="(vazio = %LOCALAPPDATA%\\ScribaDev\\backups)",
+                   placeholder=f"(vazio = {util.APP_DIR / 'backups'})",
                    hint="Arquivo morto - pode apontar para OneDrive.")
         on.addWidget(box)
         orow = QHBoxLayout()
