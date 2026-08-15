@@ -42,10 +42,12 @@
    (collaborator read) ou instalador; no go-live, instalador + license key.
 6. **Fragmentação de áudio — fases B/C** — resiliência (rotação a cada 10 min com costura) e
    transcrição em-call (especificadas; fase A — callout de áudio incompleto — já entregue).
-7. **Port macOS (fase 2, pós-go-live)** — alvo macOS 14+/Apple Silicon: captura nativa sem
-   driver (CoreAudio process taps / ScreenCaptureKit), Whisper via whisper.cpp/MLX (Metal,
-   ~5–15× tempo real), detecção via CoreAudio process properties. BlackHole é GPL-3 — nunca
-   embutir. Exige notarização Apple (US$ 99/ano). Expande o produto além do nicho SAP.
+7. **Port macOS** — ✅ **código entregue 2026-08-15** (docs/port-mac.md): captura via
+   CoreAudio process taps (sem driver), detecção via process objects, STT Metal via
+   mlx-whisper, Keychain, LaunchAgent, hotkey Carbon, menu bar template. Pendente:
+   permissões TCC no Mac de dev + checklist de call real + empacotamento/.app com
+   notarização Apple (US$ 99/ano) para atribuição TCC própria. BlackHole (GPL-3)
+   continua banido. Expande o produto além do nicho SAP.
 8. **Port Linux** — prioridade menor (PipeWire/PulseAudio; fragmentação de distros).
 
 ## Pendências menores
