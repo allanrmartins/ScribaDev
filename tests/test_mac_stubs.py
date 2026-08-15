@@ -238,6 +238,83 @@ class TestRecorderDispatchDarwin(unittest.TestCase):
                              "Mic Interno")
 
 
+class TestBrowserKeyMatch(unittest.TestCase):
+    """M4: match de navegador por SO (função pura — roda em qualquer host)."""
+
+    def test_win32_exige_exe_exato(self):
+        from scriba import detector
+
+        with mock.patch.object(sys, "platform", "win32"):
+            self.assertTrue(detector._browser_key_match("C:#path#msedge.exe", "msedge"))
+            # o webview embutido do Teams/Outlook NÃO pode casar
+            self.assertFalse(detector._browser_key_match("C:#path#msedgewebview2.exe", "msedge"))
+
+    def test_darwin_usa_tabela_de_bundles(self):
+        from scriba import detector
+
+        with _darwin():
+            self.assertTrue(detector._browser_key_match("com.google.chrome", "chrome"))
+            # o áudio do Chrome roda num helper — prefixo tem que casar
+            self.assertTrue(detector._browser_key_match("com.google.chrome.helper", "chrome"))
+            self.assertTrue(detector._browser_key_match("com.microsoft.edgemac", "msedge"))
+            self.assertFalse(detector._browser_key_match("com.microsoft.teams2", "msedge"))
+            self.assertFalse(detector._browser_key_match("us.zoom.xos", "chrome"))
+
+
+class TestMacTitlesMapa(unittest.TestCase):
+    def test_exe_para_bundle(self):
+        from scriba import mactitles
+
+        pref = mactitles._prefixes_for({"chrome.exe", "ms-teams.exe"})
+        self.assertIn("com.google.chrome", pref)
+        self.assertIn("com.microsoft.teams", pref)
+
+
+@unittest.skipUnless(sys.platform == "darwin", "micusage_mac carrega o CoreAudio de verdade")
+class TestMicusageSnapshot(unittest.TestCase):
+    """M4: síntese de carimbos FILETIME a partir das transições do IsRunningInput."""
+
+    def setUp(self):
+        from scriba import micusage_mac
+
+        self.mu = micusage_mac
+        self.mu.reset()
+
+    def tearDown(self):
+        self.mu.reset()
+
+    def _snap(self, procs):
+        with mock.patch.object(self.mu, "_process_inputs", return_value=procs):
+            return {k: (start, stop) for k, start, stop in self.mu.snapshot()}
+
+    def test_abre_fecha_reabre(self):
+        s1 = self._snap([(10, "com.microsoft.teams2", True)])
+        start1, stop1 = s1["com.microsoft.teams2"]
+        self.assertGreater(start1, 0)
+        self.assertEqual(stop1, 0)  # mic aberto = análogo do LastUsedTimeStop == 0
+
+        s2 = self._snap([(10, "com.microsoft.teams2", False)])
+        start2, stop2 = s2["com.microsoft.teams2"]
+        self.assertEqual(start2, start1)   # fechar não mexe no start
+        self.assertGreaterEqual(stop2, start1)
+
+        s3 = self._snap([(10, "com.microsoft.teams2", True)])
+        start3, stop3 = s3["com.microsoft.teams2"]
+        self.assertGreaterEqual(start3, stop2)  # REABRIR reescreve o start (#34)
+        self.assertEqual(stop3, 0)
+
+    def test_processo_morto_fecha_sessao(self):
+        self._snap([(10, "us.zoom.xos", True)])
+        s = self._snap([])  # o processo sumiu com o mic aberto
+        self.assertNotEqual(s["us.zoom.xos"][1], 0)
+
+    def test_helpers_do_mesmo_bundle_fundem(self):
+        s = self._snap([(10, "com.google.Chrome.helper", True),
+                        (11, "com.google.Chrome.helper", False)])
+        self.assertEqual(list(s), ["com.google.chrome.helper"])
+        self.assertEqual(s["com.google.chrome.helper"][1], 0)  # OR: um aberto basta
+
+
 class TestSoNome(unittest.TestCase):
     def test_por_plataforma(self):
         with mock.patch.object(sys, "platform", "win32"):

@@ -28,6 +28,9 @@ dependencies = [
     # plane do process tap (CATapDescription via pyobjc; o resto é ctypes puro)
     "sounddevice>=0.5 ; sys_platform == 'darwin'",
     "pyobjc-framework-CoreAudio ; sys_platform == 'darwin'",
+    # títulos de janela p/ detecção no navegador + nome da reunião (#104, M4):
+    # AX API (precisa da permissão de Acessibilidade; degrada sem ela)
+    "pyobjc-framework-ApplicationServices ; sys_platform == 'darwin'",
     "faster-whisper==1.2.1",
     "ctranslate2~=4.8",
     # pystray/Pillow saíram em 2026-08 (#104): a bandeja é QSystemTrayIcon desde o

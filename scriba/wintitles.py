@@ -84,6 +84,14 @@ if sys.platform == "win32":
         _user32.EnumWindows(_on_window, 0)
         return titles
 
+elif sys.platform == "darwin":
+    def _enum_titles(exe_names: set[str]) -> list[str]:
+        """macOS (#104, M4): AX API via mactitles — mesmo contrato, mesmo prazo.
+        Sem a permissão de Acessibilidade devolve [] (degradação desenhada)."""
+        from .mactitles import enum_titles
+
+        return enum_titles(exe_names)
+
 else:
     def _enum_titles(exe_names: set[str]) -> list[str]:
         """POSIX: detecção por título de janela ainda não existe (#104) — lista vazia."""

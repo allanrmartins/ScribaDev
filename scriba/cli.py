@@ -723,9 +723,29 @@ def cmd_doctor(args) -> int:
     except Exception as e:
         _print(_WARN, "Resumo (IA)", f"erro ao checar o provider ({e})")
 
-    # Registro dos apps monitorados — a detecção lê o ConsentStore do Windows;
-    # fora dele ainda não há detecção automática (#98; stubs na #102)
-    if sys.platform != "win32":
+    # Apps monitorados — Windows lê o ConsentStore; macOS os process objects do
+    # CoreAudio (#104 M4); nos demais SOs ainda não há detecção automática
+    if sys.platform == "darwin":
+        try:
+            from . import mactitles
+            from .detector import browser_patterns_from, patterns_from
+
+            pats = patterns_from(cfg.detection) if cfg else ["teams"]
+            _print(_OK, "Detecção de calls", f"via CoreAudio (apps: {', '.join(pats)})")
+            bpats = browser_patterns_from(cfg.detection) if cfg else []
+            if bpats:
+                if mactitles.available():
+                    _print(_OK, "Detecção no navegador",
+                           f"{', '.join(bpats)} — permissão de Acessibilidade OK")
+                else:
+                    _print(_WARN, "Detecção no navegador",
+                           "SEM a permissão de Acessibilidade (títulos invisíveis): calls no "
+                           "navegador não são detectadas e a ata sai sem nome da reunião; apps "
+                           "desktop (Teams/Zoom) funcionam normal. Conceda em Ajustes → "
+                           "Privacidade e Segurança → Acessibilidade")
+        except Exception as e:
+            _print(_WARN, "Detecção de calls", f"erro ao checar ({e})")
+    elif sys.platform != "win32":
         _print(_OK, "Detecção de calls", "não suportada neste SO ainda — use a gravação manual")
     else:
         try:
