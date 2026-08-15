@@ -617,9 +617,12 @@ class CommandBarTests(unittest.TestCase):
         # a ação de IA é o botão de DESTAQUE: texto visível + ícone (não é só-ícone)
         self.assertEqual(w._chat_btn.text(), "Perguntar à reunião")
         self.assertFalse(w._chat_btn.icon().isNull(), "o botão de IA deveria ter ícone ao lado do texto")
-        # excluir mora no overflow, fora da fileira
-        acts = [a.text() for a in w._overflow_btn.menu().actions()]
-        self.assertTrue(any("Excluir" in a for a in acts), f"'Excluir' fora do overflow: {acts}")
+        # excluir é VISÍVEL na fileira (PR #137: escondido no overflow ninguém achava):
+        # só-ícone com tooltip, isolado à direita pelo stretch
+        self.assertIsInstance(w._delete_btn, QToolButton)
+        self.assertEqual(w._delete_btn.text(), "")
+        self.assertFalse(w._delete_btn.icon().isNull(), "botão de excluir sem ícone")
+        self.assertIn("Excluir", w._delete_btn.toolTip())
         # as demais (gerar prompt, copiar, vozes) são só-ícone
         for b in (w._prompt_btn, w._tr_btn, w._voice_btn):
             self.assertIsInstance(b, QToolButton, "ação secundária deveria ser QToolButton só-ícone")

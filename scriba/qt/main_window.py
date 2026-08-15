@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation
 from PySide6.QtWidgets import (
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -663,8 +665,52 @@ class MainWindow(QWidget):
             chip.setStyleSheet(
                 f"background:{t.field}; color:{t.muted}; border-radius:9px;"
                 f" padding:1px 8px; font-size:{t.font_size_small}pt;")
-        return self._meeting_row(lambda p=note_path: self._open_recent(p), ico,
-                                 _display_title(m), ml, chip, icon_align=Qt.AlignTop)
+        row = self._meeting_row(lambda p=note_path: self._open_recent(p), ico,
+                                _display_title(m), ml, chip, icon_align=Qt.AlignTop)
+        # clique-direito: ações da reunião direto da capa (PR #137: o Dinei fazia
+        # calls de teste e não achava como excluí-las sem entrar em Notas)
+        row.setContextMenuPolicy(Qt.CustomContextMenu)
+        row.customContextMenuRequested.connect(
+            lambda pos, m=m, r=row: self._recent_menu(r, pos, m))
+        return row
+
+    def _recent_menu_actions(self, m: dict) -> QMenu:
+        """Menu de contexto de uma reunião recente (separado do exec() modal p/ ser
+        testável, como o _note_context_menu da tela de Notas)."""
+        t = theme.active()
+        menu = QMenu(self)
+        note_path = (m.get("export_path") or "").strip()
+        menu.addAction(theme.qicon("folder"), "Abrir nota",
+                       lambda: self._open_recent(note_path))
+        folder = Path((m.get("folder") or "").strip() or ".")
+        if folder.is_dir():
+            menu.addAction(theme.qicon("folder"), "Abrir pasta da gravação",
+                           lambda: util.open_path(folder))
+        menu.addSeparator()
+        menu.addAction(theme.qicon("delete", color=t.rec), "Excluir reunião…",
+                       lambda: self._ask_delete_recent(m))
+        return menu
+
+    def _recent_menu(self, row, pos, m: dict) -> None:
+        self._recent_menu_actions(m).exec(row.mapToGlobal(pos))
+
+    def _ask_delete_recent(self, m: dict) -> None:
+        """Excluir direto da capa: MESMO diálogo e mesma lógica da tela de Notas
+        (nota + índice; checkbox p/ apagar também o áudio). Atualiza a capa e a
+        lista de Notas (se a janela já existe) na hora."""
+        from . import notes_ui
+
+        nome = (_display_title(m) or "reunião").strip()
+        ok, also_audio = notes_ui.confirm_delete(self, nome, 1)
+        if not ok:
+            return
+        note = (m.get("export_path") or "").strip()
+        notes_ui.delete_meeting(Path(note) if note else None,
+                                Path((m.get("folder") or "").strip()), also_audio)
+        self.refresh_home()
+        nw = getattr(self.app, "notes_win", None)
+        if nw is not None:
+            nw._refresh_list()
 
     def _recent_meta(self, m: dict) -> str:
         parts = []

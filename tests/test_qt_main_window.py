@@ -65,6 +65,22 @@ class MainWindowTests(unittest.TestCase):
         win.refresh_home()
         self.assertTrue(win._timesheet_btn.isHidden())
 
+    def test_menu_da_reuniao_recente_tem_excluir(self):
+        """PR #137: clique-direito numa reunião recente da capa oferece abrir a
+        nota, abrir a pasta (quando existe) e EXCLUIR - sem precisar ir a Notas."""
+        win = self._win()
+        m = {"export_path": "C:/x/nota.md", "folder": str(Path.cwd()),
+             "title": "Reunião de teste", "started_at": "2026-08-15T10:00:00"}
+        texts = [a.text() for a in win._recent_menu_actions(m).actions() if a.text()]
+        self.assertIn("Abrir nota", texts)
+        self.assertIn("Abrir pasta da gravação", texts)
+        self.assertTrue(any("Excluir" in t for t in texts), texts)
+        # sem pasta no disco, a ação de pasta some mas excluir permanece
+        m["folder"] = str(Path.cwd() / "nao-existe-xyz")
+        texts = [a.text() for a in win._recent_menu_actions(m).actions() if a.text()]
+        self.assertNotIn("Abrir pasta da gravação", texts)
+        self.assertTrue(any("Excluir" in t for t in texts), texts)
+
     def test_render_status_cria_uma_linha_por_item(self):
         win = self._win()
         win._render_status([

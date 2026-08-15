@@ -23,7 +23,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
+from PySide6.QtGui import QColor, QKeySequence, QShortcut, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -40,7 +40,6 @@ from PySide6.QtWidgets import (
     QSplitter,
     QTextBrowser,
     QTextEdit,
-    QToolButton,
     QToolTip,
     QTreeWidget,
     QTreeWidgetItem,
@@ -136,6 +135,48 @@ def has_labelable_voices(folder: Path) -> bool:
         return len(voices) > 1
     except (OSError, ValueError, TypeError):
         return False
+
+
+# -- exclusão de reunião (compartilhada com a capa, #16/PR #137) ---------------
+
+def confirm_delete(parent, nome: str, n: int) -> tuple[bool, bool]:
+    """Diálogo de confirmação de exclusão de nota(s) - o MESMO em toda a UI
+    (tela de Notas e capa). Devolve (confirmou, excluir_tambem_o_audio)."""
+    text = (f"Excluir a nota \"{nome[:60]}\"?" if n == 1 else f"Excluir {n} notas?")
+    box = QMessageBox(parent)
+    box.setWindowTitle("Excluir nota" + ("s" if n > 1 else ""))
+    box.setIcon(QMessageBox.Warning)
+    box.setText(text)
+    box.setInformativeText("A nota sai da lista e do índice de busca. Esta ação não pode ser desfeita.")
+    also = widgets.AnimatedCheckBox("Excluir também o áudio/gravação (sem volta)")
+    box.setCheckBox(also)
+    box.setStandardButtons(QMessageBox.Cancel | QMessageBox.Yes)
+    box.setDefaultButton(QMessageBox.Cancel)
+    return box.exec() == QMessageBox.Yes, also.isChecked()
+
+
+def delete_meeting(note_path: Path | None, folder: Path, also_audio: bool) -> None:
+    """Exclui UMA reunião: apaga a nota exportada e, com `also_audio`, a pasta da
+    gravação inteira (senão fica o tombstone #16, que preserva o áudio como backup
+    e impede o reindex de ressuscitar a nota). O índice é atualizado nos dois
+    caminhos. Erros de I/O só logam - a UI segue e o reindex reconcilia."""
+    from .. import meetings_index
+
+    if note_path is not None:
+        try:
+            note_path.unlink(missing_ok=True)
+        except OSError as e:
+            log.warning("exclusão: %s: %s", note_path.name, e)
+    if also_audio and folder.is_dir() and not util.is_locked(folder):
+        import shutil
+
+        meetings_index.remove_meeting(folder)
+        try:
+            shutil.rmtree(folder)
+        except OSError as e:
+            log.warning("exclusão gravação: %s: %s", folder.name, e)
+    else:
+        meetings_index.mark_deleted(folder)
 
 
 class NotesWindow(QWidget):
@@ -234,6 +275,10 @@ class NotesWindow(QWidget):
         self._tree.itemSelectionChanged.connect(self._show_selected)
         self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._tree_context_menu)
+        # tecla Delete/Del exclui a(s) nota(s) selecionada(s) - mesmo diálogo do
+        # botão (com confirmação); WidgetShortcut: só dispara com o foco na lista
+        QShortcut(QKeySequence.Delete, self._tree, context=Qt.WidgetShortcut,
+                  activated=self._ask_delete)
         lay.addWidget(self._tree, 1)
 
         # rodapé só-ícone: 3 botões de texto não cabiam no painel estreito (#64 pegou o
@@ -304,16 +349,12 @@ class NotesWindow(QWidget):
         for b in (self._prompt_btn, self._tr_btn, self._voice_btn):
             acts.addWidget(b)
         acts.addStretch(1)
-        self._overflow_btn = QToolButton()
-        self._overflow_btn.setIcon(theme.qicon("more-horizontal"))
-        self._overflow_btn.setPopupMode(QToolButton.InstantPopup)
-        self._overflow_btn.setCursor(Qt.PointingHandCursor)
-        widgets.add_tooltip(self._overflow_btn, "Mais ações")
-        menu = QMenu(self._overflow_btn)
-        self._delete_action = menu.addAction(theme.qicon("delete", color=theme.active().rec), "Excluir nota…")
-        self._delete_action.triggered.connect(self._ask_delete)
-        self._overflow_btn.setMenu(menu)
-        acts.addWidget(self._overflow_btn)
+        # Excluir VISÍVEL (uso real no PR #137: ninguém achava a ação escondida no
+        # overflow "..."). Só-ícone vermelho, isolado à direita pelo stretch - longe
+        # das ações frequentes p/ evitar clique acidental; a confirmação segue.
+        self._delete_btn = widgets.icon_button(
+            "delete", "Excluir nota…", self._ask_delete, color=theme.active().rec)
+        acts.addWidget(self._delete_btn)
         lay.addLayout(acts)
 
         # faixa de PENDÊNCIA (logo abaixo da command bar): nasce quando a reunião tem
@@ -844,13 +885,12 @@ class NotesWindow(QWidget):
 
     def _set_note_actions(self, on: bool) -> None:
         """Liga/desliga as ações que exigem uma nota real selecionada (secundárias +
-        overflow/excluir). Mantém a fileira com posição ESTÁVEL: os botões não somem,
+        excluir). Mantém a fileira com posição ESTÁVEL: os botões não somem,
         só ficam desabilitados. 'Rotular vozes' é refinado à parte (_update_voice_button),
         pois também depende de a gravação ter vozes."""
         for w in (self._prompt_btn, self._tr_btn, self._chat_btn):
             w.setEnabled(on)
-        self._delete_action.setEnabled(on)
-        self._overflow_btn.setEnabled(on)
+        self._delete_btn.setEnabled(on)
         if not on:
             self._voice_btn.setEnabled(False)
             self._voice_hint.setVisible(False)
@@ -983,41 +1023,15 @@ class NotesWindow(QWidget):
                    for (p, t, s) in [self._items[it]] if s is None]
         if not targets:
             return
-        n = len(targets)
         nome = (targets[0][1] or targets[0][0].stem.replace("_reuniao", "")).strip()
-        text = (f"Excluir a nota \"{nome[:60]}\"?" if n == 1 else f"Excluir {n} notas?")
-        box = QMessageBox(self)
-        box.setWindowTitle("Excluir nota" + ("s" if n > 1 else ""))
-        box.setIcon(QMessageBox.Warning)
-        box.setText(text)
-        box.setInformativeText("A nota sai da lista e do índice de busca. Esta ação não pode ser desfeita.")
-        also = widgets.AnimatedCheckBox("Excluir também o áudio/gravação (sem volta)")
-        box.setCheckBox(also)
-        box.setStandardButtons(QMessageBox.Cancel | QMessageBox.Yes)
-        box.setDefaultButton(QMessageBox.Cancel)
-        if box.exec() != QMessageBox.Yes:
+        ok, also_audio = confirm_delete(self, nome, len(targets))
+        if not ok:
             return
-        self._do_delete([p for p, _ in targets], also.isChecked())
+        self._do_delete([p for p, _ in targets], also_audio)
 
     def _do_delete(self, paths: list[Path], also_audio: bool) -> None:
-        from .. import meetings_index
-
         for note_path in paths:
-            try:
-                note_path.unlink(missing_ok=True)
-            except OSError as e:
-                log.warning("exclusão: %s: %s", note_path.name, e)
-            folder = self._recording_folder_for(note_path)
-            if also_audio and folder.is_dir() and not util.is_locked(folder):
-                import shutil
-
-                meetings_index.remove_meeting(folder)
-                try:
-                    shutil.rmtree(folder)
-                except OSError as e:
-                    log.warning("exclusão gravação: %s: %s", folder.name, e)
-            else:
-                meetings_index.mark_deleted(folder)
+            delete_meeting(note_path, self._recording_folder_for(note_path), also_audio)
         self._current_key = None
         self._refresh_list()
 
