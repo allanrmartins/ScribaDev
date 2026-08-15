@@ -31,6 +31,9 @@ dependencies = [
     # títulos de janela p/ detecção no navegador + nome da reunião (#104, M4):
     # AX API (precisa da permissão de Acessibilidade; degrada sem ela)
     "pyobjc-framework-ApplicationServices ; sys_platform == 'darwin'",
+    # STT acelerado por Metal no Apple Silicon (#104, M5): provider stt_mlx atrás
+    # do make_transcriber; sem ele o local cai no faster-whisper CPU normalmente
+    "mlx-whisper ; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "faster-whisper==1.2.1",
     "ctranslate2~=4.8",
     # pystray/Pillow saíram em 2026-08 (#104): a bandeja é QSystemTrayIcon desde o

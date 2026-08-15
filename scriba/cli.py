@@ -678,18 +678,32 @@ def cmd_doctor(args) -> int:
             _print(_OK, "import pyaudiowpatch", "não se aplica neste SO (captura é Windows-only por ora)")
         _print(_OK, "import windows_toasts", "não se aplica neste SO (toasts são Windows-only)")
 
-    # CUDA
-    try:
-        util.bootstrap_cuda_dlls()
-        import ctranslate2
+    # GPU — CUDA no Windows/Linux; Metal via MLX no Apple Silicon (#104, M5)
+    if sys.platform == "darwin":
+        try:
+            import platform as _platform
 
-        n = ctranslate2.get_cuda_device_count()
-        if n > 0:
-            _print(_OK, "GPU CUDA", f"{n} dispositivo(s) — transcrição acelerada")
-        else:
-            _print(_WARN, "GPU CUDA", "nenhuma — transcrição usará CPU (mais lenta)")
-    except Exception as e:
-        _print(_WARN, "GPU CUDA", f"indisponível ({e}) — transcrição usará CPU")
+            from .stt_mlx import mlx_disponivel
+
+            if _platform.machine() == "arm64" and mlx_disponivel():
+                _print(_OK, "GPU (Metal/MLX)", "transcrição local acelerada no Apple Silicon")
+            else:
+                _print(_WARN, "GPU (Metal/MLX)",
+                       "mlx-whisper indisponível — transcrição local em CPU (mais lenta)")
+        except Exception as e:
+            _print(_WARN, "GPU (Metal/MLX)", f"erro ao checar ({e})")
+    else:
+        try:
+            util.bootstrap_cuda_dlls()
+            import ctranslate2
+
+            n = ctranslate2.get_cuda_device_count()
+            if n > 0:
+                _print(_OK, "GPU CUDA", f"{n} dispositivo(s) — transcrição acelerada")
+            else:
+                _print(_WARN, "GPU CUDA", "nenhuma — transcrição usará CPU (mais lenta)")
+        except Exception as e:
+            _print(_WARN, "GPU CUDA", f"indisponível ({e}) — transcrição usará CPU")
 
     # motor de transcrição (STT): local (Whisper) ou nuvem (Groq/OpenAI-compat)
     try:

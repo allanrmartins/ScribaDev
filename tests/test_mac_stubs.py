@@ -315,6 +315,83 @@ class TestMicusageSnapshot(unittest.TestCase):
         self.assertEqual(s["com.google.chrome.helper"][1], 0)  # OR: um aberto basta
 
 
+class TestMakeTranscriberMlx(unittest.TestCase):
+    """M5: a fábrica escolhe o MLX só em darwin+arm64 (e nunca com force_cpu)."""
+
+    def _make(self, platform_name, machine, engine="local", force_cpu=False, mlx_ok=True):
+        from scriba import transcription
+
+        cfg = mock.Mock(engine=engine, model="large-v3-turbo", language="pt",
+                        hotwords="", cpu_threads=0)
+        with mock.patch.object(sys, "platform", platform_name), \
+                mock.patch("platform.machine", return_value=machine), \
+                mock.patch("scriba.stt_mlx.mlx_disponivel", return_value=mlx_ok):
+            return transcription.make_transcriber(cfg, force_cpu=force_cpu)
+
+    def test_darwin_arm64_local_vira_mlx(self):
+        from scriba.stt_mlx import MlxWhisperProvider
+
+        self.assertIsInstance(self._make("darwin", "arm64"), MlxWhisperProvider)
+
+    def test_sem_mlx_instalado_cai_no_faster_whisper(self):
+        from scriba.transcriber import Transcriber
+
+        self.assertIsInstance(self._make("darwin", "arm64", mlx_ok=False), Transcriber)
+
+    def test_engine_mlx_explicito_forca(self):
+        from scriba.stt_mlx import MlxWhisperProvider
+
+        self.assertIsInstance(self._make("darwin", "arm64", engine="mlx", mlx_ok=False),
+                              MlxWhisperProvider)
+
+    def test_force_cpu_pula_mlx(self):
+        from scriba.transcriber import Transcriber
+
+        self.assertIsInstance(self._make("darwin", "arm64", force_cpu=True), Transcriber)
+
+    def test_fora_do_mac_segue_local(self):
+        from scriba.transcriber import Transcriber
+
+        self.assertIsInstance(self._make("linux", "x86_64"), Transcriber)
+        self.assertIsInstance(self._make("win32", "AMD64"), Transcriber)
+
+    def test_mapeamento_de_repo(self):
+        from scriba.stt_mlx import MlxWhisperProvider
+
+        self.assertEqual(MlxWhisperProvider(mock.Mock(model="large-v3-turbo"))._repo(),
+                         "mlx-community/whisper-large-v3-turbo")
+        self.assertEqual(MlxWhisperProvider(mock.Mock(model="org/custom-repo"))._repo(),
+                         "org/custom-repo")
+
+    def test_segments_e_fallback_runtime(self):
+        from scriba.stt_mlx import MlxWhisperProvider
+
+        cfg = mock.Mock(model="tiny", language="pt", hotwords="SAP ABAP")
+        fake_mlx = mock.Mock()
+        fake_mlx.transcribe.return_value = {"segments": [
+            {"start": 0.0, "end": 2.0, "text": " olá "},
+            {"start": 2.0, "end": 3.0, "text": "  "},   # vazio: filtrado
+        ]}
+        prov = MlxWhisperProvider(cfg)
+        with mock.patch.dict(sys.modules, {"mlx_whisper": fake_mlx}):
+            segs = prov.transcribe("x.wav")
+        self.assertEqual([(s.start, s.end, s.text) for s in segs], [(0.0, 2.0, "olá")])
+        self.assertEqual(prov.device_used, "metal")
+        # hotwords viraram initial_prompt
+        self.assertEqual(fake_mlx.transcribe.call_args[1]["initial_prompt"], "SAP ABAP")
+
+        # falha em runtime → fallback faster-whisper CPU (espelho do CUDA→CPU)
+        fake_mlx.transcribe.side_effect = RuntimeError("metal explodiu")
+        prov2 = MlxWhisperProvider(cfg)
+        fake_fw = mock.Mock()
+        fake_fw.ensure_loaded.return_value = "cpu"
+        fake_fw.transcribe.return_value = ["seg"]
+        with mock.patch.dict(sys.modules, {"mlx_whisper": fake_mlx}), \
+                mock.patch("scriba.stt_mlx.Transcriber", return_value=fake_fw):
+            self.assertEqual(prov2.transcribe("x.wav"), ["seg"])
+        self.assertEqual(prov2.device_used, "cpu")
+
+
 class TestSoNome(unittest.TestCase):
     def test_por_plataforma(self):
         with mock.patch.object(sys, "platform", "win32"):

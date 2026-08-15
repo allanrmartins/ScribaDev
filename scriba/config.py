@@ -30,6 +30,9 @@ if sys.platform == "win32":
         "cifra": "fica cifrada (DPAPI)",
         "cifra_longa": "fica cifrada (DPAPI do Windows)",
         "cifra_save": "cifrada (DPAPI)",
+        "engine": "# Motor de transcrição: local (faster-whisper, 100% na máquina) ou cloud (envia o\n"
+                  "# áudio a um endpoint OpenAI-compatível /audio/transcriptions — opt-in explícito).",
+        "engine_save": "local | cloud (envia o áudio à nuvem — opt-in)",
         "dir_notas": r"%LOCALAPPDATA%\ScribaDev\Notas",
         "dir_gravacoes": r"C:\temp\scribadev\gravacoes",
         "dir_db": r"%LOCALAPPDATA%\ScribaDev\timesheet.db",
@@ -52,6 +55,13 @@ else:
         "dir_db": f"{_APP}/timesheet.db",
         "dir_apont": "~/Documents/ScribaDev/Apontamentos",
         "dir_backups": f"{_APP}/backups",
+        "engine": ("# Motor de transcrição: local (100% na máquina; no Apple Silicon usa MLX/Metal\n"
+                   '# sozinho; "mlx" força) ou cloud (endpoint OpenAI-compatível — opt-in explícito).'
+                   if _MAC else
+                   "# Motor de transcrição: local (faster-whisper, 100% na máquina) ou cloud (envia o\n"
+                   "# áudio a um endpoint OpenAI-compatível /audio/transcriptions — opt-in explícito)."),
+        "engine_save": ("local (MLX auto no Apple Silicon) | mlx | cloud (nuvem — opt-in)"
+                        if _MAC else "local | cloud (envia o áudio à nuvem — opt-in)"),
     }
 
 DEFAULT_CONFIG = f"""\
@@ -103,8 +113,7 @@ vad_min_silence_ms = 0   # silêncio mínimo para cortar um trecho (ms); 0 = pad
 vad_threshold = 0        # limiar de detecção de voz (0..1); 0 = padrão
 # Vocabulário para guiar a transcrição (troque pelo jargão da sua área):
 hotwords = "SAP ABAP BAPI BAdI CDS RAP Fiori OData ALV IDoc SE80 SE11 SE16N SE37 SE38 SM30 SM37 ST22 VA01 ME21N MIGO MARA MATNR VBAK VBAP EKKO BSEG KNA1 SmartForms HANA user exit enhancement request transporte mandante tabela Z campo Z SU01 SU53 PFCG ST01 SAP_ALL"
-# Motor de transcrição: local (faster-whisper, 100% na máquina) ou cloud (envia o
-# áudio a um endpoint OpenAI-compatível /audio/transcriptions — opt-in explícito).
+{_H["engine"]}
 engine = "local"
 cloud_base_url = ""                # vazio = Groq (https://api.groq.com/openai/v1)
 cloud_api_key = ""                 # só engine=cloud; chave BYO. Definida pela UI, {_H["cifra"]}.
@@ -413,7 +422,7 @@ vad_min_silence_ms = {_n(w.vad_min_silence_ms)}   # silêncio mínimo para corta
 vad_threshold = {_n(w.vad_threshold)}        # limiar de detecção de voz (0..1); 0 = padrão
 # Vocabulário para guiar a transcrição (troque pelo jargão da sua área):
 hotwords = {_s(w.hotwords)}
-engine = {_s(w.engine)}          # local | cloud (envia o áudio à nuvem — opt-in)
+engine = {_s(w.engine)}          # {_H["engine_save"]}
 cloud_base_url = {_s(w.cloud_base_url)}   # vazio = Groq (.../openai/v1)
 cloud_api_key = {_s(_maybe_protect(w.cloud_api_key, "whisper.cloud_api_key"))}     # só engine=cloud; chave BYO, {_H["cifra_save"]}
 cloud_model = {_s(w.cloud_model)}

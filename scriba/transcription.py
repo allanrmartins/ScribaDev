@@ -37,9 +37,21 @@ class TranscriptionProvider(Protocol):
 
 def make_transcriber(cfg: Whisper, force_cpu: bool = False) -> TranscriptionProvider:
     """Constrói o provider de transcrição conforme `cfg.engine`: 'cloud' → STT na
-    nuvem (Groq/OpenAI-compat); senão o faster-whisper local."""
-    if (cfg.engine or "local").strip().lower() == "cloud":
+    nuvem (Groq/OpenAI-compat); 'mlx' (ou 'local' num mac Apple Silicon com
+    mlx_whisper instalado) → Metal via MLX (#104, M5); senão o faster-whisper local.
+    Com force_cpu o MLX é pulado — quem pediu CPU ganha CPU."""
+    import platform
+    import sys
+
+    engine = (cfg.engine or "local").strip().lower()
+    if engine == "cloud":
         from .stt_cloud import CloudTranscriptionProvider
 
         return CloudTranscriptionProvider(cfg)
+    if (not force_cpu and engine in ("local", "mlx")
+            and sys.platform == "darwin" and platform.machine() == "arm64"):
+        from .stt_mlx import MlxWhisperProvider, mlx_disponivel
+
+        if engine == "mlx" or mlx_disponivel():
+            return MlxWhisperProvider(cfg)
     return Transcriber(cfg, force_cpu=force_cpu)
