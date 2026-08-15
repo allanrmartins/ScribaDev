@@ -862,6 +862,12 @@ class TimesheetWindow(QWidget):
                     for col in range(item.columnCount()):
                         item.setForeground(col, QBrush(QColor(t.warn)))
                 self._mark_extra(item, e)
+                if e["posted"]:
+                    # linha já lançada fica "apagada" (tom secundário da mesma
+                    # paleta) p/ as não lançadas saltarem aos olhos; aplicar por
+                    # ÚLTIMO p/ vencer o azul do extra (o negrito permanece)
+                    for col in range(item.columnCount()):
+                        item.setForeground(col, QBrush(QColor(t.muted)))
                 self._entry_items[item] = e
             entries = by_day.get(day, [])
             if entries:

@@ -160,6 +160,32 @@ class TimesheetWindowTests(unittest.TestCase):
         self.assertEqual(len(tsdb.list_entries(status="suggested")), 0)
         self.assertEqual(len(tsdb.list_entries(status="confirmed", posted=True)), 2)
 
+    def test_linha_lancada_fica_apagada(self):
+        """Linha com 'Lançado' marcado 'apaga' (tom muted do tema) p/ as não
+        lançadas saltarem aos olhos; as não lançadas seguem na cor normal."""
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QColor
+
+        from scriba.qt import theme
+
+        self._seed()
+        win = self._data_window()
+        muted = QColor(theme.active().muted)
+        day13 = win._tree.topLevelItem(1)
+        confirmed = next(day13.child(i) for i in range(day13.childCount())
+                         if win._entry_items[day13.child(i)]["status"] == "confirmed")
+        self.assertNotEqual(confirmed.foreground(4).color(), muted)
+        confirmed.setCheckState(6, Qt.Checked)
+        self.qapp.processEvents()
+        day13 = win._tree.topLevelItem(1)   # itens recriados pelo refresh
+        posted = next(day13.child(i) for i in range(day13.childCount())
+                      if win._entry_items[day13.child(i)]["posted"])
+        for col in range(posted.columnCount()):
+            self.assertEqual(posted.foreground(col).color(), muted)
+        # linha não lançada (do outro dia) segue na cor normal
+        other = win._tree.topLevelItem(0).child(0)
+        self.assertNotEqual(other.foreground(4).color(), muted)
+
     def test_checkbox_do_dia_consolida(self):
         """Marcar o DIA consolida tudo (sugestão confirma+lança); desmarcar só
         tira o 'lançado' dos confirmados."""
