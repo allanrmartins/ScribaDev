@@ -30,7 +30,19 @@ log = logging.getLogger("scriba.qt.tray")
 def _icon(recording: bool, dim: bool = False) -> QIcon:
     """Ícone do app (pergaminho + raio) via asset; cai p/ um círculo desenhado se sumir.
     `dim` (só com recording): variante APAGADA — alternada com a normal faz a bandeja
-    PULSAR durante a gravação (#14)."""
+    PULSAR durante a gravação (#14).
+
+    macOS (#104, M6): em idle usa o asset template (máscara — a menu bar tinge
+    conforme claro/escuro); GRAVANDO mantém o ícone vermelho não-template, porque
+    a cor é informação."""
+    import sys
+
+    if sys.platform == "darwin" and not recording:
+        tpl = QPixmap(str(util.ICON_TEMPLATE_PNG))
+        if not tpl.isNull():
+            icon = QIcon(tpl)
+            icon.setIsMask(True)
+            return icon
     png = util.ICON_REC_PNG if recording else util.ICON_PNG
     pm = QPixmap(str(png))
     if pm.isNull():
@@ -89,7 +101,7 @@ class Tray:
         m.addAction("Abrir pasta de notas", self._open_notes_dir)
         m.addAction("Processar pendentes", lambda: self._bg(self.app.scan_pending))
         m.addAction("Buscar atualizações", lambda: self._bg(self.app.check_updates_now))
-        self._act_autostart = m.addAction("Iniciar com o Windows", self._toggle_autostart)
+        self._act_autostart = m.addAction(autostart.label(), self._toggle_autostart)
         self._act_autostart.setCheckable(True)
         m.addSeparator()
         m.addAction("Sair", lambda: self.app.request_quit())

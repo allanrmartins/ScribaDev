@@ -392,6 +392,90 @@ class TestMakeTranscriberMlx(unittest.TestCase):
         self.assertEqual(prov2.device_used, "cpu")
 
 
+class TestNotifyMac(unittest.TestCase):
+    """M6: _MacNotifier via osascript, com escaping (injeção de AppleScript)."""
+
+    def test_selecao_por_so(self):
+        from scriba import notify
+
+        # a seleção é em import-time; aqui validamos as classes diretamente
+        self.assertTrue(hasattr(notify, "_MacNotifier"))
+        if sys.platform == "darwin":
+            self.assertIs(notify.Notifier, notify._MacNotifier)
+
+    def test_osascript_com_escaping(self):
+        from scriba import notify
+
+        n = notify._MacNotifier()
+        with mock.patch("subprocess.run") as run:
+            n.info('Título com "aspas"', "corpo\\barra")
+        argv = run.call_args[0][0]
+        self.assertEqual(argv[0], "osascript")
+        script = argv[2]
+        self.assertIn('\\"aspas\\"', script)      # aspas escapadas
+        self.assertIn("corpo\\\\barra", script)   # barra escapada
+
+    def test_notes_ready_so_nome_do_arquivo(self):
+        from pathlib import Path
+
+        from scriba import notify
+
+        n = notify._MacNotifier()
+        with mock.patch("subprocess.run") as run:
+            n.notes_ready(Path("/pasta/notas.md"))
+        script = run.call_args[0][0][2]
+        self.assertIn("notas.md", script)
+        self.assertNotIn("/pasta", script)  # caminho vai p/ o log, não p/ a notificação
+
+
+class TestAutostartMac(unittest.TestCase):
+    """M6: LaunchAgent plist (roundtrip em HOME temporário)."""
+
+    def test_roundtrip_plist(self):
+        import plistlib
+        import tempfile
+        from pathlib import Path
+
+        from scriba import autostart
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_target = Path(tmp) / "bin" / "scribadev-tray"
+            fake_target.parent.mkdir()
+            fake_target.touch()
+            with _darwin(), mock.patch.object(Path, "home", return_value=Path(tmp)), \
+                    mock.patch.object(sys, "prefix", tmp), mock.patch("builtins.print"):
+                self.assertFalse(autostart.is_enabled())
+                self.assertEqual(autostart.set_autostart(True), 0)
+                self.assertTrue(autostart.is_enabled())
+                plist = Path(tmp) / "Library" / "LaunchAgents" / "dev.scribadev.tray.plist"
+                data = plistlib.loads(plist.read_bytes())
+                self.assertEqual(data["Label"], "dev.scribadev.tray")
+                self.assertEqual(data["ProgramArguments"], [str(fake_target), "--minimized"])
+                self.assertTrue(data["RunAtLoad"])
+                self.assertEqual(autostart.set_autostart(False), 0)
+                self.assertFalse(autostart.is_enabled())
+
+    def test_sem_target_falha_com_dica(self):
+        import tempfile
+        from pathlib import Path
+
+        from scriba import autostart
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with _darwin(), mock.patch.object(Path, "home", return_value=Path(tmp)), \
+                    mock.patch.object(sys, "prefix", tmp), mock.patch("builtins.print") as p:
+                self.assertEqual(autostart.set_autostart(True), 1)
+        self.assertIn("setup.sh", p.call_args[0][0])
+
+    def test_label_por_so(self):
+        from scriba import autostart
+
+        with mock.patch.object(sys, "platform", "win32"):
+            self.assertEqual(autostart.label(), "Iniciar com o Windows")
+        with _darwin():
+            self.assertEqual(autostart.label(), "Iniciar com o sistema")
+
+
 class TestSoNome(unittest.TestCase):
     def test_por_plataforma(self):
         with mock.patch.object(sys, "platform", "win32"):

@@ -916,6 +916,9 @@ def cmd_doctor(args) -> int:
             Notifier().test()
             if sys.platform == "win32":
                 _print(_OK, "Toast", "notificação de teste disparada")
+            elif sys.platform == "darwin":
+                _print(_OK, "Toast", "notificação disparada via osascript — se não apareceu, habilite "
+                                     "as notificações do 'Editor de Scripts' em Ajustes → Notificações")
             else:
                 _print(_OK, "Toast", "no-op neste SO (toasts nativos ainda não suportados) — logado")
         except Exception as e:

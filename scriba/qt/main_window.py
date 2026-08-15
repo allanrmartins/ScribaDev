@@ -993,9 +993,9 @@ class MainWindow(QWidget):
             from .. import autostart
 
             on = autostart.is_enabled()
-            items.append(("ok" if on else "off", "Iniciar com o Windows", "ligado" if on else "desligado"))
+            items.append(("ok" if on else "off", autostart.label(), "ligado" if on else "desligado"))
         except Exception as e:
-            items.append(("warn", "Iniciar com o Windows", f"indisponível: {e}"))
+            items.append(("warn", "Iniciar com o sistema", f"indisponível: {e}"))
         if not items:
             items.append(("warn", "Serviços", "não consegui montar a lista — veja o log"))
         self.app.ui(lambda: self._render_status(items))

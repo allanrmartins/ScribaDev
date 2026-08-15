@@ -49,6 +49,7 @@ ASSETS_DIR = resource_path("assets")
 ICON_ICO = ASSETS_DIR / "scriba.ico"
 ICON_PNG = ASSETS_DIR / "scriba.png"
 ICON_REC_PNG = ASSETS_DIR / "scriba_rec.png"
+ICON_TEMPLATE_PNG = ASSETS_DIR / "scriba_template.png"  # menu bar do macOS (máscara)
 
 def so_nome() -> str:
     """Nome de exibição do SO atual, para textos de UI ("padrão do Windows",

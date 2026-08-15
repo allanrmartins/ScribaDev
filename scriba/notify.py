@@ -70,11 +70,44 @@ class _WindowsNotifier:
         self._toast(["ScribaDev", "Notificação de teste — clique para abrir a pasta do app"], open_path=util.APP_DIR)
 
 
+class _MacNotifier:
+    """macOS (#104, M6): notificação nativa via `osascript` (zero dependências).
+
+    Limitações aceitas até existir um bundle .app (M8 → UNUserNotificationCenter):
+    sem botão "Abrir notas" (o AppleScript não tem ação de clique) — o caminho vai
+    p/ o log; a notificação sai atribuída ao "Editor de Scripts" e o usuário pode
+    precisar habilitá-la em Ajustes → Notificações na primeira vez (o doctor avisa).
+    """
+
+    @staticmethod
+    def _esc(s: str) -> str:
+        # injeção de AppleScript: escapar \ e " antes de interpolar no literal
+        return str(s).replace("\\", "\\\\").replace('"', '\\"')
+
+    def _display(self, title: str, body: str = "") -> None:
+        import subprocess
+
+        script = f'display notification "{self._esc(body)}" with title "{self._esc(title)}"'
+        try:
+            subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10)
+        except Exception:
+            log.exception("notificação (osascript) falhou")
+
+    def info(self, title: str, body: str = "") -> None:
+        self._display(title, body)
+
+    def notes_ready(self, md_path: Path) -> None:
+        self._display("Notas prontas", md_path.name)
+        log.info("notas prontas: %s", md_path)
+
+    def test(self) -> None:
+        self._display("ScribaDev", "Notificação de teste")
+
+
 class _NoopNotifier:
     """POSIX (Marco 1 do #104): notificações nativas ainda não existem — loga e segue.
 
-    Mesma interface do notifier do Windows; os marcos seguintes trocam por
-    notify-send (Linux) / UNUserNotification (macOS)."""
+    Mesma interface do notifier do Windows; o marco Linux troca por notify-send."""
 
     def info(self, title: str, body: str = "") -> None:
         log.info("notificação (no-op neste SO): %s — %s", title, body)
@@ -87,4 +120,9 @@ class _NoopNotifier:
 
 
 # a classe pública escolhe o backend pelo SO (mesmo padrão da camada plat; #101)
-Notifier = _WindowsNotifier if sys.platform == "win32" else _NoopNotifier
+if sys.platform == "win32":
+    Notifier = _WindowsNotifier
+elif sys.platform == "darwin":
+    Notifier = _MacNotifier
+else:
+    Notifier = _NoopNotifier

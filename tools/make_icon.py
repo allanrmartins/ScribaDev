@@ -127,6 +127,42 @@ def _dev_mark(img: Image.Image) -> None:
         stroke(pts, ink, 5)
 
 
+def render_template() -> Image.Image:
+    """Ícone TEMPLATE p/ a menu bar do macOS (#104, M6): silhueta preta+alpha do
+    pergaminho com o raio recortado (gap ao redor mantém as duas formas legíveis
+    em 18 px). Sem o tile de fundo nem a marca </> — some nesse tamanho. O Qt
+    aplica `setIsMask(True)` e o macOS tinge conforme a menu bar clara/escura."""
+    mask = Image.new("L", (W, W), 0)
+    md = ImageDraw.Draw(mask)
+
+    # folha + rolos (mesma geometria do _parchment, sem sombra/cores)
+    bx0, bx1 = 84 * S, 172 * S
+    by0, by1 = 74 * S, 182 * S
+    md.rounded_rectangle([bx0, by0, bx1, by1], radius=7 * S, fill=255)
+    for cy in (by0, by1):
+        md.ellipse([bx0 - 12 * S, cy - 11 * S, bx1 + 12 * S, cy + 11 * S], fill=255)
+    # linhas de "texto" viram furos (detalhe que sobrevive à silhueta)
+    lines = [(98, 0.46), (98, 0.60), (98, 0.30)]
+    for i, (x0f, wf) in enumerate(lines):
+        ly = (96 + i * 18) * S
+        x0 = x0f * S
+        x1 = x0 + int((bx1 - 14 * S - x0) * wf)
+        md.rounded_rectangle([x0, ly, x1, ly + 6 * S], radius=3 * S, fill=0)
+
+    # raio: recorta um contorno dilatado do pergaminho e preenche o miolo
+    pts = [(150, 40), (104, 128), (138, 128), (96, 214), (170, 110), (132, 110), (176, 40)]
+    poly = [(x * S, y * S) for x, y in pts]
+    bolt = Image.new("L", (W, W), 0)
+    ImageDraw.Draw(bolt).polygon(poly, fill=255)
+    gap = bolt.filter(ImageFilter.MaxFilter(2 * (6 * S) + 1))  # dilatação = gap de ~6px
+    mask.paste(0, (0, 0), gap)
+    mask.paste(255, (0, 0), bolt)
+
+    img = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+    img.putalpha(mask)  # preto puro + alpha (formato de template do macOS)
+    return img.resize((N, N), Image.LANCZOS)
+
+
 def render_base() -> Image.Image:
     img = Image.new("RGBA", (W, W), (0, 0, 0, 0))
     _tile(ImageDraw.Draw(img))
@@ -152,6 +188,7 @@ def main() -> None:
     base = render_base()
     base.save(ASSETS / "scriba.png")
     add_rec_badge(base).save(ASSETS / "scriba_rec.png")
+    render_template().save(ASSETS / "scriba_template.png")
     sizes = [16, 24, 32, 48, 64, 128, 256]
     base.save(ASSETS / "scriba.ico", sizes=[(s, s) for s in sizes])
     print("ok ->", ASSETS)
