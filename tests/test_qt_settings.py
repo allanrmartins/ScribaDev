@@ -95,14 +95,14 @@ class SettingsTests(unittest.TestCase):
         self._field(win, "timesheet", "suggest")[0].setChecked(False)
         self._field(win, "timesheet", "round_minutes")[0].setValue(5)
         self._field(win, "timesheet", "min_meeting_minutes")[0].setValue(20)
-        self._field(win, "timesheet", "default_client")[0].setText("Coruripe")
+        self._field(win, "timesheet", "default_client")[0].setText("Vetra")
         self._field(win, "timesheet", "export_dir")[0].setText(r"C:\temp\apontamentos")
         win._save()
         r = config_mod.load()
         self.assertFalse(r.timesheet.suggest)
         self.assertEqual(r.timesheet.round_minutes, 5)
         self.assertEqual(r.timesheet.min_meeting_minutes, 20)
-        self.assertEqual(r.timesheet.default_client, "Coruripe")
+        self.assertEqual(r.timesheet.default_client, "Vetra")
         self.assertEqual(r.timesheet.export_dir, r"C:\temp\apontamentos")
         self.assertFalse(r.timesheet.enabled)              # ativação não é campo
         self.assertEqual(r.whisper.model, "large-v3-turbo")  # outras seções intactas

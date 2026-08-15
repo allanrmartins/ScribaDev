@@ -302,19 +302,19 @@ class DetectorStateMachineTests(unittest.TestCase):
     def test_amostragem_estabiliza_titulo(self):
         self._make()
         self._poll({TEAMS: (_BASE, 0)})  # RECORDING
-        self.title = "Daily Coruripe"
+        self.title = "Daily Vetra"
         for _ in range(2 * _TITLE_SAMPLE_EVERY + 1):  # 2 amostragens iguais
             self._poll({TEAMS: (_BASE, 0)})
-        self.assertEqual(self.det._title_stable, "Daily Coruripe")
-        self.assertIn(("title", "Daily Coruripe"), self.events)  # bônus: on_title disparado
+        self.assertEqual(self.det._title_stable, "Daily Vetra")
+        self.assertIn(("title", "Daily Vetra"), self.events)  # bônus: on_title disparado
 
     def test_uso_a_titulo_igual_suprime_split_por_gap(self):
         # gap >= limiar, mas a reunião é a mesma (título inalterado) -> NÃO divide
         self._make()
         self._poll({TEAMS: (_BASE, 0)})
-        self.det._title_stable = "Daily Coruripe"       # título já estabilizado
+        self.det._title_stable = "Daily Vetra"       # título já estabilizado
         self._poll({TEAMS: (_BASE, _BASE + 100 * _FT)})  # GRACE -> guarda o título
-        self.title = "Daily Coruripe"                    # no resume, título igual
+        self.title = "Daily Vetra"                    # no resume, título igual
         with self.assertLogs("scriba.detector", "INFO") as cm:
             self._poll({TEAMS: (_BASE + 105 * _FT, 0)}, advance=5.0)  # gap de 5 s (>= 3)
         self.assertIs(self.det.state, CallState.RECORDING)
@@ -324,7 +324,7 @@ class DetectorStateMachineTests(unittest.TestCase):
     def test_uso_a_titulo_diferente_permite_split_por_gap(self):
         self._make()
         self._poll({TEAMS: (_BASE, 0)})
-        self.det._title_stable = "Daily Coruripe"
+        self.det._title_stable = "Daily Vetra"
         self._poll({TEAMS: (_BASE, _BASE + 100 * _FT)})  # GRACE
         self.title = "Alinhamento interno"               # título mudou -> call nova
         with self.assertLogs("scriba.detector", "INFO") as cm:
@@ -337,7 +337,7 @@ class DetectorStateMachineTests(unittest.TestCase):
         # o título muda -> divide
         self._make()
         self._poll({TEAMS: (_BASE, 0)})                  # RECORDING, session_start = BASE
-        self.det._title_stable = "Daily Coruripe"
+        self.det._title_stable = "Daily Vetra"
         self.title = "Alinhamento interno"               # título novo
         with self.assertLogs("scriba.detector", "INFO") as cm:
             self._poll({TEAMS: (_BASE + 50 * _FT, 0)})   # ciclo invisível (start mudou)
@@ -350,8 +350,8 @@ class DetectorStateMachineTests(unittest.TestCase):
         # troca de device (mesma reunião, mesmo título) -> só WARN, não divide
         self._make()
         self._poll({TEAMS: (_BASE, 0)})
-        self.det._title_stable = "Daily Coruripe"
-        self.title = "Daily Coruripe"
+        self.det._title_stable = "Daily Vetra"
+        self.title = "Daily Vetra"
         with self.assertLogs("scriba.detector", "WARNING") as cm:
             self._poll({TEAMS: (_BASE + 50 * _FT, 0)})
         self.assertIs(self.det.state, CallState.RECORDING)
@@ -362,7 +362,7 @@ class DetectorStateMachineTests(unittest.TestCase):
         # título estável muda sem NENHUM evento de sessão de mic -> v1 só alerta
         self._make()
         self._poll({TEAMS: (_BASE, 0)})
-        self.det._title_stable = "Daily Coruripe"
+        self.det._title_stable = "Daily Vetra"
         self.title = "Alinhamento interno"
         self.det._title_last = "Alinhamento interno"       # 1ª amostra já feita
         self.det._polls_since_title = _TITLE_SAMPLE_EVERY - 1  # força amostrar agora

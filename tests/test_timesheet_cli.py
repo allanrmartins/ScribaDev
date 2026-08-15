@@ -58,7 +58,7 @@ class TimesheetCliTests(unittest.TestCase):
         config.save(new)
 
     def _add(self, **kw):
-        base = dict(date="2026-07-13", start="08:00", end="13:00", client="Coruripe")
+        base = dict(date="2026-07-13", start="08:00", end="13:00", client="Vetra")
         base.update(kw)
         argv = ["timesheet", "add", "--date", base["date"], "--start", base["start"],
                 "--end", base["end"], "--client", base["client"]]
@@ -84,7 +84,7 @@ class TimesheetCliTests(unittest.TestCase):
         self._enable()
         rc, out = self._add(desc="aplicacao de notas", extra=True)
         self.assertEqual(rc, 0)
-        self.assertIn("aviso: cliente 'Coruripe' não cadastrado", out)
+        self.assertIn("aviso: cliente 'Vetra' não cadastrado", out)
         self.assertIn("08:00-13:00", out)
         rc, out = self._run("timesheet", "list", "--month", "2026-07")
         self.assertEqual(rc, 0)
@@ -105,16 +105,16 @@ class TimesheetCliTests(unittest.TestCase):
 
     def test_add_resolve_cliente_e_projeto(self):
         self._enable()
-        cid = tsdb.add_client("Cellera")
-        tsdb.add_alias(cid, "celera")
-        tsdb.add_project(cid, "403240", "Reforma tributária")
-        rc, out = self._add(client="CELERA", project="403240")
+        cid = tsdb.add_client("Aurora")
+        tsdb.add_alias(cid, "aurorra")
+        tsdb.add_project(cid, "123456", "Reforma tributária")
+        rc, out = self._add(client="AURORRA", project="123456")
         self.assertEqual(rc, 0)
         self.assertNotIn("aviso", out)
-        self.assertIn("Cellera", out)  # confirma o nome canônico
+        self.assertIn("Aurora", out)  # confirma o nome canônico
         row = tsdb.list_entries(day="2026-07-13")[0]
         self.assertEqual(row["client_id"], cid)
-        self.assertEqual(row["project_code"], "403240")
+        self.assertEqual(row["project_code"], "123456")
 
     # -- marcas e filtros do list -----------------------------------------------
     def test_list_marcas_e_filtros(self):
@@ -152,7 +152,7 @@ class TimesheetCliTests(unittest.TestCase):
         folder.mkdir(parents=True)
         (folder / "meta.json").write_text(json.dumps({
             "status": "done", "started_at": "2026-07-13T14:00:00",
-            "ended_at": "2026-07-13T15:00:00", "title": "Call X", "client": "Delta",
+            "ended_at": "2026-07-13T15:00:00", "title": "Call X", "client": "Delta Peças",
         }), encoding="utf-8")
         self._enable(recordings_dir=rec)
         rc, out = self._run("timesheet", "sync")

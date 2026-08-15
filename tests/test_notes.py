@@ -91,14 +91,14 @@ class UpdateNoteMetaTests(unittest.TestCase):
 
     def test_cliente_sincroniza_meta_notas_export_e_indice(self):
         folder, export = self._make(client="")
-        self.assertTrue(notes.update_note_meta(folder, client="abaco"))
+        self.assertTrue(notes.update_note_meta(folder, client="orbita"))
         meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
-        self.assertEqual(meta["client"], "abaco")                     # FONTE do índice
-        self.assertIn("Cliente: abaco", (folder / "notas.md").read_text(encoding="utf-8"))
-        self.assertIn("Cliente: abaco", export.read_text(encoding="utf-8"))
-        hits = mi.search(client="abaco")                              # capa/busca refletem
+        self.assertEqual(meta["client"], "orbita")                     # FONTE do índice
+        self.assertIn("Cliente: orbita", (folder / "notas.md").read_text(encoding="utf-8"))
+        self.assertIn("Cliente: orbita", export.read_text(encoding="utf-8"))
+        hits = mi.search(client="orbita")                              # capa/busca refletem
         self.assertEqual(len(hits), 1)
-        self.assertEqual(hits[0]["client"], "abaco")
+        self.assertEqual(hits[0]["client"], "orbita")
 
     def test_remover_cliente_e_manter_titulo(self):
         folder, _ = self._make(client="acme")
@@ -123,12 +123,12 @@ class UpdateNoteMetaTests(unittest.TestCase):
         exibido.parent.mkdir()
         exibido.write_text((folder / "notas.md").read_text(encoding="utf-8"), encoding="utf-8")
 
-        ok = notes.update_note_meta(folder, title="Renomeada", client="abaco",
+        ok = notes.update_note_meta(folder, title="Renomeada", client="orbita",
                                     extra_targets=[exibido])
         self.assertTrue(ok)
         conteudo = exibido.read_text(encoding="utf-8")
         self.assertIn("# Renomeada", conteudo)          # o arquivo EXIBIDO reflete
-        self.assertIn("Cliente: abaco", conteudo)
+        self.assertIn("Cliente: orbita", conteudo)
 
     def test_uma_escrita_por_alvo_quando_exibido_e_o_export(self):
         # caso comum: o .md exibido É o export_path -> dedup evita ler/reescrever 2x
@@ -473,11 +473,11 @@ class ParseParticipantsTests(unittest.TestCase):
         "# Reunião\n\n## Participantes\n\n"
         "### Presentes\n"
         "- **Eu** — desenvolvedor\n"
-        "- **Participante 1 (Guilherme Lima)** — gerente; conduziu [00:28]\n"
+        "- **Participante 1 (Ricardo Nunes)** — gerente; conduziu [00:28]\n"
         "- **Participante 2** — voz não identificada\n"
         "- **Participante 4 (Carlos)** — diretor\n\n"
         "### Mencionados (não confirmados como vozes)\n"
-        "- **Célio** — supervisor\n\n"
+        "- **Caio** — supervisor\n\n"
         "## Transcrição completa\n**[00:00] Eu:** oi\n"
     )
 
@@ -486,12 +486,12 @@ class ParseParticipantsTests(unittest.TestCase):
         pres, menc = notes.parse_participants(self._MD_H3)
         self.assertIn("Participante 1", pres)
         self.assertIn("Participante 4", pres)
-        self.assertEqual(menc, ["Célio"])  # bullets sob "### Mencionados"
+        self.assertEqual(menc, ["Caio"])  # bullets sob "### Mencionados"
 
     def test_nome_embutido_no_rotulo(self):
         pres, _ = notes.parse_participants(self._MD_H3)
-        self.assertNotIn("Participante 1 (Guilherme Lima)", pres)  # chave normalizada p/ "Participante 1"
-        self.assertEqual(notes.guess_voice_name("Participante 1", pres["Participante 1"]), "Guilherme Lima")
+        self.assertNotIn("Participante 1 (Ricardo Nunes)", pres)  # chave normalizada p/ "Participante 1"
+        self.assertEqual(notes.guess_voice_name("Participante 1", pres["Participante 1"]), "Ricardo Nunes")
         self.assertEqual(notes.guess_voice_name("Participante 4", pres["Participante 4"]), "Carlos")
 
 
@@ -505,9 +505,9 @@ class GuessVoiceNameTests(unittest.TestCase):
         self.assertEqual(notes.guess_voice_name("Participante 2", "Alex (identificado: …)"), "Alex")
 
     def test_nome_composto_no_inicio(self):
-        # nome com sobrenome (vindo do rótulo "Participante 1 (Guilherme Lima)")
+        # nome com sobrenome (vindo do rótulo "Participante 1 (Ricardo Nunes)")
         self.assertEqual(
-            notes.guess_voice_name("Participante 1", "Guilherme Lima (gerente de projeto)"), "Guilherme Lima")
+            notes.guess_voice_name("Participante 1", "Ricardo Nunes (gerente de projeto)"), "Ricardo Nunes")
 
     def test_marcador_possivelmente(self):
         self.assertEqual(
@@ -646,15 +646,15 @@ class ActionItemsTests(unittest.TestCase):
         # e o texto exibido não pode vazar asteriscos (capa/hub renderizam texto puro)
         md = ("## Pendências e Ações\n"
               '- **["Eu"] Aplicar as 6 notas no DEV hoje à tarde** e avisar no grupo. [00:15:43]\n'
-              "- **[Wisney / Guilherme Lima] Solicitar a Célio Soares** que envie "
+              "- **[Valter / Ricardo Nunes] Solicitar a Caio Torres** que envie "
               "**ainda na tarde** a documentação. [00:33:58]\n")
         items = notes.parse_action_items(md)
         self.assertEqual(items[0]["label"], "Eu")                    # aspas da IA removidas
-        self.assertEqual(items[1]["label"], "Wisney / Guilherme Lima")
+        self.assertEqual(items[1]["label"], "Valter / Ricardo Nunes")
         for it in items:
             self.assertNotIn("**", it["text"])
         self.assertTrue(items[0]["text"].startswith("Aplicar as 6 notas"))
-        self.assertIn("Solicitar a Célio Soares que envie ainda na tarde", items[1]["text"])
+        self.assertIn("Solicitar a Caio Torres que envie ainda na tarde", items[1]["text"])
 
     def test_key_estavel_apos_tolerancia_de_negrito(self):
         # a key vem do raw (intacto): estados salvos no .actions.json não podem invalidar

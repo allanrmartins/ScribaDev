@@ -97,8 +97,8 @@ class TimesheetWindowTests(unittest.TestCase):
 
     # -- fluxo com banco isolado -------------------------------------------------
     def _seed(self):
-        cid = tsdb.add_client("Coruripe")
-        tsdb.add_project(cid, "403240")
+        cid = tsdb.add_client("Vetra")
+        tsdb.add_project(cid, "123456")
         eid = tsdb.add_entry(work_date="2026-07-13", start_time="08:00",
                              end_time="13:00", client_id=cid, description="manha")
         tsdb.upsert_suggestion({
@@ -106,7 +106,7 @@ class TimesheetWindowTests(unittest.TestCase):
             "client_text": "Cliente Novo", "description": "call sugerida",
             "meeting_started_at": "2026-07-13T14:00:00"})
         tsdb.add_entry(work_date="2026-07-14", start_time="09:00", end_time="10:00",
-                       client_text="Delta", project_text="MM03",
+                       client_text="Delta Peças", project_text="MM03",
                        description="dia seguinte")
         return cid, eid
 
@@ -239,19 +239,19 @@ class TimesheetWindowTests(unittest.TestCase):
         # diálogo em modo NOVO: título próprio, horários vazios (obrigam
         # preenchimento correto) e combo com cadastro + nomes crus
         defaults = dict(work_date="2026-07-15", start_time="", end_time="",
-                        client_name=None, client_text="Coruripe", project_code=None,
+                        client_name=None, client_text="Vetra", project_code=None,
                         project_text="", description="", overtime=0, location="")
         dlg = _EntryDialog(win, None, win._data, defaults=defaults)
         self.assertEqual(dlg.windowTitle(), "Novo apontamento")
         self.assertEqual(dlg._time_rows[0][0].text(), "")  # início vazio: obriga preencher
-        self.assertEqual(dlg._client.currentText(), "Coruripe")
+        self.assertEqual(dlg._client.currentText(), "Vetra")
         names = [dlg._client.itemText(i) for i in range(dlg._client.count())]
         self.assertIn("Cliente Novo", names)
-        self.assertIn("Delta", names)
+        self.assertIn("Delta Peças", names)
         # inteligência: o projeto mais recente do cliente já vem PREENCHIDO,
         # e trocar o cliente troca o projeto junto (histórico, não só cadastro)
-        self.assertEqual(dlg._project.currentText(), "403240")
-        dlg._client.setCurrentText("Delta")
+        self.assertEqual(dlg._project.currentText(), "123456")
+        dlg._client.setCurrentText("Delta Peças")
         self.assertEqual(dlg._project.currentText(), "MM03")
         self.assertIn("dia seguinte", dlg._desc_model.stringList())
         # diálogo sem aperto: descrição multi-linha (~240 chars) e largura mínima;
@@ -275,13 +275,13 @@ class TimesheetWindowTests(unittest.TestCase):
         win._save_entry_fields({
             "work_date": "2026-07-15",
             "blocks": [("08:00", "13:00"), ("14:00", "17:00")],
-            "_client": "Coruripe", "_project": "403240",
+            "_client": "Vetra", "_project": "123456",
             "description": "testes unitarios", "overtime": False, "location": ""})
         rows = tsdb.list_entries(day="2026-07-15")
         self.assertEqual(len(rows), 2)
         self.assertEqual([r["minutes"] for r in rows], [300, 180])
-        self.assertTrue(all(r["client_name"] == "Coruripe" and
-                            r["project_code"] == "403240" for r in rows))
+        self.assertTrue(all(r["client_name"] == "Vetra" and
+                            r["project_code"] == "123456" for r in rows))
 
     def test_editar_fracionando_um_bloco(self):
         """Editar com blocos extras: o 1º atualiza o registro, os demais viram
@@ -292,7 +292,7 @@ class TimesheetWindowTests(unittest.TestCase):
         win._save_entry_fields({
             "work_date": "2026-07-13",
             "blocks": [("08:00", "12:00"), ("13:00", "17:00")],
-            "_client": "Coruripe", "_project": "403240",
+            "_client": "Vetra", "_project": "123456",
             "description": "manha", "overtime": False, "location": ""},
             entry_id=alvo["id"], accept_after=False)
         rows = tsdb.list_entries(day="2026-07-13", status="confirmed")
@@ -317,14 +317,14 @@ class TimesheetWindowTests(unittest.TestCase):
         # cliente da sugestão sem histórico de projeto: campo fica vazio...
         self.assertEqual(dlg._project.currentText(), "")
         # ...e corrigir o cliente para um conhecido puxa o projeto do histórico
-        dlg._client.setCurrentText("Coruripe")
-        self.assertEqual(dlg._project.currentText(), "403240")
+        dlg._client.setCurrentText("Vetra")
+        self.assertEqual(dlg._project.currentText(), "123456")
         # apontamento com projeto salvo abre intocado; texto do usuário idem
         delta = tsdb.list_entries(day="2026-07-14")[0]
         dlg2 = _EntryDialog(win, delta, win._data)
         self.assertEqual(dlg2._project.currentText(), "MM03")
         dlg2._project.setCurrentText("ZMANUAL")
-        dlg2._client.setCurrentText("Coruripe")
+        dlg2._client.setCurrentText("Vetra")
         self.assertEqual(dlg2._project.currentText(), "ZMANUAL")
 
     def test_defaults_do_novo_apontamento(self):
@@ -335,7 +335,7 @@ class TimesheetWindowTests(unittest.TestCase):
         self._seed()
         today = date.today().isoformat()
         tsdb.add_entry(work_date=today, start_time="08:00", end_time="10:15",
-                       client_text="Gencau", description="analise programas z")
+                       client_text="Doceva", description="analise programas z")
         win = self._data_window()
         win._month = today[:7]
         win.refresh()
@@ -343,7 +343,7 @@ class TimesheetWindowTests(unittest.TestCase):
         self.assertEqual(d["work_date"], today)
         self.assertEqual(d["start_time"], "10:15")
         self.assertTrue(d["end_time"] == "" or d["end_time"] > "10:15")
-        self.assertEqual(d["client_text"], "Gencau")
+        self.assertEqual(d["client_text"], "Doceva")
 
     def test_coluna_extra_flag_proprio(self):
         """Hora extra é COLUNA própria (flag "extra" destacado), não mais
@@ -376,8 +376,8 @@ class TimesheetWindowTests(unittest.TestCase):
         vira tombstone (reunião) ou é apagado (manual)."""
         from scriba.qt.timesheet_ui import _merge_entries
 
-        cid = tsdb.add_client("Coruripe")
-        tsdb.add_project(cid, "403240")
+        cid = tsdb.add_client("Vetra")
+        tsdb.add_project(cid, "123456")
         for start, end, desc, key in (
                 ("08:00", "10:00", "Reforma tributária NF-e", "2026-07-20T08:00:00"),
                 ("10:00", "10:30", "Status Report", "2026-07-20T10:00:00"),
@@ -395,11 +395,11 @@ class TimesheetWindowTests(unittest.TestCase):
         self.assertEqual(merged["description"],
                          "Reforma tributária NF-e; Status Report; Debug BAdI fiscal")
         self.assertEqual(merged["overtime"], 0)
-        self.assertEqual(merged["client_name"], "Coruripe")
+        self.assertEqual(merged["client_name"], "Vetra")
         # aplicar (o que o Salvar do diálogo dispara): 1 confirmado, 3 tombstones
         win._apply_group({
             "work_date": "2026-07-20", "blocks": [("08:00", "11:00")],
-            "_client": "Coruripe", "_project": "403240",
+            "_client": "Vetra", "_project": "123456",
             "description": merged["description"], "overtime": False, "location": ""},
             sel[0], sel[1:])
         self.assertEqual(tsdb.list_entries(status="suggested"), [])
@@ -407,7 +407,7 @@ class TimesheetWindowTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["id"], sel[0]["id"])
         self.assertEqual((rows[0]["start_time"], rows[0]["end_time"]), ("08:00", "11:00"))
-        self.assertEqual(rows[0]["project_code"], "403240")
+        self.assertEqual(rows[0]["project_code"], "123456")
         # tombstones seguram o reprocesso: meeting_started_at preservado
         dead = tsdb.list_entries(day="2026-07-20", status="discarded")
         self.assertEqual(len(dead), 3)

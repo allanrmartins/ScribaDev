@@ -42,7 +42,7 @@ class TimesheetDbTests(unittest.TestCase):
 
     def _suggestion(self, key="2026-07-13T14:00:00", **kw):
         rec = dict(work_date="2026-07-13", start_time="14:00", end_time="15:00",
-                   client_text="Coruripe", description="call reforma tributária",
+                   client_text="Vetra", description="call reforma tributária",
                    meeting_folder="C:/temp/x", meeting_started_at=key)
         rec.update(kw)
         return tsdb.upsert_suggestion(rec)
@@ -89,8 +89,8 @@ class TimesheetDbTests(unittest.TestCase):
                 c.execute(ddl)
             c.execute("PRAGMA user_version = 1")
             c.execute("INSERT INTO clients (id, name, created_at) "
-                      "VALUES (1, 'Cellera', 'x')")
-            for alias in ("célera", "celera", "celera sa"):
+                      "VALUES (1, 'Aurora', 'x')")
+            for alias in ("aurórra", "aurorra", "aurorra sa"):
                 c.execute("INSERT INTO client_aliases (client_id, alias) "
                           "VALUES (1, ?)", (alias,))
             c.execute("""INSERT INTO entries (work_date, start_time, end_time,
@@ -101,24 +101,24 @@ class TimesheetDbTests(unittest.TestCase):
             self.assertEqual(c.execute("PRAGMA user_version").fetchone()[0], 2)
         self.assertEqual(len(tsdb.list_entries(day="2026-07-01")), 1)
         cid = tsdb.list_clients()[0]["id"]
-        self.assertEqual(tsdb.resolve_client("CÉLERA SA"), (cid, "Cellera"))
+        self.assertEqual(tsdb.resolve_client("AURÓRRA SA"), (cid, "Aurora"))
         aliases = tsdb.list_aliases(cid)
-        self.assertEqual(len(aliases), 2)  # 'célera' + 'celera' viraram um só
+        self.assertEqual(len(aliases), 2)  # 'aurórra' + 'aurorra' viraram um só
         self.assertTrue(all(a["alias_norm"] for a in aliases))
 
     def test_resolve_acento_insensivel(self):
-        """v2 (#125): "Célera" resolve alias "celera" e vice-versa; nome
+        """v2 (#125): "Áurora" resolve alias "aurora" e vice-versa; nome
         canônico, idempotência de cadastro e conflito de alias idem."""
-        cid = tsdb.add_client("Célera")
-        aid = tsdb.add_alias(cid, "celera farma")
-        self.assertEqual(tsdb.resolve_client("celera"), (cid, "Célera"))
-        self.assertEqual(tsdb.resolve_client("CELERA"), (cid, "Célera"))
-        self.assertEqual(tsdb.resolve_client("Célera Fárma"), (cid, "Célera"))
-        self.assertEqual(tsdb.add_client("  celera "), cid)      # não duplica
-        self.assertEqual(tsdb.add_alias(cid, "CÉLERA FARMA"), aid)  # mesmo dono
-        outro = tsdb.add_client("Delta")
+        cid = tsdb.add_client("Áurora")
+        aid = tsdb.add_alias(cid, "aurora farma")
+        self.assertEqual(tsdb.resolve_client("aurora"), (cid, "Áurora"))
+        self.assertEqual(tsdb.resolve_client("AURORA"), (cid, "Áurora"))
+        self.assertEqual(tsdb.resolve_client("Áurora Fárma"), (cid, "Áurora"))
+        self.assertEqual(tsdb.add_client("  aurora "), cid)      # não duplica
+        self.assertEqual(tsdb.add_alias(cid, "ÁURORA FARMA"), aid)  # mesmo dono
+        outro = tsdb.add_client("Delta Peças")
         with self.assertRaises(sqlite3.IntegrityError):
-            tsdb.add_alias(outro, "célera farma")  # equivalente de outro cliente
+            tsdb.add_alias(outro, "áurora farma")  # equivalente de outro cliente
 
     # -- entries: CRUD + validação --------------------------------------------
     def test_add_entry_minutos_derivados_e_validacao(self):
@@ -166,95 +166,95 @@ class TimesheetDbTests(unittest.TestCase):
 
     # -- clientes / aliases / resolve -----------------------------------------
     def test_resolve_client_nome_e_alias_nocase(self):
-        cid = tsdb.add_client("Cellera")
-        tsdb.add_alias(cid, "celera farma")
-        self.assertEqual(tsdb.resolve_client("cellera"), (cid, "Cellera"))
-        self.assertEqual(tsdb.resolve_client("CELLERA"), (cid, "Cellera"))
-        self.assertEqual(tsdb.resolve_client("  Celera   Farma "), (cid, "Cellera"))
+        cid = tsdb.add_client("Aurora")
+        tsdb.add_alias(cid, "aurorra farma")
+        self.assertEqual(tsdb.resolve_client("aurora"), (cid, "Aurora"))
+        self.assertEqual(tsdb.resolve_client("AURORA"), (cid, "Aurora"))
+        self.assertEqual(tsdb.resolve_client("  Aurorra   Farma "), (cid, "Aurora"))
         self.assertEqual(tsdb.resolve_client("Desconhecida  SA"), (None, "Desconhecida SA"))
         self.assertEqual(tsdb.resolve_client("   "), (None, ""))
 
     def test_add_client_idempotente_e_alias_conflito(self):
-        cid = tsdb.add_client("Abaco")
-        self.assertEqual(tsdb.add_client("  ABACO "), cid)  # NOCASE + normalização
-        aid = tsdb.add_alias(cid, "abaco studio")
-        self.assertEqual(tsdb.add_alias(cid, "Abaco Studio"), aid)  # mesmo dono: no-op
-        outro = tsdb.add_client("Delta")
+        cid = tsdb.add_client("Orbita")
+        self.assertEqual(tsdb.add_client("  ORBITA "), cid)  # NOCASE + normalização
+        aid = tsdb.add_alias(cid, "orbita studio")
+        self.assertEqual(tsdb.add_alias(cid, "Orbita Studio"), aid)  # mesmo dono: no-op
+        outro = tsdb.add_client("Delta Peças")
         with self.assertRaises(sqlite3.IntegrityError):
-            tsdb.add_alias(outro, "abaco studio")  # alias de outro cliente
+            tsdb.add_alias(outro, "orbita studio")  # alias de outro cliente
         with self.assertRaises(ValueError):
             tsdb.add_client("   ")
 
     def test_merge_client(self):
-        errado = tsdb.add_client("Celera")
-        certo = tsdb.add_client("Cellera")
-        tsdb.add_alias(errado, "celera sa")
-        pid = tsdb.add_project(errado, "403240")
+        errado = tsdb.add_client("Aurorra")
+        certo = tsdb.add_client("Aurora")
+        tsdb.add_alias(errado, "aurorra sa")
+        pid = tsdb.add_project(errado, "123456")
         eid = self._entry(client_id=errado)
         tsdb.merge_client(errado, certo)
         row = tsdb.list_entries(day="2026-07-13")[0]
         self.assertEqual(row["client_id"], certo)
-        self.assertEqual(row["client_name"], "Cellera")
+        self.assertEqual(row["client_name"], "Aurora")
         # nome antigo virou alias do destino; alias e projeto re-apontados
-        self.assertEqual(tsdb.resolve_client("celera"), (certo, "Cellera"))
-        self.assertEqual(tsdb.resolve_client("celera sa"), (certo, "Cellera"))
+        self.assertEqual(tsdb.resolve_client("aurorra"), (certo, "Aurora"))
+        self.assertEqual(tsdb.resolve_client("aurorra sa"), (certo, "Aurora"))
         self.assertEqual(tsdb.list_projects(certo)[0]["id"], pid)
-        self.assertEqual([c["name"] for c in tsdb.list_clients()], ["Cellera"])
+        self.assertEqual([c["name"] for c in tsdb.list_clients()], ["Aurora"])
         self.assertIsNotNone(eid)
 
     def test_client_history_recencia_e_dedupe(self):
         """Pré-preenchimento da UI: projetos/descrições por cliente vêm do
         HISTÓRICO (recência), com dedupe NOCASE; cadastrado sem uso entra."""
-        self._entry(client_text="Coruripe", project_text="403240",
+        self._entry(client_text="Vetra", project_text="123456",
                     description="analise notas")
-        self._entry(start_time="14:00", end_time="15:00", client_text="coruripe",
+        self._entry(start_time="14:00", end_time="15:00", client_text="vetra",
                     project_text="GAP 1", description="Analise Notas")
-        self._entry(work_date="2026-07-14", client_text="Delta",
+        self._entry(work_date="2026-07-14", client_text="Delta Peças",
                     project_text="MM03", status="discarded")
-        kid = tsdb.add_client("Kyly")
-        tsdb.add_project(kid, "11695")
+        kid = tsdb.add_client("Kidora")
+        tsdb.add_project(kid, "654321")
         hist = tsdb.client_history()
         keys = list(hist)
-        self.assertEqual(keys[0].casefold(), "coruripe")           # último usado 1º
-        self.assertEqual(hist[keys[0]]["projects"], ["GAP 1", "403240"])  # recência
+        self.assertEqual(keys[0].casefold(), "vetra")           # último usado 1º
+        self.assertEqual(hist[keys[0]]["projects"], ["GAP 1", "123456"])  # recência
         self.assertEqual(len(hist[keys[0]]["descriptions"]), 1)    # dedupe NOCASE
-        self.assertNotIn("Delta", keys)                            # descartado fora
-        self.assertEqual(hist["Kyly"]["projects"], ["11695"])      # cadastrado s/ uso
+        self.assertNotIn("Delta Peças", keys)                            # descartado fora
+        self.assertEqual(hist["Kidora"]["projects"], ["654321"])      # cadastrado s/ uso
 
     def test_known_client_names_uniao_cadastro_e_crus(self):
-        tsdb.add_client("Coruripe")
+        tsdb.add_client("Vetra")
         inativo = tsdb.add_client("Antiga")
         tsdb.set_client_active(inativo, False)
-        self._entry(client_text="Delta")                       # cru em uso
+        self._entry(client_text="Delta Peças")                       # cru em uso
         self._entry(start_time="14:00", end_time="15:00",
-                    client_text="Gencau", status="discarded")  # descartado: fora
+                    client_text="Doceva", status="discarded")  # descartado: fora
         names = tsdb.known_client_names()
-        self.assertIn("Coruripe", names)
-        self.assertIn("Delta", names)
-        self.assertNotIn("Gencau", names)
+        self.assertIn("Vetra", names)
+        self.assertIn("Delta Peças", names)
+        self.assertNotIn("Doceva", names)
         self.assertNotIn("Antiga", names)   # inativo sai dos combos
 
     def test_rename_e_desativa_cliente(self):
-        cid = tsdb.add_client("Celera")
-        tsdb.rename_client(cid, "Cellera")
-        self.assertEqual(tsdb.resolve_client("cellera"), (cid, "Cellera"))
+        cid = tsdb.add_client("Aurorra")
+        tsdb.rename_client(cid, "Aurora")
+        self.assertEqual(tsdb.resolve_client("aurora"), (cid, "Aurora"))
         with self.assertRaises(ValueError):
             tsdb.rename_client(cid, "  ")
         with self.assertRaises(ValueError):
             tsdb.rename_client(99999, "X")
         tsdb.set_client_active(cid, False)
-        self.assertEqual(tsdb.resolve_client("cellera"), (None, "cellera"))  # sai do resolve
+        self.assertEqual(tsdb.resolve_client("aurora"), (None, "aurora"))  # sai do resolve
         self.assertEqual(tsdb.list_clients(), [])
         self.assertEqual(len(tsdb.list_clients(active_only=False)), 1)
         tsdb.set_client_active(cid, True)  # reativar volta ao normal
-        self.assertEqual(tsdb.resolve_client("cellera"), (cid, "Cellera"))
+        self.assertEqual(tsdb.resolve_client("aurora"), (cid, "Aurora"))
 
     def test_projects_por_cliente(self):
-        a = tsdb.add_client("Coruripe")
-        b = tsdb.add_client("Delta")
-        p1 = tsdb.add_project(a, "403240", "Reforma tributária")
-        self.assertEqual(tsdb.add_project(a, " 403240 "), p1)  # idempotente
-        tsdb.add_project(b, "403240")  # mesmo código, outro cliente: ok
+        a = tsdb.add_client("Vetra")
+        b = tsdb.add_client("Delta Peças")
+        p1 = tsdb.add_project(a, "123456", "Reforma tributária")
+        self.assertEqual(tsdb.add_project(a, " 123456 "), p1)  # idempotente
+        tsdb.add_project(b, "123456")  # mesmo código, outro cliente: ok
         tsdb.add_project(a, "GAP ID 3.4.07-G14")
         self.assertEqual(len(tsdb.list_projects(a)), 2)
         self.assertEqual(len(tsdb.list_projects(b)), 1)
@@ -263,14 +263,14 @@ class TimesheetDbTests(unittest.TestCase):
     def test_upsert_suggestion_ciclo_completo(self):
         self.assertEqual(self._suggestion(), "created")
         # reprocesso enquanto 'suggested': atualiza (IA corrigiu o cliente)
-        self.assertEqual(self._suggestion(client_text="Usina Coruripe"), "updated")
+        self.assertEqual(self._suggestion(client_text="Usina Vetra"), "updated")
         row = tsdb.list_entries(status="suggested")[0]
-        self.assertEqual(row["client_text"], "Usina Coruripe")
+        self.assertEqual(row["client_text"], "Usina Vetra")
         # confirmada: dado do usuário vence a IA — reprocesso não toca
         tsdb.update_entry(row["id"], status="confirmed")
         self.assertEqual(self._suggestion(client_text="Outra"), "skipped")
         self.assertEqual(tsdb.list_entries(day="2026-07-13")[0]["client_text"],
-                         "Usina Coruripe")
+                         "Usina Vetra")
         # descartada idem (tombstone impede ressurreição)
         outra = "2026-07-13T16:00:00"
         self._suggestion(key=outra)

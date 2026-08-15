@@ -153,12 +153,12 @@ class TimesheetConfigTests(unittest.TestCase):
 
         cfg = config.load()
         config.save(dataclasses.replace(cfg, timesheet=dataclasses.replace(
-            cfg.timesheet, enabled=True, round_minutes=5, default_client="Abaco",
+            cfg.timesheet, enabled=True, round_minutes=5, default_client="Orbita",
             backup_dir=r"D:\backups")))
         got = config.load().timesheet
         self.assertTrue(got.enabled)
         self.assertEqual(got.round_minutes, 5)
-        self.assertEqual(got.default_client, "Abaco")
+        self.assertEqual(got.default_client, "Orbita")
         self.assertEqual(got.backup_dir, r"D:\backups")
 
     def test_config_antigo_sem_secao_usa_defaults(self):

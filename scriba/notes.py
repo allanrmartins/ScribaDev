@@ -945,9 +945,9 @@ _MENC_MARK = re.compile(r"(?i)^(?:#{3,6}\s+|\*\*)\s*mencionad")
 # "### Presentes" começa com "## " e fazia o parser parar antes de ler os participantes)
 _SECTION_END = re.compile(r"^#{1,2}\s+\S")
 _PART_BULLET = re.compile(r"^[-*]\s+\*\*(.+?)\*\*\s*[—:–-]?\s*(.*)$")
-# nome embutido no rótulo: "Participante 1 (Guilherme Lima)" -> voz "Participante 1" + nome
+# nome embutido no rótulo: "Participante 1 (Ricardo Nunes)" -> voz "Participante 1" + nome
 _LABEL_NAME = re.compile(r"(?i)^(participante\s+\d+)\s*\(([^)]+)\)\s*$")
-# palpite de nome: "Alex (…" ou "Guilherme Lima (…" no começo (1-4 palavras capitalizadas),
+# palpite de nome: "Alex (…" ou "Ricardo Nunes (…" no começo (1-4 palavras capitalizadas),
 # ou "… provavelmente/possivelmente/identificado X"
 _GUESS_LEAD = re.compile(r"^\s*([A-ZÀ-Ý][\wÀ-ÿ/]+(?:\s+[A-ZÀ-Ý][\wÀ-ÿ/]+){0,3})\s*\(")
 _GUESS_MARK = re.compile(
@@ -965,7 +965,7 @@ def parse_participants(md: str) -> tuple[dict[str, str], list[str]]:
     → "Alex (identificado: …)"). `mencionados` é a lista de nomes citados que não
     falaram. Tolerante ao formato da IA: os sub-blocos vêm tanto como **Presentes:**
     quanto como ### Presentes, e o nome pode vir embutido no rótulo ("Participante 1
-    (Guilherme Lima)"). Best-effort: sem a seção → ({}, [])."""
+    (Ricardo Nunes)"). Best-effort: sem a seção → ({}, [])."""
     lines = md.splitlines()
     start = next((i + 1 for i, ln in enumerate(lines) if _PART_HEADER.match(ln)), None)
     if start is None:
@@ -988,7 +988,7 @@ def parse_participants(md: str) -> tuple[dict[str, str], list[str]]:
             continue
         label, desc = mb.group(1).strip(), mb.group(2).strip()
         nm = _LABEL_NAME.match(label)
-        if nm:  # "Participante 1 (Guilherme Lima)" -> chave "Participante 1" + nome no começo da desc
+        if nm:  # "Participante 1 (Ricardo Nunes)" -> chave "Participante 1" + nome no começo da desc
             label = nm.group(1).strip()
             desc = f"{nm.group(2).strip()} (" + (desc or "presente") + ")"
         if mode == "pres":

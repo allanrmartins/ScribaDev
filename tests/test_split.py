@@ -85,11 +85,11 @@ class SplitMetaTests(unittest.TestCase):
                 "mic": {"file": "mic.opus", "offset_seconds": 0.0, "audio_seconds": 663.0},
                 "loopback": {"file": "loopback.opus", "offset_seconds": 0.0, "audio_seconds": 663.0},
             },
-            "meeting_title": "Daily reforma tributária Coruripe",
-            "title": "Daily reforma tributária Coruripe",
-            "client": "Coruripe",
+            "meeting_title": "Daily reforma tributária Vetra",
+            "title": "Daily reforma tributária Vetra",
+            "client": "Vetra",
             "export_path": "C:\\x\\2026-07-02_09-30_reuniao.md",
-            "speakers_recognized": ["Guilherme Lima"],
+            "speakers_recognized": ["Ricardo Nunes"],
         }
 
     def test_parte1(self):
@@ -99,7 +99,7 @@ class SplitMetaTests(unittest.TestCase):
         self.assertEqual(m1["duration_seconds"], 300.0)
         self.assertEqual(m1["status"], "transcribed")
         self.assertEqual(m1["streams"]["mic"]["audio_seconds"], 300.0)
-        self.assertEqual(m1["meeting_title"], "Daily reforma tributária Coruripe")  # mantido
+        self.assertEqual(m1["meeting_title"], "Daily reforma tributária Vetra")  # mantido
         for k in ("title", "client", "export_path", "speakers_recognized"):
             self.assertNotIn(k, m1)  # limpos p/ o re-resumo regenerar
 

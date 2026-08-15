@@ -383,7 +383,7 @@ def _import_sheet(sheet: str, month: str, rows: list, report: ImportReport,
             report.unresolved[cname] += 1
 
         # chave natural pelo nome que fica no banco (canônico p/ resolvido):
-        # 'Usina Coruripe' via alias deduplica contra 'Coruripe' já gravado
+        # 'Usina Vetra' via alias deduplica contra 'Vetra' já gravado
         key = (current_day, start, end, timesheet_db._fold(cname))
         if key in existing:
             report.duplicates += 1

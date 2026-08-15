@@ -723,7 +723,7 @@ class TimesheetWindow(QWidget):
         self._proj_list = QListWidget()
         rlay.addWidget(self._proj_list, 1)
         prow = QHBoxLayout()
-        self._proj_code = widgets.make_entry("código (ex.: 403240)…")
+        self._proj_code = widgets.make_entry("código (ex.: 123456)…")
         self._proj_label = widgets.make_entry("rótulo (opcional)…")
         self._proj_code.returnPressed.connect(self._project_add)
         self._proj_label.returnPressed.connect(self._project_add)

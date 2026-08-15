@@ -165,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
     p_ta.add_argument("--start", required=True, metavar="HH:MM", help="hora de início")
     p_ta.add_argument("--end", required=True, metavar="HH:MM", help="hora de fim")
     p_ta.add_argument("--client", required=True, help="cliente (nome ou alias do cadastro)")
-    p_ta.add_argument("--project", default="", help="código de OS/GAP (ex.: 403240)")
+    p_ta.add_argument("--project", default="", help="código de OS/GAP (ex.: 123456)")
     p_ta.add_argument("--desc", default="", help="descrição breve da atividade")
     p_ta.add_argument("--extra", action="store_true", help="marca como hora extra")
     ts_sub.add_parser("sync", help="varre reuniões prontas e cria as sugestões que faltam")

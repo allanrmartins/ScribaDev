@@ -47,8 +47,8 @@ class TimesheetXlsxTests(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _seed(self):
-        cid = tsdb.add_client("Coruripe")
-        pid = tsdb.add_project(cid, "403240", "Reforma tributária")
+        cid = tsdb.add_client("Vetra")
+        pid = tsdb.add_project(cid, "123456", "Reforma tributária")
         tsdb.set_day_note("2026-07-09", "feriado")
         # dia 13: 2 blocos (manhã apontada; tarde extra, não apontada, cliente cru)
         e1 = tsdb.add_entry(work_date="2026-07-13", start_time="08:00", end_time="13:00",
@@ -56,7 +56,7 @@ class TimesheetXlsxTests(unittest.TestCase):
                             description="aplicacao de notas outbound")
         tsdb.set_posted([e1], True)
         tsdb.add_entry(work_date="2026-07-13", start_time="14:00", end_time="17:00",
-                       client_text="Delta", description="ajuste MM03", overtime=True)
+                       client_text="Delta Peças", description="ajuste MM03", overtime=True)
         # dia 14: 1 bloco
         tsdb.add_entry(work_date="2026-07-14", start_time="08:00", end_time="12:00",
                        client_id=cid, description="testes unitarios")
@@ -102,9 +102,9 @@ class TimesheetXlsxTests(unittest.TestCase):
         self.assertEqual(ws["D3"].number_format, "h:mm")
 
         # cliente canônico + projeto cadastrado; cliente cru preservado
-        self.assertEqual(ws["E3"].value, "Coruripe")
-        self.assertEqual(ws["F3"].value, "403240")
-        self.assertEqual(ws["E4"].value, "Delta")
+        self.assertEqual(ws["E3"].value, "Vetra")
+        self.assertEqual(ws["F3"].value, "123456")
+        self.assertEqual(ws["E4"].value, "Delta Peças")
 
         # hora extra na H (texto real da planilha); SIM/NÃO refletindo posted
         self.assertIsNone(ws["H3"].value)
@@ -186,24 +186,24 @@ class TimesheetImportTests(unittest.TestCase):
         ws.append(self._HEAD)
         # célula com ANO ERRADO (aba copiada): o nome da aba manda -> 2026-07-01
         ws.append([datetime(2025, 7, 1), time(8, 0), time(13, 0), time(5, 0),
-                   "Coruripe", "403240\xa0", "aplicacao de notas", None, None, "SIM"])
-        ws.append([None, time(14, 0), time(17, 0), time(3, 0), "coruripe",
-                   "403240", "aplicacao de notas", "hora extra", None, "NÃO"])
+                   "Vetra", "123456\xa0", "aplicacao de notas", None, None, "SIM"])
+        ws.append([None, time(14, 0), time(17, 0), time(3, 0), "vetra",
+                   "123456", "aplicacao de notas", "hora extra", None, "NÃO"])
         ws.append([None, None, None, time(0, 0), None, None, None, None, None,
                    "NÃO"])                 # sobra do template: some em silêncio
         ws.append([datetime(2026, 7, 2), None, None, time(0, 0), "feriado",
                    None, None, None, None, "NÃO"])   # dia especial -> day_note
         ws.append([datetime(2026, 7, 3), time(8, 0), time(12, 0), time(4, 0),
-                   "Usina Coruripe", None, "call kickoff",
-                   "solicitado monique", None, None])  # H reaproveitada, J vazio
-        ws.append([None, None, None, time(0, 0), "Simpar", "FM / WF",
+                   "Usina Vetra", None, "call kickoff",
+                   "solicitado mirela", None, None])  # H reaproveitada, J vazio
+        ws.append([None, None, None, time(0, 0), "Nortis", "FM / WF",
                    "anotacao sem horas", None, None, "NÃO"])  # ignorada c/ motivo
-        ws.append([None, time(15, 0), time(14, 0), None, "Delta", None,
+        ws.append([None, time(15, 0), time(14, 0), None, "Delta Peças", None,
                    "fim antes do inicio", None, None, "NÃO"])  # ignorada c/ motivo
         ws2 = wb.create_sheet("agosto")    # SEM ano no nome: maioria das datas
         ws2.append(self._HEAD)
         ws2.append([datetime(2026, 8, 3), time(9, 0), time(11, 0), None,
-                    "Célera", "\xa0GAP\xa04.1.03-G01", "dev relatorio", None,
+                    "Áurora", "\xa0GAP\xa04.1.03-G01", "dev relatorio", None,
                     "Remoto", "SIM"])
         wb.create_sheet("Modelo (3)").append(self._HEAD)   # não é mês: pulada
         path = self.tmp / "Apontamento.xlsx"
@@ -220,16 +220,16 @@ class TimesheetImportTests(unittest.TestCase):
         self.assertEqual([m[1] for m in report.months], ["2026-07", "2026-08"])
         self.assertEqual(sorted(r[2] for r in report.ignored),
                          ["fim (14:00) não é depois do início (15:00)", "sem horas"])
-        # grafias fold-iguais contam juntas; Célera com acento preservado
+        # grafias fold-iguais contam juntas; Áurora com acento preservado
         self.assertEqual(report.unresolved,
-                         {"Coruripe": 2, "Usina Coruripe": 1, "Célera": 1})
-        self.assertIn("solicitado monique", report.h_reaproveitada)
+                         {"Vetra": 2, "Usina Vetra": 1, "Áurora": 1})
+        self.assertIn("solicitado mirela", report.h_reaproveitada)
 
         # o que caiu no banco: dia com ano corrigido, NBSP normalizado, posted
         # da coluna J, hora extra da H, origin='import'
         dia1 = tsdb.list_entries(day="2026-07-01")
         self.assertEqual(len(dia1), 2)
-        self.assertEqual(dia1[0]["project_text"], "403240")
+        self.assertEqual(dia1[0]["project_text"], "123456")
         self.assertEqual((dia1[0]["posted"], dia1[1]["posted"]), (1, 0))
         self.assertIsNotNone(dia1[0]["posted_at"])
         self.assertEqual(dia1[1]["overtime"], 1)
@@ -257,9 +257,9 @@ class TimesheetImportTests(unittest.TestCase):
     def test_resolucao_e_dedupe_contra_o_banco(self):
         # cliente cadastrado + alias: import resolve (acento-insensível) e a
         # chave natural deduplica contra o que o APP já registrou no mesmo slot
-        cid = tsdb.add_client("Coruripe")
-        tsdb.add_alias(cid, "usina coruripe")
-        tsdb.add_client("Celera")           # sem acento: casa "Célera" via _fold
+        cid = tsdb.add_client("Vetra")
+        tsdb.add_alias(cid, "usina vetra")
+        tsdb.add_client("Aurora")           # sem acento: casa "Áurora" via _fold
         tsdb.add_entry(work_date="2026-07-01", start_time="08:00",
                        end_time="13:00", client_id=cid,
                        description="registrado pelo app")
@@ -269,7 +269,7 @@ class TimesheetImportTests(unittest.TestCase):
         self.assertEqual(report.imported, 3)
         kick = tsdb.list_entries(day="2026-07-03")[0]
         self.assertEqual(kick["client_id"], cid)                  # via alias
-        self.assertEqual(kick["client_name"], "Coruripe")
+        self.assertEqual(kick["client_name"], "Vetra")
 
     def test_planilha_inexistente_ou_travada(self):
         with self.assertRaises(Exception):

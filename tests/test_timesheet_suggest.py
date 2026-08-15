@@ -26,7 +26,7 @@ _CFG = config.Timesheet(enabled=True, round_minutes=15, min_meeting_minutes=10)
 
 
 def _meta(*, status="done", started="2026-07-13T14:03:12", ended="2026-07-13T15:09:40",
-          duration=None, title="Reforma tributária - notas outbound", client="Coruripe"):
+          duration=None, title="Reforma tributária - notas outbound", client="Vetra"):
     m = {"status": status, "started_at": started, "ended_at": ended,
          "title": title, "client": client}
     if duration is not None:
@@ -61,7 +61,7 @@ class SuggestionFromMetaTests(unittest.TestCase):
         self.assertEqual(rec["work_date"], "2026-07-13")
         self.assertEqual(rec["start_time"], "14:00")   # 14:03 -> nearest 15
         self.assertEqual(rec["end_time"], "15:15")     # 15:09 -> nearest 15
-        self.assertEqual(rec["client_text"], "Coruripe")
+        self.assertEqual(rec["client_text"], "Vetra")
         self.assertEqual(rec["description"], "Reforma tributária - notas outbound")
         self.assertEqual(rec["meeting_started_at"], "2026-07-13T14:03:12")
 
@@ -129,8 +129,8 @@ class SuggestFlowTests(unittest.TestCase):
         return folder
 
     def test_cria_resolve_cliente_e_e_idempotente(self):
-        cid = tsdb.add_client("Usina Coruripe")
-        tsdb.add_alias(cid, "coruripe")
+        cid = tsdb.add_client("Usina Vetra")
+        tsdb.add_alias(cid, "vetra")
         folder = self._folder()
         self.assertEqual(tss.suggest_for_folder(folder, _CFG), "created")
         row = tsdb.list_entries(status="suggested")[0]
@@ -154,16 +154,16 @@ class SuggestFlowTests(unittest.TestCase):
         tss.suggest_for_folder(folder, _CFG)
         # re-summarize corrigiu o cliente no meta
         (folder / "meta.json").write_text(
-            json.dumps(_meta(client="Delta"), ensure_ascii=False), encoding="utf-8")
+            json.dumps(_meta(client="Delta Peças"), ensure_ascii=False), encoding="utf-8")
         self.assertEqual(tss.suggest_for_folder(folder, _CFG), "updated")
         row = tsdb.list_entries(status="suggested")[0]
-        self.assertEqual(row["client_text"], "Delta")
+        self.assertEqual(row["client_text"], "Delta Peças")
         # confirmada: dado do usuário vence a IA
         tsdb.update_entry(row["id"], status="confirmed")
         (folder / "meta.json").write_text(
             json.dumps(_meta(client="Outra"), ensure_ascii=False), encoding="utf-8")
         self.assertEqual(tss.suggest_for_folder(folder, _CFG), "skipped")
-        self.assertEqual(tsdb.list_entries()[0]["client_text"], "Delta")
+        self.assertEqual(tsdb.list_entries()[0]["client_text"], "Delta Peças")
 
     def test_nunca_levanta(self):
         self.assertEqual(tss.suggest_for_folder(self.tmp / "nao-existe", _CFG), "ignored")

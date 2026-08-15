@@ -571,7 +571,7 @@ class CommandBarTests(unittest.TestCase):
         base = Path(tempfile.mkdtemp(prefix="scriba_qt_cmd_"))
         (base / "2026-07-03_09-41_Alinhamento.md").write_text(
             "---\ntitulo: Alinhamento interno ferramentas Claude Code\n"
-            "data: 2026-07-03T09:41:00\ncliente: Abaco\n---\n\n## Objetivo\nX.\n\n"
+            "data: 2026-07-03T09:41:00\ncliente: Orbita\n---\n\n## Objetivo\nX.\n\n"
             "## Transcrição completa\nfala\n", encoding="utf-8")
 
         class _Out:
@@ -768,11 +768,11 @@ class MainWindowLiveBandSmokeTests(unittest.TestCase):
         win = self._win()
         # título da nota (editado à mão) ganha do meeting_title (janela do Teams) — antes
         # era o contrário e renomear não refletia na capa.
-        row = win._recent_item({"title": "Coruripe - RT - Daily",
+        row = win._recent_item({"title": "Vetra - RT - Daily",
                                 "meeting_title": "Meeting join — Daily reforma tributaria",
                                 "started_at": "2026-07-06T14:03:00", "export_path": ""})
         texts = [lbl.text() for lbl in row.findChildren(QLabel)]
-        self.assertIn("Coruripe - RT - Daily", texts)
+        self.assertIn("Vetra - RT - Daily", texts)
         self.assertNotIn("Meeting join — Daily reforma tributaria", texts)
 
     def test_recente_cai_no_meeting_title_quando_nota_sem_titulo(self):

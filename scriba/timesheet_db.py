@@ -102,8 +102,8 @@ _DDL_V1 = (
 
 def _fold(raw: str) -> str:
     """Chave de comparação caixa E acento-insensível (v2, #125): normaliza
-    espaços, decompõe NFD, descarta combinantes e casefolda - "Célera",
-    "celera" e "CÉLERA" caem na mesma chave. Feita em Python: o NOCASE do
+    espaços, decompõe NFD, descarta combinantes e casefolda - "Áurora",
+    "aurora" e "ÁURORA" caem na mesma chave. Feita em Python: o NOCASE do
     SQLite só entende ASCII."""
     text = unicodedata.normalize("NFD", _norm(raw))
     return "".join(ch for ch in text if not unicodedata.combining(ch)).casefold()
@@ -469,8 +469,8 @@ def resolve_client(raw: str) -> tuple[int | None, str]:
     """Casa um nome cru (da IA ou digitado) com o cadastro.
 
     Devolve (id, nome canônico) quando resolve — por clients.name ou por alias,
-    ambos caixa E acento-insensíveis pela chave _fold (v2, #125: "Célera" casa
-    "celera") — e (None, texto normalizado) quando não; o texto cru preservado
+    ambos caixa E acento-insensíveis pela chave _fold (v2, #125: "Áurora" casa
+    "aurora") — e (None, texto normalizado) quando não; o texto cru preservado
     é o que a UI mostra com a oferta de cadastrar cliente/alias.
     """
     text = _norm(raw)
@@ -498,7 +498,7 @@ def resolve_client(raw: str) -> tuple[int | None, str]:
 
 def add_client(name: str) -> int:
     """Cadastra um cliente canônico; idempotente por nome (chave _fold: caixa e
-    acento-insensível - cadastrar "Celera" com "Célera" existente NÃO duplica)."""
+    acento-insensível - cadastrar "Aurora" com "Áurora" existente NÃO duplica)."""
     text = _norm(name)
     if not text:
         raise ValueError("nome de cliente vazio")
