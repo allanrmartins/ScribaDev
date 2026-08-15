@@ -2,9 +2,9 @@
 
 > 🎙️ Gravação, transcrição e ata automáticas das suas reuniões — Teams, Zoom, Google Meet e afins no navegador — 100% local e privado.
 
-[![License: Elastic 2.0](https://img.shields.io/badge/license-Elastic%202.0-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)
-![Windows 11](https://img.shields.io/badge/platform-Windows%2011-0078d4.svg)
+![Windows 11 | macOS](https://img.shields.io/badge/platform-Windows%2011%20%7C%20macOS-0078d4.svg)
 
 🇧🇷 Português | 🇺🇸 [English](README.en.md)
 
@@ -283,8 +283,9 @@ O ScribaDev grava **localmente** o áudio que entra e sai da sua máquina, sem a
 
 ## Desenvolvimento
 
-Fork **pessoal** (repo privado), sem modelo de contribuição externa. O código segue pequeno e modular: o **backend** (`detector`, `recorder`, `transcriber`, `diarize`, `merge`, `notes`, `meetings_index`, `main`) e a **UI em PySide6 (Qt)** em `scriba/qt/` (`theme`, `widgets`, `main_window`, `notes_ui`, `settings_ui`, `chat_ui`, `overlay`, `tray`, `log_ui`, `speakers_ui`, `wizard_ui`). Antes de mexer: `scribadev doctor` (diagnóstico do ambiente) e `python -m unittest discover -s tests` (suíte unittest da stdlib, sem pytest).
+Contribuições são bem-vindas - veja o [CONTRIBUTING.md](CONTRIBUTING.md). O código segue pequeno e modular: o **backend** (`detector`, `recorder`, `transcriber`, `diarize`, `merge`, `notes`, `meetings_index`, `main`) e a **UI em PySide6 (Qt)** em `scriba/qt/` (`theme`, `widgets`, `main_window`, `notes_ui`, `settings_ui`, `chat_ui`, `overlay`, `tray`, `log_ui`, `speakers_ui`, `wizard_ui`). Antes de mexer: `scribadev doctor` (diagnóstico do ambiente) e `python -m unittest discover -s tests` (suíte unittest da stdlib, sem pytest).
 
 ## Licença
 
-ScribaDev é um fork **pessoal** do Scriba, sob a [Elastic License 2.0](LICENSE) © Allan Martins (herdada do upstream), para uso próprio. Veja o arquivo [LICENSE](LICENSE) para os termos.
+ScribaDev é open source sob a licença [MIT](LICENSE) © Allan Martins.
+As licenças das dependências estão em [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md).

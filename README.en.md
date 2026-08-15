@@ -2,9 +2,9 @@
 
 > 🎙️ Automatic recording, transcription and minutes for your meetings — Teams, Zoom, Google Meet and browser friends — 100% local and private.
 
-[![License: Elastic 2.0](https://img.shields.io/badge/license-Elastic%202.0-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)
-![Windows 11](https://img.shields.io/badge/platform-Windows%2011-0078d4.svg)
+![Windows 11 | macOS](https://img.shields.io/badge/platform-Windows%2011%20%7C%20macOS-0078d4.svg)
 
 🇧🇷 [Português](README.md) | 🇺🇸 English
 
@@ -283,8 +283,9 @@ ScribaDev records **locally** the audio entering and leaving your machine, witho
 
 ## Development
 
-Personal fork (private repo), no external contribution model. The codebase stays small and modular — one responsibility per file: `detector`, `recorder`, `transcriber`, `diarize`, `merge`, `notes`, `overlay`, `main_window`, `notes_ui`, `settings_ui`, `tray`, `main`. Before hacking: `scribadev doctor` (environment check) and `python -m unittest discover -s tests` (stdlib unittest suite, no pytest).
+Contributions are welcome - see [CONTRIBUTING.md](CONTRIBUTING.md). The codebase stays small and modular — one responsibility per file: `detector`, `recorder`, `transcriber`, `diarize`, `merge`, `notes`, `overlay`, `main_window`, `notes_ui`, `settings_ui`, `tray`, `main`. Before hacking: `scribadev doctor` (environment check) and `python -m unittest discover -s tests` (stdlib unittest suite, no pytest).
 
 ## License
 
-ScribaDev is a **personal** fork of Scriba, under the [Elastic License 2.0](LICENSE) © Allan Martins (inherited from upstream), for personal use. See the [LICENSE](LICENSE) file for terms.
+ScribaDev is open source under the [MIT](LICENSE) license © Allan Martins.
+Third-party licenses are listed in [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md).
