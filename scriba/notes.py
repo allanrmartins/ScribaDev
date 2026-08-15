@@ -366,7 +366,7 @@ def generate_summary(transcript_md: str, folder: Path) -> tuple[str | None, str 
     map-reduce — fatia em X partes, resume cada uma (map) e consolida (reduce), para NUNCA deixar
     de LER uma parte por estouro de contexto. Se alguma parte falhar mesmo após retry, ABORTA
     (retorna None) em vez de produzir um resumo que silenciosamente perdeu conteúdo — a transcrição
-    segue salva e o resumo pode ser re-rodado (`scriba summarize`).
+    segue salva e o resumo pode ser re-rodado (`scribadev summarize`).
 
     Retorna (resumo, título, cliente) — None em cada campo se a IA estiver desligada ou falhar. O
     provider (claude CLI / Ollama / OpenAI-compatível) é escolhido em [summary].provider (ver ai.py).
@@ -401,7 +401,7 @@ def generate_summary(transcript_md: str, folder: Path) -> tuple[str | None, str 
         )
         if combined is None:
             print("resumo: uma parte falhou — abortado (transcrição preservada; rode "
-                  "'scriba summarize' de novo)")
+                  "'scribadev summarize' de novo)")
             return None, None, None
         out = _summary_call(combined, meeting, timeout, folder, notes_mode=True)
 
@@ -526,9 +526,9 @@ def build_notes(folder: Path) -> Path | None:
 
         if ai.last_error == ai.ERR_LOGGED_OUT:
             summary = ('> Resumo indisponível - a CLI `claude` não está logada. '
-                       f'Rode `claude`, faça `/login` e então: scriba summarize "{folder}"')
+                       f'Rode `claude`, faça `/login` e então: scribadev summarize "{folder}"')
         else:
-            summary = f'> Resumo indisponível - rode: scriba summarize "{folder}"'
+            summary = f'> Resumo indisponível - rode: scribadev summarize "{folder}"'
 
     started = meta.get("started_at", "")
     duration_min = int(float(meta.get("duration_seconds", 0)) // 60)

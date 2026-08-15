@@ -23,7 +23,7 @@ _OLLAMA_DEFAULT = "http://localhost:11434"
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 # Motivo da última falha de provider, para o chamador dar uma dica PRECISA na nota
-# (ver notes.build_notes) em vez do genérico "rode scriba summarize" — que falharia
+# (ver notes.build_notes) em vez do genérico "rode scribadev summarize" — que falharia
 # igual se a causa for a CLI deslogada. Reposto no início de generate_summary; escrito
 # no caminho de falha. Sequencial no worker de resumo; um chat concorrente no máximo
 # troca o texto da dica (cosmético), nunca quebra o resumo.
