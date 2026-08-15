@@ -664,6 +664,8 @@ def cmd_doctor(args) -> int:
     ]
     if sys.platform == "win32":
         native = [("pyaudiowpatch", "captura de áudio"), *native, ("windows_toasts", "notificações")]
+    elif sys.platform == "darwin":
+        native = [("sounddevice", "captura de áudio (CoreAudio)"), *native]
     for mod, why in native:
         try:
             __import__(mod)
@@ -672,7 +674,8 @@ def cmd_doctor(args) -> int:
             _print(_FAIL, f"import {mod}", f"({why}) {e}")
             failures += 1
     if sys.platform != "win32":
-        _print(_OK, "import pyaudiowpatch", "não se aplica neste SO (captura é Windows-only por ora)")
+        if sys.platform != "darwin":
+            _print(_OK, "import pyaudiowpatch", "não se aplica neste SO (captura é Windows-only por ora)")
         _print(_OK, "import windows_toasts", "não se aplica neste SO (toasts são Windows-only)")
 
     # CUDA
@@ -774,12 +777,23 @@ def cmd_doctor(args) -> int:
         else:
             _print(_WARN, "Segredos (Keychain)",
                    "chaveiro inacessível (trancado? sessão SSH?) — chaves de API serão gravadas em texto plano")
-        _print(_OK, "Permissões do macOS",
-               "nenhuma necessária por ora; captura (Microfone + Áudio do Sistema) chega em marcos futuros")
+        _print(_WARN, "Permissões do macOS",
+               "captura exige Microfone e 'Gravação de Áudio do Sistema' (Ajustes → Privacidade e "
+               "Segurança). Rodando de terminal/venv o pedido de áudio do sistema é NEGADO em "
+               "silêncio — adicione o app do terminal manualmente no painel; sem isso o loopback "
+               "grava zeros (só a sua voz entra na ata)")
 
-    # Áudio — enumeração WASAPI (pyaudiowpatch); fora do Windows a captura ainda
-    # não existe e o item é não-aplicável (#98)
-    if sys.platform != "win32":
+    # Áudio — Windows: enumeração WASAPI (pyaudiowpatch); macOS: sonda sounddevice
+    # (o loopback é o tap de sistema — o nome mostrado é o clock); senão n/a (#98)
+    if sys.platform == "darwin":
+        probe = util.run_audio_probe()
+        if probe:
+            _print(_OK, "Microfone padrão", probe.get("mic") or "?")
+            _print(_OK, "Áudio do sistema", f"tap CoreAudio (clock: {probe.get('loopback') or '?'})")
+        else:
+            _print(_FAIL, "Dispositivos de áudio", "sonda de áudio falhou (veja o log)")
+            failures += 1
+    elif sys.platform != "win32":
         _print(_OK, "Dispositivos de áudio", "captura não suportada neste SO ainda (Windows-only)")
     else:
         try:

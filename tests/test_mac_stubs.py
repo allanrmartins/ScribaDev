@@ -166,6 +166,78 @@ class TestKeychain(unittest.TestCase):
             self.assertEqual(config._maybe_unprotect("keychain:x"), "")
 
 
+@unittest.skipUnless(sys.platform == "darwin", "importa recorder_mac (CoreAudio de verdade)")
+class TestRecorderDispatchDarwin(unittest.TestCase):
+    """M3: os seams do recorder despacham p/ o backend mac. Os backends em si são
+    mockados — a captura real é o checklist manual do docs/port-mac.md."""
+
+    def test_level_probe_factory_darwin(self):
+        with mock.patch("scriba.recorder_mac.LevelProbeMac", return_value="probe-mac"):
+            from scriba import recorder
+
+            self.assertEqual(recorder.LevelProbe(mock.Mock()), "probe-mac")
+
+    def test_list_devices_delegado(self):
+        from scriba import recorder
+
+        with mock.patch("scriba.recorder_mac.list_devices_text", return_value=0) as f:
+            self.assertEqual(recorder.list_devices(), 0)
+        f.assert_called_once()
+
+    def test_probe_list_formato(self):
+        # mesmo contrato JSON do audioprobe do Windows: mics/loopbacks/defaults
+        from scriba import recorder_mac
+
+        fake_devs = [
+            {"name": "Mic Interno", "max_input_channels": 1, "max_output_channels": 0,
+             "default_samplerate": 48000.0},
+            {"name": "Alto-falantes", "max_input_channels": 0, "max_output_channels": 2,
+             "default_samplerate": 48000.0},
+            {"name": "ScribaTap-abc", "max_input_channels": 2, "max_output_channels": 0,
+             "default_samplerate": 48000.0},
+        ]
+
+        class FakeSd:
+            class default:
+                device = (0, 1)
+
+            @staticmethod
+            def query_devices(i=None):
+                return fake_devs if i is None else fake_devs[i]
+
+        with mock.patch.object(recorder_mac, "_sd", return_value=FakeSd):
+            out = recorder_mac.probe_list()
+        self.assertEqual(out["mics"], ["Mic Interno"])            # sem o aggregate do tap
+        self.assertEqual(out["loopbacks"], ["Alto-falantes"])     # saídas = alvos de clock
+        self.assertEqual(out["default_mic"], "Mic Interno")
+        self.assertEqual(out["default_loopback"], "Alto-falantes")
+
+    def test_pick_mic_substring_e_default(self):
+        from scriba import recorder_mac
+
+        fake_devs = [
+            {"name": "Mic Interno", "max_input_channels": 1, "max_output_channels": 0,
+             "default_samplerate": 48000.0},
+            {"name": "Headset USB", "max_input_channels": 1, "max_output_channels": 2,
+             "default_samplerate": 44100.0},
+        ]
+
+        class FakeSd:
+            class default:
+                device = (0, None)
+
+            @staticmethod
+            def query_devices(i=None):
+                return fake_devs if i is None else fake_devs[i]
+
+        with mock.patch.object(recorder_mac, "_sd", return_value=FakeSd):
+            eng = mock.Mock()
+            self.assertEqual(recorder_mac.pick_mic(mock.Mock(mic_device="headset"), eng)["name"],
+                             "Headset USB")
+            self.assertEqual(recorder_mac.pick_mic(mock.Mock(mic_device=""), eng)["name"],
+                             "Mic Interno")
+
+
 class TestSoNome(unittest.TestCase):
     def test_por_plataforma(self):
         with mock.patch.object(sys, "platform", "win32"):

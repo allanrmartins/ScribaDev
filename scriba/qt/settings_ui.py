@@ -846,13 +846,20 @@ class SettingsWindow(QWidget):
 
         fw, ct, pa = ver("faster-whisper"), ver("ctranslate2"), ver("pyaudiowpatch")
         torch_v = ver("torch")
+        if sys.platform == "win32":
+            audio_row = core("Áudio (WASAPI)", f"pyaudiowpatch {pa or '?'}", bool(pa))
+        elif sys.platform == "darwin":
+            sd_v = ver("sounddevice")
+            audio_row = core("Áudio (CoreAudio)", f"sounddevice {sd_v or '?'} + process tap", bool(sd_v))
+        else:
+            audio_row = ("Áudio (captura)", "não suportada neste SO ainda", "warn")
         return [
             ("Python", sys.version.split()[0], "ok"),
             core("Transcrição", f"faster-whisper {fw or '?'} · ctranslate2 {ct or '?'}", bool(fw and ct)),
             ("Diarização", *self._diar_health(ver)),
             ("PyTorch", torch_v or "não instalado (opcional — só p/ a diarização)", "ok" if torch_v else "warn"),
             ("GPU", self._gpu_str(), "ok"),
-            core("Áudio (WASAPI)", f"pyaudiowpatch {pa or '?'}", bool(pa)),
+            audio_row,
             ("Compressão de áudio", *self._ffmpeg_health()),
         ]
 

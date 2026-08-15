@@ -24,6 +24,10 @@ dependencies = [
     # captura WASAPI loopback e toasts WinRT: só existem (e só têm wheel) no Windows.
     # Fora dele o pip os ignora (épico #104); a captura POSIX vem em marcos futuros.
     "pyaudiowpatch==0.2.12.8 ; sys_platform == 'win32'",
+    # captura no macOS (#104, M3): data plane PortAudio (sounddevice, MIT) + control
+    # plane do process tap (CATapDescription via pyobjc; o resto é ctypes puro)
+    "sounddevice>=0.5 ; sys_platform == 'darwin'",
+    "pyobjc-framework-CoreAudio ; sys_platform == 'darwin'",
     "faster-whisper==1.2.1",
     "ctranslate2~=4.8",
     # pystray/Pillow saíram em 2026-08 (#104): a bandeja é QSystemTrayIcon desde o

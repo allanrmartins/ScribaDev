@@ -17,7 +17,10 @@ REPO = Path(__file__).resolve().parent.parent
 _SIM = """
 import sys
 
-BLOCKED = {"winreg", "pyaudiowpatch", "windows_toasts"}
+# win32 + darwin: nenhum módulo específico de SO pode entrar no topo da cadeia
+# comum de import — os backends (recorder_mac, mac_tap etc.) importam lazy (#104)
+BLOCKED = {"winreg", "pyaudiowpatch", "windows_toasts",
+           "sounddevice", "CoreAudio", "objc", "Foundation", "mlx_whisper"}
 
 
 class LinuxSim:
