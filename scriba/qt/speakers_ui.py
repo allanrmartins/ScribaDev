@@ -105,7 +105,7 @@ class AskNumSpeakers(QWidget):
         cap = QLabel("Reunião encerrada"); cap.setProperty("role", "muted")
         lay.addWidget(cap)
         q = QLabel("Quantas pessoas, além de você, participaram?")
-        q.setStyleSheet("font-size:12pt; font-weight:bold;"); q.setWordWrap(True)
+        q.setStyleSheet(f"font-size:{theme.zpt(12)}pt; font-weight:bold;"); q.setWordWrap(True)
         lay.addWidget(q)
         sub = QLabel("Conte só as outras vozes (não conte você). Isso ajuda a separar os "
                      "participantes na transcrição.")
@@ -116,7 +116,7 @@ class AskNumSpeakers(QWidget):
         self._entry.setPlaceholderText("ex.: 3")
         self._entry.setValidator(QRegularExpressionValidator(QRegularExpression(r"\d{0,3}")))
         self._entry.setAlignment(Qt.AlignCenter)
-        self._entry.setStyleSheet("font-size:22pt; font-weight:bold;")
+        self._entry.setStyleSheet(f"font-size:{theme.zpt(22)}pt; font-weight:bold;")
         self._entry.textChanged.connect(self._sync_confirm)
         self._entry.returnPressed.connect(self._confirm)
         lay.addWidget(self._entry)
@@ -221,7 +221,7 @@ class LabelSpeakersDialog(QWidget):
             return
 
         title = QLabel("Rotular participantes")
-        title.setStyleSheet("font-size:12pt; font-weight:bold;")
+        title.setStyleSheet(f"font-size:{theme.zpt(12)}pt; font-weight:bold;")
         lay.addWidget(title)
         sub = QLabel("Revise o nome de cada voz e MARQUE o check só nas que tiver certeza — só as "
                      "marcadas são salvas. O ScribaDev aprende as marcadas e corrige esta nota na hora. "

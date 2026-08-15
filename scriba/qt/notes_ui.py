@@ -359,7 +359,7 @@ class NotesWindow(QWidget):
         # painel de progresso (reunião em processamento)
         self._progress = QWidget()
         pl = QVBoxLayout(self._progress)
-        self._prog_stage = QLabel(""); self._prog_stage.setStyleSheet("font-size:14pt; font-weight:bold;")
+        self._prog_stage = QLabel(""); self._prog_stage.setStyleSheet(f"font-size:{theme.zpt(14)}pt; font-weight:bold;")
         self._prog_bar = QProgressBar(); self._prog_bar.setRange(0, 0); self._prog_bar.setTextVisible(False)
         self._prog_hint = QLabel(""); self._prog_hint.setWordWrap(True); self._prog_hint.setProperty("role", "muted")
         pl.addWidget(self._prog_stage); pl.addWidget(self._prog_bar); pl.addWidget(self._prog_hint); pl.addStretch(1)
@@ -1317,7 +1317,7 @@ class _ActionItemsWindow(QWidget):
     def _build(self) -> None:
         root = QVBoxLayout(self)
         head = QHBoxLayout()
-        title = QLabel("Pendências"); title.setStyleSheet("font-size:15pt; font-weight:bold;")
+        title = QLabel("Pendências"); title.setStyleSheet(f"font-size:{theme.zpt(15)}pt; font-weight:bold;")
         head.addWidget(title)
         self._count = QLabel(""); self._count.setProperty("role", "muted")
         head.addWidget(self._count)

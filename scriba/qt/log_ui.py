@@ -48,7 +48,7 @@ class LogWindow(QWidget):
         root.setContentsMargins(12, 8, 12, 8)
 
         bar = QHBoxLayout()
-        t_lbl = QLabel("Log do app"); t_lbl.setStyleSheet("font-size:13pt; font-weight:bold;")
+        t_lbl = QLabel("Log do app"); t_lbl.setStyleSheet(f"font-size:{theme.zpt(13)}pt; font-weight:bold;")
         bar.addWidget(t_lbl); bar.addStretch(1)
         bar.addWidget(widgets.ModernButton("Copiar", self._copy))
         bar.addWidget(widgets.ModernButton("Abrir pasta", self._open_folder))
@@ -302,7 +302,7 @@ def show_crash_dialog(app, detail: str) -> None:
         win.resize(680, 440)
         lay = QVBoxLayout(win)
         title = QLabel("O ScribaDev encontrou um erro inesperado")
-        title.setStyleSheet(f"color:{theme.active().accent}; font-size:13pt; font-weight:bold;")
+        title.setStyleSheet(f"color:{theme.active().accent}; font-size:{theme.zpt(13)}pt; font-weight:bold;")
         lay.addWidget(title)
         sub = QLabel("O app continua rodando. Se isso atrapalhou uma gravação, exporte o "
                      "diagnóstico e me avise — o detalhe técnico está abaixo.")

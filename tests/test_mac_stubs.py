@@ -506,6 +506,72 @@ class TestExcludeFromCaptureGuard(unittest.TestCase):
             self.assertFalse(widgets.exclude_from_capture(mock.Mock()))
 
 
+class TestZoomInterface(unittest.TestCase):
+    """Tamanho da interface por SO: padrão 133% no macOS (pontos a 72 dpi lá vs 96
+    no Windows), 100% e caminho INTOCADO no Windows/Linux. Vira QT_FONT_DPI."""
+
+    def test_default_por_so(self):
+        with mock.patch.object(sys, "platform", "win32"):
+            self.assertEqual(theme.default_zoom(), 1.0)
+        with _linux():
+            self.assertEqual(theme.default_zoom(), 1.0)
+        with _darwin():
+            self.assertAlmostEqual(theme.default_zoom(), 96 / 72)
+
+    def test_zoom_choice_valida_state(self):
+        with mock.patch.object(theme.util, "read_state", return_value={"ui_zoom": 1.5}):
+            self.assertEqual(theme.zoom_choice(), 1.5)
+        with mock.patch.object(theme.util, "read_state", return_value={}):
+            self.assertIsNone(theme.zoom_choice())
+        with mock.patch.object(theme.util, "read_state", return_value={"ui_zoom": "lixo"}):
+            self.assertIsNone(theme.zoom_choice())
+        with mock.patch.object(theme.util, "read_state", return_value={"ui_zoom": 99}):
+            self.assertIsNone(theme.zoom_choice())  # fora da faixa sã
+
+    def test_zpt_identidade_no_windows_default(self):
+        with mock.patch.object(sys, "platform", "win32"), \
+                mock.patch.object(theme.util, "read_state", return_value={}):
+            for pt in (6, 8, 9, 11, 28):
+                self.assertEqual(theme.zpt(pt), pt)
+
+    def test_zpt_escala_no_mac_default(self):
+        with _darwin(), mock.patch.object(theme.util, "read_state", return_value={}):
+            self.assertEqual(theme.zpt(9), 12)   # 9pt Windows ≡ 12pt visuais no mac
+            self.assertEqual(theme.zpt(8), 11)
+            self.assertEqual(theme.zpt(28), 37)
+
+    def test_tema_ativo_windows_default_e_o_MESMO_objeto(self):
+        # garantia "quem atualiza no Windows não percebe nada": zoom 100% devolve o
+        # próprio Theme registrado (QSS byte-idêntico), sem cópia escalada
+        pristine = theme._THEMES["vscode"]
+        with mock.patch.object(sys, "platform", "win32"), \
+                mock.patch.object(theme.util, "read_state", return_value={}):
+            self.assertIs(theme._zoomed(pristine), pristine)
+            self.assertEqual(pristine.font_size, 9)
+
+    def test_tema_ativo_mac_default_escalado(self):
+        pristine = theme._THEMES["vscode"]
+        with _darwin(), mock.patch.object(theme.util, "read_state", return_value={}):
+            scaled = theme._zoomed(pristine)
+        self.assertEqual((scaled.font_size, scaled.font_size_small), (12, 11))
+        self.assertEqual(scaled.name, pristine.name)  # só as fontes mudam
+
+    def test_set_zoom_choice_roundtrip(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "state.json"
+            with mock.patch.object(theme.util, "STATE_PATH", state), \
+                    mock.patch("PySide6.QtWidgets.QApplication.instance", return_value=None):
+                theme.set_zoom_choice(1.5)
+                self.assertEqual(theme.zoom_choice(), 1.5)
+                theme.set_zoom_choice(None)  # volta ao automático
+                self.assertIsNone(theme.zoom_choice())
+                with _darwin():
+                    self.assertAlmostEqual(theme.current_zoom(), 96 / 72)
+
+
 class TestSoNome(unittest.TestCase):
     def test_por_plataforma(self):
         with mock.patch.object(sys, "platform", "win32"):

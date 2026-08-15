@@ -115,7 +115,7 @@ def _mini_home(th: theme.Theme) -> QWidget:
     dados fictícios: header + pílulas, card de call com o botão de acento, stats e o card
     de Notas (a borda de ACENTO — o que o bug #70 sujava). Sem separadores/linhas e sem a
     seção de pendências: só o essencial p/ ler o tema, como a capa (que não tem linhas)."""
-    xs, xxs = "font-size:7pt;", "font-size:6pt;"
+    xs, xxs = f"font-size:{theme.zpt(7)}pt;", f"font-size:{theme.zpt(6)}pt;"
     # Seletor #id em CADA QFrame: um stylesheet sem seletor vaza `border`/`background`
     # para os QLabels filhos (era o que desenhava "linhas"/caixas em volta das notas).
     root = QFrame(); root.setObjectName("miniRoot")
@@ -165,10 +165,11 @@ class _AutoOption(QFrame):
                            f" border-radius:9px; background:{act.surface}; }}")
         h = QHBoxLayout(self); h.setContentsMargins(12, 9, 12, 9); h.setSpacing(9)
         h.addWidget(_pl("●" if selected else "○",
-                        f"color:{act.accent if selected else act.muted}; font-size:12pt;"))
+                        f"color:{act.accent if selected else act.muted}; font-size:{theme.zpt(12)}pt;"))
         col = QVBoxLayout(); col.setSpacing(1)
-        col.addWidget(_pl("Automático", f"color:{act.text}; font-weight:bold; font-size:10pt;"))
-        col.addWidget(_pl(f"Segue o modo claro/escuro do {util.so_nome()}", f"color:{act.muted}; font-size:8pt;"))
+        col.addWidget(_pl("Automático", f"color:{act.text}; font-weight:bold; font-size:{theme.zpt(10)}pt;"))
+        col.addWidget(_pl(f"Segue o modo claro/escuro do {util.so_nome()}",
+                          f"color:{act.muted}; font-size:{theme.zpt(8)}pt;"))
         h.addLayout(col); h.addStretch(1)
 
     def mousePressEvent(self, event) -> None:
@@ -193,10 +194,10 @@ class _ThemeCard(QFrame):
                            f" border-radius:9px; background:{act.surface}; }}")
         v = QVBoxLayout(self); v.setContentsMargins(9, 8, 9, 9); v.setSpacing(6)
         top = QHBoxLayout()
-        top.addWidget(_pl(label, f"color:{act.text}; font-weight:bold; font-size:9.5pt;"))
+        top.addWidget(_pl(label, f"color:{act.text}; font-weight:bold; font-size:{theme.zpt(9.5)}pt;"))
         top.addStretch(1)
         top.addWidget(_pl("●" if selected else "○",
-                          f"color:{act.accent if selected else act.muted}; font-size:11pt;"))
+                          f"color:{act.accent if selected else act.muted}; font-size:{theme.zpt(11)}pt;"))
         v.addLayout(top)
         v.addWidget(_mini_home(mini_th))
 
@@ -464,7 +465,7 @@ class SettingsWindow(QWidget):
         self._prompt_editor = QPlainTextEdit()
         self._prompt_editor.setMinimumHeight(180)
         self._prompt_editor.setStyleSheet(
-            f"font-family:'{theme.active().font_mono}','Consolas',monospace; font-size:9pt;")
+            f"font-family:'{theme.active().font_mono}','Consolas',monospace; font-size:{theme.zpt(9)}pt;")
         pr.addRow(self._prompt_editor)
 
     def _open_wizard(self) -> None:
@@ -575,6 +576,40 @@ class SettingsWindow(QWidget):
         rl.addStretch(1)   # empurra os blocos p/ a esquerda; o excesso fica vazio à direita
         f.addRow(row)
         self._populate_theme_cards()
+
+        # tamanho da interface (#104): no macOS o Qt mapeia pontos a 72 dpi (vs 96 no
+        # Windows) e a UI "encolhe" — o padrão automático lá é 133%, que devolve a
+        # proporção visual do Windows. Escala os tokens do tema + os font-size via
+        # theme.zpt(); aplica a quente pelo mesmo caminho da troca de tema.
+        zrow = QWidget()
+        zl = QHBoxLayout(zrow); zl.setContentsMargins(0, 12, 0, 0); zl.setSpacing(8)
+        zl.addWidget(QLabel("Tamanho da interface:"))
+        self._zoom_combo = QComboBox(); widgets.no_wheel_steal(self._zoom_combo)
+        widgets.add_tooltip(self._zoom_combo,
+                            "Escala todo o texto da interface. Aplica na hora; janelas já "
+                            "abertas podem precisar ser reabertas para ajustar tudo.")
+        auto_pct = round(theme.default_zoom() * 100)
+        self._zoom_combo.addItem(f"Automático ({auto_pct}% — padrão do {util.so_nome()})", None)
+        for z in theme.ZOOM_OPTIONS:
+            self._zoom_combo.addItem(f"{round(z * 100)}%", z)
+        choice = theme.zoom_choice()
+        if choice is not None:
+            for i in range(1, self._zoom_combo.count()):
+                if abs(self._zoom_combo.itemData(i) - choice) < 0.005:
+                    self._zoom_combo.setCurrentIndex(i)
+                    break
+        self._zoom_combo.currentIndexChanged.connect(self._pick_zoom)
+        zl.addWidget(self._zoom_combo)
+        zhint = QLabel("Aplica na hora; janelas já abertas podem precisar ser reabertas.")
+        zhint.setProperty("role", "muted")
+        zl.addWidget(zhint)
+        zl.addStretch(1)
+        f.addRow(zrow)
+
+    def _pick_zoom(self, index: int) -> None:
+        """Persiste a escolha de zoom (state.json, não config.toml — preferência de
+        exibição é por máquina). None = automático do SO."""
+        theme.set_zoom_choice(self._zoom_combo.itemData(index))
 
     def _populate_theme_cards(self) -> None:
         """(Re)constrói o seletor: a opção 'Automático' no topo (largura cheia) + os 4
@@ -713,10 +748,10 @@ class SettingsWindow(QWidget):
             f" border-radius:{t.radius}px; }}"
             f"QFrame#tsActivateCard QLabel {{ border:none; background:transparent; }}"
             f"QPushButton#tsActivateBtn {{ background:{t.warn}; color:{fg}; font-weight:bold;"
-            f" font-size:11pt; padding:9px 20px; border:none; border-radius:{t.radius}px; }}"
+            f" font-size:{theme.zpt(11)}pt; padding:9px 20px; border:none; border-radius:{t.radius}px; }}"
             f"QPushButton#tsActivateBtn:hover {{ background:{t.accent}; color:{t.on_accent}; }}"
             f"QPushButton#tsActivateBtn:disabled {{ background:{t.border}; color:{t.muted}; }}")
-        self._ts_off_title.setStyleSheet(f"font-size:12pt; font-weight:bold; color:{t.warn};")
+        self._ts_off_title.setStyleSheet(f"font-size:{theme.zpt(12)}pt; font-weight:bold; color:{t.warn};")
         self._ts_off_desc.setStyleSheet(f"color:{t.muted};")
 
     def _timesheet_enabled(self) -> bool:
@@ -798,7 +833,7 @@ class SettingsWindow(QWidget):
         outer = QVBoxLayout(page); outer.setContentsMargins(0, 0, 0, 0)
         scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QScrollArea.NoFrame)
         inner = QWidget(); lay = QVBoxLayout(inner); lay.setContentsMargins(14, 14, 14, 14)
-        title = QLabel("ScribaDev"); title.setStyleSheet("font-size:18pt; font-weight:bold;")
+        title = QLabel("ScribaDev"); title.setStyleSheet(f"font-size:{theme.zpt(18)}pt; font-weight:bold;")
         lay.addWidget(title)
         ver = QLabel(updates.build_string()); ver.setProperty("role", "muted"); lay.addWidget(ver)
         desc = QLabel("Gravação e transcrição automática de reuniões (Teams, Zoom, Meet) — 100% local e privado.")
@@ -824,7 +859,7 @@ class SettingsWindow(QWidget):
         for label, value, level in self._about_components():
             color = {"ok": t.muted, "warn": t.warn, "err": t.accent}.get(level, t.muted)
             row = QLabel(f"<b>{label}:</b> {value}")
-            row.setWordWrap(True); row.setStyleSheet(f"color:{color}; font-size:9pt;")
+            row.setWordWrap(True); row.setStyleSheet(f"color:{color}; font-size:{theme.zpt(9)}pt;")
             lay.addWidget(row)
         lay.addStretch(1)
         scroll.setWidget(inner); outer.addWidget(scroll)

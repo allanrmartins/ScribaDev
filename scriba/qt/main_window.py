@@ -204,11 +204,11 @@ class MainWindow(QWidget):
     def _build_header(self, root) -> None:
         head = QHBoxLayout()
         title = QLabel("ScribaDev")
-        title.setStyleSheet("font-size:16pt; font-weight:bold;")
+        title.setStyleSheet(f"font-size:{theme.zpt(16)}pt; font-weight:bold;")
         head.addWidget(title)
         ver = QLabel(updates.build_string())
         ver.setProperty("role", "muted")
-        ver.setStyleSheet("font-size:9pt;")
+        ver.setStyleSheet(f"font-size:{theme.zpt(9)}pt;")
         head.addWidget(ver, 0, Qt.AlignBottom)
         head.addStretch(1)
         # Notas é o carro-chefe (#56): botão primário, destacado do Log.
@@ -262,7 +262,7 @@ class MainWindow(QWidget):
         cv.addLayout(state_row)
         # cronômetro grande: só aparece quando há call/gravação (idle = card compacto)
         self._call_timer = QLabel("—")
-        self._call_timer.setStyleSheet("font-size:28pt; font-weight:bold;")
+        self._call_timer.setStyleSheet(f"font-size:{theme.zpt(28)}pt; font-weight:bold;")
         self._call_timer.setVisible(False)
         cv.addWidget(self._call_timer)
         root.addWidget(self._card)

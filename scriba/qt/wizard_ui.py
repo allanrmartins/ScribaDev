@@ -51,7 +51,7 @@ class WizardWindow(QWidget):
         root.setContentsMargins(16, 12, 16, 12)
 
         h = QLabel("Atas na língua da sua profissão")
-        h.setStyleSheet("font-size:13pt; font-weight:bold;"); root.addWidget(h)
+        h.setStyleSheet(f"font-size:{theme.zpt(13)}pt; font-weight:bold;"); root.addWidget(h)
         sub = QLabel("Descreva seu perfil e o ScribaDev escreve as instruções (prompt.md) que moldam o "
                      "resumo das suas reuniões — e o vocabulário que guia a transcrição. Você revisa antes.")
         sub.setProperty("role", "muted"); sub.setWordWrap(True); root.addWidget(sub)

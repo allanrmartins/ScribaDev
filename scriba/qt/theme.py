@@ -18,6 +18,7 @@ Decisões (épico #44, 2026-07-02):
 from __future__ import annotations
 
 import logging
+import sys
 from dataclasses import dataclass, fields
 
 from .. import util
@@ -175,8 +176,6 @@ def _os_prefers_dark() -> bool:
     (0=escuro, 1=claro). macOS: colorScheme do Qt (≥6.5), com fallback headless no
     `defaults read` (a chave AppleInterfaceStyle SÓ existe no modo escuro — erro ao
     ler = modo claro). Padrão escuro se indisponível (Linux / falha)."""
-    import sys
-
     if sys.platform == "darwin":
         try:
             from PySide6.QtCore import Qt
@@ -241,7 +240,7 @@ def active() -> Theme:
         name = util.read_state().get(_STATE_KEY)
         if name is None:
             name = os_default_theme()
-        _active = _THEMES.get(name, _THEMES[os_default_theme()])
+        _active = _zoomed(_THEMES.get(name, _THEMES[os_default_theme()]))
     return _active
 
 
@@ -249,7 +248,7 @@ def set_active(name: str, *, app=None) -> Theme:
     """Troca o tema vigente, persiste (escolha explícita) e reestiliza a quente se
     houver QApplication. Widgets pintados pegam o novo tema no próximo update()."""
     global _active
-    _active = _THEMES.get(name, _THEMES[os_default_theme()])
+    _active = _zoomed(_THEMES.get(name, _THEMES[os_default_theme()]))
     util.update_state(**{_STATE_KEY: _active.name})
     if app is None:
         from PySide6.QtWidgets import QApplication
@@ -292,6 +291,81 @@ def apply_choice(name: str | None, *, app=None) -> None:
         apply(app)
 
 
+# ------------------------------------------------ tamanho da interface (zoom) --
+# O Qt mapeia PONTOS a 72 dpi no macOS e 96 dpi no Windows/Linux — por isso os
+# mesmos 9pt do tema "encolhem" ~25% no mac (#104). O zoom escala TODOS os pontos
+# da UI: os tokens font_size/font_size_small do tema ativo (QSS) e os font-size
+# inline/paints via zpt(). Troca A QUENTE pelo mesmo caminho do tema (apply +
+# restyle_theme). NÃO usar QT_FONT_DPI: o QPA cocoa ignora a env (verificado).
+
+_ZOOM_KEY = "ui_zoom"
+_ZOOM_MIN, _ZOOM_MAX = 0.5, 3.0
+# 133% ≈ 96/72: no mac, devolve exatamente a proporção visual do Windows
+ZOOM_OPTIONS = (1.0, 1.10, 1.25, 96 / 72, 1.5, 1.75, 2.0)
+
+
+def default_zoom() -> float:
+    """Zoom padrão por SO: 133% no macOS (paridade visual com o Windows), 100% nos
+    demais — quem atualiza no Windows não percebe NADA (identidade byte a byte)."""
+    return 96 / 72 if sys.platform == "darwin" else 1.0
+
+
+def zoom_choice() -> float | None:
+    """Zoom escolhido EXPLICITAMENTE (state.json), ou None no modo automático."""
+    try:
+        z = float(util.read_state().get(_ZOOM_KEY))
+    except (TypeError, ValueError):
+        return None
+    return z if _ZOOM_MIN <= z <= _ZOOM_MAX else None
+
+
+def current_zoom() -> float:
+    """Zoom vigente: escolha explícita ou o padrão do SO."""
+    z = zoom_choice()
+    return z if z is not None else default_zoom()
+
+
+def zpt(pt: float) -> int:
+    """Pontos de DESIGN → pontos vigentes (escala pelo zoom). Para os font-size
+    inline e paints que não passam pelos tokens do tema. Com zoom 100% é a
+    identidade — estilos do Windows saem byte-idênticos."""
+    return max(1, round(pt * current_zoom()))
+
+
+def _zoomed(t: Theme) -> Theme:
+    """Cópia do tema com as fontes escaladas pelo zoom (identidade no 100% — o
+    MESMO objeto volta, garantindo QSS byte-idêntico no Windows padrão)."""
+    z = current_zoom()
+    if abs(z - 1.0) < 0.005:
+        return t
+    from dataclasses import replace
+
+    return replace(t, font_size=max(1, round(t.font_size * z)),
+                   font_size_small=max(1, round(t.font_size_small * z)))
+
+
+def set_zoom_choice(zoom: float | None, *, app=None) -> None:
+    """Persiste a escolha (None = automático do SO) e reestiliza A QUENTE pelo
+    mesmo caminho da troca de tema: tema ativo reconstruído + apply (QSS + fonte
+    base + restyle_theme nas janelas vivas). Janelas sem restyle_theme atualizam
+    ao serem reabertas."""
+    global _active
+    if zoom is None:
+        st = util.read_state()
+        if _ZOOM_KEY in st:
+            st.pop(_ZOOM_KEY)
+            util.atomic_write_text(util.STATE_PATH, __import__("json").dumps(st))
+    else:
+        util.update_state(**{_ZOOM_KEY: round(float(zoom), 3)})
+    _active = None  # reconstrói com o novo zoom na próxima leitura
+    if app is None:
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+    if app is not None:
+        apply(app)
+
+
 # ----------------------------------------------------------- tipografia -------
 
 def qfont(theme: Theme | None = None, size: int | None = None, *, bold: bool = False,
@@ -302,7 +376,9 @@ def qfont(theme: Theme | None = None, size: int | None = None, *, bold: bool = F
     t = theme or active()
     f = QFont()
     f.setFamilies([t.font_mono, *_MONO_FALLBACK] if mono else [t.font_family, *_UI_FALLBACK])
-    f.setPointSize(size or t.font_size)
+    # `size` explícito é em pontos de DESIGN → escala pelo zoom (t.font_size já vem
+    # escalado quando t é o tema ativo)
+    f.setPointSize(zpt(size) if size else t.font_size)
     f.setBold(bold)
     return f
 
