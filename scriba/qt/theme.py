@@ -632,6 +632,23 @@ def qss(theme: Theme | None = None) -> str:
     QCheckBox::indicator:checked {{ background: {t.accent}; border-color: {t.accent}; }}
     QCheckBox::indicator:disabled {{ border-color: {t.field}; }}
 
+    QRadioButton {{ background: transparent; spacing: 7px; }}
+    QRadioButton::indicator {{
+        width: 14px; height: 14px;
+        border: 1px solid {t.border_strong};
+        border-radius: 8px;
+        background: {t.field};
+    }}
+    QRadioButton::indicator:hover {{ border-color: {t.accent}; }}
+    QRadioButton::indicator:checked {{
+        /* anel de acento com miolo claro; 8 + 2*4 de borda = os mesmos 16px do desmarcado */
+        width: 8px; height: 8px;
+        border: 4px solid {t.accent};
+        border-radius: 8px;
+        background: {t.on_accent};
+    }}
+    QRadioButton::indicator:disabled {{ border-color: {t.field}; }}
+
     QGroupBox {{
         background: transparent;
         border: 1px solid {t.border};

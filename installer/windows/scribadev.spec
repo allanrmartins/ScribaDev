@@ -14,6 +14,8 @@
 
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_all
+
 REPO = Path(SPECPATH).resolve().parents[1]  # installer/windows -> raiz do repo
 
 _excludes = [
@@ -21,10 +23,16 @@ _excludes = [
     "torch", "torchaudio", "torchcodec", "pyannote", "pyannote.audio", "triton",
 ]
 
+# pip vai NO bundle (#147): o wizard instala os addons (torch/pyannote/nvidia)
+# em APP_DIR/addons com o pip in-process (scriba.addons.install_to_addons) —
+# um exe congelado não tem `python -m pip`.
+_pip_datas, _pip_binaries, _pip_hidden = collect_all("pip")
+
 _common = dict(
     pathex=[str(REPO)],
-    datas=[(str(REPO / "scriba" / "assets"), "scriba/assets")],
-    hiddenimports=[],
+    binaries=_pip_binaries,
+    datas=[(str(REPO / "scriba" / "assets"), "scriba/assets")] + _pip_datas,
+    hiddenimports=_pip_hidden,
     excludes=_excludes,
     noarchive=False,
 )
