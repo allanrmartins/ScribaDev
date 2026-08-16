@@ -137,6 +137,38 @@ class SetupWizardTests(unittest.TestCase):
 
         return config_mod.load()
 
+    # -- % real da barra (#147): plano ponderado + medição de diretório -------
+    def test_plan_items_pondera_por_mb(self):
+        w = self._win()
+        w._from_machine()
+        # com vozes: modelo + voices (cuda só em instalação congelada)
+        w.skip_voices = False
+        items = {k: mb for k, _l, mb in w._plan_items()}
+        self.assertIn("model", items)
+        self.assertIn("voices", items)
+        self.assertNotIn("cuda", items)     # não-congelado: sem download de CUDA
+        self.assertEqual(items["model"],
+                         sysprobe.MODEL_DOWNLOAD_MB[w._selected_model()])
+        # pulando as vozes, o item some e o total encolhe
+        w.skip_voices = True
+        self.assertNotIn("voices", [k for k, _l, _mb in w._plan_items()])
+
+    def test_dir_mb_mede_e_degrada(self):
+        from scriba.qt.setup_wizard import SetupWizardWindow as W
+
+        d = self.tmp / "cache"
+        d.mkdir()
+        (d / "blob.bin").write_bytes(b"x" * 1048576)   # 1 MB
+        self.assertAlmostEqual(W._dir_mb(d), 1.0, places=2)
+        self.assertEqual(W._dir_mb(self.tmp / "nao-existe"), 0.0)
+
+    def test_barra_avanca_com_progress_frac(self):
+        w = self._win()
+        w._progress_frac.emit(500)
+        self.qapp.processEvents()
+        self.assertEqual(w._bar.value(), 500)
+        self.assertEqual(w._bar.maximum(), 1000)
+
 
 class AddonsTests(unittest.TestCase):
     def setUp(self):

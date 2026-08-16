@@ -657,6 +657,24 @@ def cmd_doctor(args) -> int:
         failures += 1
         cfg = None
 
+    # Instalação congelada (#142/#147): o wizard depende do pip EMBARCADO no bundle
+    # (addons.install_to_addons) — se o build esquecer o collect_all("pip"), os
+    # downloads da diarização/CUDA quebram silenciosamente. O doctor denuncia.
+    from . import updates as _upd
+
+    if _upd.is_frozen_install():
+        from . import addons as _addons
+
+        try:
+            import pip  # noqa: F401 — coletado no bundle pelo spec do instalador
+
+            _print(_OK, "pip embarcado (addons)", "wizard pode baixar componentes")
+        except ImportError:
+            _print(_FAIL, "pip embarcado (addons)", "ausente no bundle — rebuild do instalador")
+            failures += 1
+        d = _addons.addons_dir()
+        _print(_OK, "Pasta de addons", f"{d} ({'existe' if d.is_dir() else 'ainda não criada'})")
+
     # Imports nativos — pyaudiowpatch/windows_toasts só existem (e só instalam,
     # pelos markers do #95) no Windows; fora dele são não-aplicáveis (#98)
     native = [

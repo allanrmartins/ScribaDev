@@ -83,6 +83,7 @@ class SetupWizardWindow(QWidget):
     """Janela do wizard de 1º uso. `on_finish` (opcional) roda ao concluir."""
 
     _progress = Signal(str)          # linha de status do download (marshal p/ GUI)
+    _progress_frac = Signal(int)     # 0..1000: % real da barra (ponderado por MB)
     _done_dl = Signal(bool, str)     # fim do worker de downloads
     _inline_bg = False               # classe (padrão NotesWindow): testes ligam
                                      # ANTES de construir p/ a sonda rodar inline
@@ -113,6 +114,7 @@ class SetupWizardWindow(QWidget):
         self._stack.addWidget(self._page_ready())     # 4
 
         self._progress.connect(self._append_progress)
+        self._progress_frac.connect(self._bar.setValue)
         self._done_dl.connect(self._downloads_finished)
         self._run_probe()
 
@@ -254,7 +256,8 @@ class SetupWizardWindow(QWidget):
         self._dl_summary.setWordWrap(True)
         lay.addWidget(self._dl_summary)
         self._bar = QProgressBar()
-        self._bar.setRange(0, 0)  # indeterminado; % real fica p/ evolução da issue
+        self._bar.setRange(0, 1000)  # % REAL: progresso ponderado por MB (#147)
+        self._bar.setValue(0)
         lay.addWidget(self._bar)
         self._dl_log = QLabel("")
         self._dl_log.setWordWrap(True)
@@ -345,16 +348,25 @@ class SetupWizardWindow(QWidget):
 
     # ------------------------------------------------------------- downloads --
 
-    def _plan(self) -> list[str]:
-        """Itens a baixar, já em texto de exibição."""
+    # pesos (MB estimados) dos itens de download — a barra avança proporcional a
+    # eles; o modelo tem % REAL por bytes (crescimento do cache HF), os pips avançam
+    # ao concluir o item (o pip não expõe bytes de forma estável)
+    _CUDA_MB = 3000
+    _VOICES_MB = 3000
+
+    def _plan_items(self) -> list[tuple[str, str, int]]:
+        """[(chave, rótulo de exibição, peso_mb)] do que será baixado."""
         model = self._selected_model()
-        items = [f"modelo de transcrição {model} "
-                 f"(~{sysprobe.MODEL_DOWNLOAD_MB.get(model, 0)} MB)"]
+        model_mb = sysprobe.MODEL_DOWNLOAD_MB.get(model, 1500)
+        items = [("model", f"modelo de transcrição {model} (~{model_mb} MB)", model_mb)]
         if self.rec and self.rec.needs_cuda_libs and updates.is_frozen_install():
-            items.append("bibliotecas NVIDIA (cuBLAS/cuDNN, ~3 GB)")
+            items.append(("cuda", "bibliotecas NVIDIA (cuBLAS/cuDNN, ~3 GB)", self._CUDA_MB))
         if not self.skip_voices:
-            items.append("separação de vozes (torch + pyannote, ~3 GB)")
+            items.append(("voices", "separação de vozes (torch + pyannote, ~3 GB)", self._VOICES_MB))
         return items
+
+    def _plan(self) -> list[str]:
+        return [label for _k, label, _mb in self._plan_items()]
 
     def _start_downloads(self) -> None:
         self._save_config()
@@ -366,50 +378,101 @@ class SetupWizardWindow(QWidget):
             threading.Thread(target=self._download_worker, daemon=True,
                              name="setup-downloads").start()
 
+    @staticmethod
+    def _dir_mb(path) -> float:
+        """Tamanho (MB) de uma árvore de diretório; 0 em qualquer erro. Base do %
+        real do modelo: mede o CRESCIMENTO do cache HF durante o download — robusto
+        a versão de lib (nada de depender de tqdm interno do huggingface_hub)."""
+        from pathlib import Path
+
+        try:
+            return sum(f.stat().st_size for f in Path(path).rglob("*") if f.is_file()) / 1048576
+        except Exception:
+            return 0.0
+
+    def _model_cache_dir(self, model: str):
+        """Pasta do cache HF onde o modelo vai cair (existente ou futura)."""
+        from pathlib import Path
+
+        from huggingface_hub.constants import HF_HUB_CACHE
+
+        try:
+            from faster_whisper.utils import _MODELS
+
+            repo = _MODELS.get(model, f"Systran/faster-whisper-{model}")
+        except Exception:
+            repo = f"Systran/faster-whisper-{model}"
+        return Path(HF_HUB_CACHE) / ("models--" + repo.replace("/", "--"))
+
     def _download_worker(self) -> None:
-        """Baixa modelo + extras. Instalação git/venv: pip na venv (sys.executable);
-        congelada: addons in-process (scriba.addons). Erro não trava o wizard - vira
-        aviso e o item fica p/ as Configurações."""
+        """Baixa modelo + extras com % REAL na barra: progresso ponderado pelos MB
+        de cada item; dentro do modelo, bytes medidos pelo crescimento do cache HF
+        (thread de poll). Instalação git/venv: pip na venv; congelada: addons
+        in-process. Erro não trava o wizard - vira aviso e o item fica p/ as
+        Configurações."""
         import subprocess
+        import time
 
         ok_all, notes = True, []
         emit = self._progress.emit
+        plan = self._plan_items()
+        total_mb = sum(mb for _k, _l, mb in plan) or 1
+        done_mb = 0.0
+
+        def frac(item_done_mb: float) -> None:
+            self._progress_frac.emit(min(1000, int(1000 * (done_mb + item_done_mb) / total_mb)))
+
         try:
-            model = self._selected_model()
-            emit(f"baixando o modelo {model}…")
-            try:
-                from faster_whisper import WhisperModel
+            for key, _label, weight in plan:
+                frac(0)
+                if key == "model":
+                    model = self._selected_model()
+                    emit(f"baixando o modelo {model}…")
+                    cache = self._model_cache_dir(model)
+                    base = self._dir_mb(cache)
+                    stop = threading.Event()
 
-                WhisperModel(model, device="cpu", compute_type="int8")  # só baixa/cacheia
-                emit(f"modelo {model} pronto.")
-            except Exception as e:
-                ok_all = False
-                notes.append(f"modelo: {e}")
-                emit(f"modelo falhou ({e}) - o app baixa na primeira transcrição.")
-            extras = []
-            if self.rec and self.rec.needs_cuda_libs and updates.is_frozen_install():
-                extras += ["nvidia-cublas-cu12", "nvidia-cudnn-cu12"]
-            if not self.skip_voices:
-                extras += ["torch", "pyannote.audio>=4,<5"]
-            if extras:
-                emit("instalando componentes: " + ", ".join(extras) + "…")
-                if updates.is_frozen_install():
-                    from .. import addons
+                    def poll():  # % real por bytes enquanto o download roda
+                        while not stop.wait(0.5):
+                            frac(min(weight, max(0.0, self._dir_mb(cache) - base)))
 
-                    ok, msg = addons.install_to_addons(extras, progress=emit)
-                else:
-                    r = subprocess.run(
-                        [updates._pip_interpreter(sys.executable), "-m", "pip",
-                         "install", *extras],
-                        capture_output=True, text=True, timeout=3600,
-                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-                    ok, msg = r.returncode == 0, (r.stderr or r.stdout or "")[-400:]
-                if not ok:
-                    ok_all = False
-                    notes.append(f"componentes: {msg}")
-                    emit("componentes falharam - dá para tentar de novo nas Configurações.")
-                else:
-                    emit("componentes instalados.")
+                    poller = threading.Thread(target=poll, daemon=True, name="dl-poll")
+                    if not self._inline_bg:
+                        poller.start()
+                    try:
+                        from faster_whisper import WhisperModel
+
+                        WhisperModel(model, device="cpu", compute_type="int8")  # baixa/cacheia
+                        emit(f"modelo {model} pronto.")
+                    except Exception as e:
+                        ok_all = False
+                        notes.append(f"modelo: {e}")
+                        emit(f"modelo falhou ({e}) - o app baixa na primeira transcrição.")
+                    finally:
+                        stop.set()
+                else:  # cuda | voices: pip (sem bytes estáveis; a barra salta no fim do item)
+                    extras = (["nvidia-cublas-cu12", "nvidia-cudnn-cu12"] if key == "cuda"
+                              else ["torch", "pyannote.audio>=4,<5"])
+                    emit("instalando componentes: " + ", ".join(extras) + "…")
+                    if updates.is_frozen_install():
+                        from .. import addons
+
+                        ok, msg = addons.install_to_addons(extras, progress=emit)
+                    else:
+                        r = subprocess.run(
+                            [updates._pip_interpreter(sys.executable), "-m", "pip",
+                             "install", *extras],
+                            capture_output=True, text=True, timeout=3600,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                        ok, msg = r.returncode == 0, (r.stderr or r.stdout or "")[-400:]
+                    if not ok:
+                        ok_all = False
+                        notes.append(f"componentes: {msg}")
+                        emit("componentes falharam - dá para tentar de novo nas Configurações.")
+                    else:
+                        emit("componentes instalados.")
+                done_mb += weight
+                frac(0)
         except Exception as e:  # rede caiu no meio etc.: wizard nunca trava
             log.exception("downloads do wizard falharam")
             ok_all, notes = False, notes + [str(e)]
@@ -419,8 +482,7 @@ class SetupWizardWindow(QWidget):
         self._dl_log.setText((self._dl_log.text() + "\n" + line).strip())
 
     def _downloads_finished(self, ok: bool, notes: str) -> None:
-        self._bar.setRange(0, 1)
-        self._bar.setValue(1)
+        self._bar.setValue(1000)
         extra = "" if ok else (
             "<br><br><b>Alguns itens não baixaram</b> - sem problema: o app funciona "
             f"e você tenta de novo nas Configurações. Detalhe: {notes}")
