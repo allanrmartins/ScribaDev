@@ -18,7 +18,7 @@
   <img src="docs/notas.png" alt="ScribaDev — leitor de notas com títulos" width="780">
 </p>
 
-O ScribaDev fica na bandeja do Windows e **detecta sozinho quando você entra em uma call do Teams, do Zoom — ou de uma reunião no navegador** (Google Meet, Teams web, Zoom web…). Ele grava o áudio (sem nenhum bot entrando na reunião), transcreve localmente com Whisper na sua GPU/CPU e gera um Markdown **com título, cliente e resumo estruturado** (participantes, decisões, requisitos, objetos SAP citados, pendências) mais a **transcrição completa**, com as falas separadas entre **Eu** (seu microfone) e **Participantes** (o áudio que você ouve) — ou **Participante 1/2/3** com a diarização opcional. É um "Granola" caseiro, minimalista e local — pensado para quem usa as notas como contexto de desenvolvimento (por exemplo, no Claude Code).
+O ScribaDev fica na bandeja do Windows (ou na menu bar do macOS) e **detecta sozinho quando você entra em uma call do Teams, do Zoom — ou de uma reunião no navegador** (Google Meet, Teams web, Zoom web…). Ele grava o áudio (sem nenhum bot entrando na reunião), transcreve localmente com Whisper na sua GPU/CPU e gera um Markdown **com título, cliente e resumo estruturado** (participantes, decisões, requisitos, objetos SAP citados, pendências) mais a **transcrição completa**, com as falas separadas entre **Eu** (seu microfone) e **Participantes** (o áudio que você ouve) — ou **Participante 1/2/3** com a diarização opcional. É um "Granola" caseiro, minimalista e local — pensado para quem usa as notas como contexto de desenvolvimento (por exemplo, no Claude Code).
 
 ## Como funciona
 
@@ -45,7 +45,7 @@ notas.md ──► exportado para %LOCALAPPDATA%\ScribaDev\Notas\
 áudio arquivado em Opus (~20 MB/h) ──► pasta renomeada com o título da nota
 ```
 
-- **Detecção sem API**: o Windows registra quando o Teams/Zoom abre o microfone (`HKCU\...\CapabilityAccessManager\ConsentStore\microphone`). O ScribaDev só observa esse registro — funciona com qualquer conta, sem Graph API, sem admin.
+- **Detecção sem API**: o Windows registra quando o Teams/Zoom abre o microfone (`HKCU\...\CapabilityAccessManager\ConsentStore\microphone`). O ScribaDev só observa esse registro — funciona com qualquer conta, sem Graph API, sem admin. No **macOS**, a mesma máquina de estados roda sobre os *process objects* do CoreAudio (quem está com o mic aberto) e os títulos de janela vêm da API de Acessibilidade.
 - **Reuniões no navegador**: mic aberto no Chrome/Edge/Firefox pode ser qualquer site, então a call só é confirmada quando alguma janela do navegador tem um título de reunião ("Meet", "Microsoft Teams", "Zoom", "Webex" — configurável). Confirmada uma vez, a call segue viva enquanto o mic estiver aberto: trocar de aba não derruba a gravação.
 - **"Eu" vs "Participantes" por construção**: sua voz vem do microfone e a dos outros vem do loopback da saída de áudio — duas trilhas separadas. Com a diarização opcional, os remotos ainda se dividem por voz em **Participante 1/2/3**.
 - **Tudo local**: o áudio nunca sai da sua máquina. Só o *texto* transcrito é enviado (e apenas se o resumo via Claude estiver habilitado).
@@ -76,6 +76,12 @@ Na primeira abertura, o **wizard de primeiro uso** analisa sua máquina (GPU, me
 - **Instalação Expressa** aceita as recomendações e baixa tudo de uma vez (modelo Whisper, bibliotecas CUDA se houver GPU NVIDIA);
 - **Instalação Avançada** deixa você escolher o modelo de transcrição (tiny → large-v3-turbo, com tamanho e velocidade de cada um) e os componentes;
 - A **separação de vozes** (pyannote) tem um passo a passo guiado para aceitar os termos e criar o token do Hugging Face — e pode ser **pulada** e ativada depois nas Configurações.
+
+<p align="center">
+  <img src="docs/setup_maquina.png" alt="ScribaDev — wizard de primeiro uso: análise da máquina e escolha Expressa/Avançada" width="560">
+  <br><br>
+  <img src="docs/setup_vozes.png" alt="ScribaDev — wizard de primeiro uso: passo a passo dos termos do pyannote e token" width="560">
+</p>
 
 ### Opção B — via código-fonte (para contribuir)
 
@@ -137,11 +143,11 @@ Pronto. Entre numa call do Teams (ou num Meet no navegador) e a pílula aparece 
 
 A pílula só some quando a call termina. Com `auto_record` desligado (Configurações), nada é gravado sem você clicar no ⏺. Ao sair da call: toast "Transcrevendo…", e em seguida "Notas prontas" com botão para abrir o `.md`.
 
-**Duplo clique no ícone da bandeja** abre a **janela principal** — a antessala das suas notas: as **reuniões recentes** (clique para abrir a nota), um resumo em números (**quantas reuniões, tempo total gravado, clientes**), as **pendências abertas** de todas as atas com contador, a **ligação em andamento com duração ao vivo** com o botão **⏺ Gravar**, e o botão **Notas** em destaque. O diagnóstico dos serviços (detecção, áudio, Whisper/GPU, Claude, diarização, autostart) fica numa seção **Serviços** recolhível. Minimizar mantém o app na barra de tarefas; fechar (X) tira da barra mas o monitoramento continua na bandeja.
+**Duplo clique no ícone da bandeja** abre a **janela principal** — a antessala das suas notas: as **reuniões recentes** (clique para abrir a nota; **clique-direito** para abrir a pasta da gravação ou **excluir a reunião**), um resumo em números (**quantas reuniões, tempo total gravado, clientes**), as **pendências abertas** de todas as atas com contador, a **ligação em andamento com duração ao vivo** com o botão **⏺ Gravar**, e o botão **Notas** em destaque. O diagnóstico dos serviços (detecção, áudio, Whisper/GPU, Claude, diarização, autostart) fica numa seção **Serviços** recolhível. Minimizar mantém o app na barra de tarefas; fechar (X) tira da barra mas o monitoramento continua na bandeja.
 
-O botão **Notas** abre a **janela de Notas** — o coração do app: à esquerda, as reuniões **agrupadas por dia** com **busca por conteúdo** (destaca as ocorrências) e **filtros colapsáveis** (data, cliente, participante); à direita, o leitor da ata em markdown, com **título e cliente identificados pela IA e editáveis** (quando o cliente não dá para inferir da conversa, o campo fica vazio para você digitar) e uma **barra de progresso ao vivo** para reuniões ainda transcrevendo/resumindo. Uma **barra de ações** oferece gerar o prompt de contexto, copiar, **perguntar à reunião** (um chat que busca na transcrição), rotular vozes e excluir. As tabelas (ex.: **Objetos SAP citados**) viram **tabelas de verdade** com **⧉ copiar (Excel)** ao lado — TSV colável direto em células; a **transcrição completa** fica atrás de um link no fim do documento (mostra/oculta sem "pular" a leitura). Ainda: **atalhos de teclado** e **menu de contexto** na lista de reuniões.
+O botão **Notas** abre a **janela de Notas** — o coração do app: à esquerda, as reuniões **agrupadas por dia** com **busca por conteúdo** (destaca as ocorrências) e **filtros colapsáveis** (data, cliente, participante); à direita, o leitor da ata em markdown, com **título e cliente identificados pela IA e editáveis** (quando o cliente não dá para inferir da conversa, o campo fica vazio para você digitar) e uma **barra de progresso ao vivo** para reuniões ainda transcrevendo/resumindo. Uma **barra de ações** oferece gerar o prompt de contexto, copiar, **perguntar à reunião** (um chat que busca na transcrição), rotular vozes e **excluir** (a lixeira, a tecla **Delete** na lista ou o clique-direito — com a opção de apagar também o áudio; sem ela, a gravação fica como backup). As tabelas (ex.: **Objetos SAP citados**) viram **tabelas de verdade** com **⧉ copiar (Excel)** ao lado — TSV colável direto em células; a **transcrição completa** fica atrás de um link no fim do documento (mostra/oculta sem "pular" a leitura). Ainda: **atalhos de teclado** e **menu de contexto** na lista de reuniões.
 
-O botão **⚙** abre as **Configurações**, com abas **Gravação / Transcrição / IA / Detecção / Pastas / Aparência / Sobre** — agrupadas por categoria, incluindo **atalho de teclado global** para gravar/parar (capture a combinação com o botão "Gravar atalho"). Na aba **IA**, um editor do `prompt.md`: o markdown com as instruções que geram a ata (seções, regras, vocabulário) — personalize à vontade e restaure o padrão quando quiser. Na aba **Aparência**, escolha o **tema**: *Automático* (segue o modo claro/escuro do Windows) ou um dos quatro — **VS Code**, **Sublime**, **Claude** e **Claro** — com troca na hora. A aba **Sobre** mostra a saúde dos componentes (GPU, diarização, ffmpeg) e as atualizações.
+O botão **⚙** abre as **Configurações**, com abas **Gravação / Transcrição / IA / Detecção / Pastas / Aparência / Sobre** — agrupadas por categoria, incluindo **atalho de teclado global** para gravar/parar (capture a combinação com o botão "Gravar atalho"). Na aba **IA**, um editor do `prompt.md`: o markdown com as instruções que geram a ata (seções, regras, vocabulário) — personalize à vontade e restaure o padrão quando quiser. Na aba **Aparência**, escolha o **tema**: *Automático* (segue o modo claro/escuro do sistema) ou um dos quatro — **VS Code**, **Sublime**, **Claude** e **Claro** — com troca na hora; e ajuste o **tamanho da interface** (100%–200%, com troca a quente — no macOS o padrão já compensa a diferença de densidade). A aba **Sobre** mostra a saúde dos componentes (GPU, diarização, ffmpeg) e as atualizações.
 
 <p align="center">
   <img src="docs/configuracoes.png" alt="ScribaDev — Configurações, aba IA com o editor do prompt.md" width="640">
@@ -176,8 +182,20 @@ Na primeira execução, o **Assistente de perfil** abre sozinho: você descreve 
 | `scribadev search "termos"` | busca nas reuniões indexadas (texto, `--client`, `--participant`, datas); `--json` p/ agentes de IA |
 | `scribadev show <id-ou-pasta>` | mostra a nota de uma reunião (`--transcript` p/ a transcrição; `--json` p/ agentes) |
 | `scribadev reindex` | reconstrói o índice de busca a partir das pastas |
+| `scribadev timesheet list\|add\|export\|import` | apontamento de horas (opcional — ver [Apontamento de horas](#apontamento-de-horas-opcional)) |
 
 Menu da bandeja: **Gravar agora/Parar** (cobre reuniões presenciais ou apps fora da detecção), **Tema** (troca rápida entre os temas), **Abrir pasta de reuniões/notas**, **Processar pendentes** (retoma o que ficou pela metade se o PC desligou no meio) e **Sair**.
+
+### Apontamento de horas (opcional)
+
+Para quem precisa lançar horas num sistema da empresa: o módulo de **Apontamentos** transforma cada reunião processada numa **sugestão de apontamento** (cliente, horários arredondados, descrição) — você revisa, ajusta e confirma. Vem **desligado**; ative em **Configurações → Apontamento** (sem ativar, nada roda nem cria banco).
+
+- **Sugestões pós-call**: a reunião termina e a sugestão aparece na fila para aceitar, **editar e aceitar** ou **agrupar** (várias calls fragmentadas viram um apontamento só);
+- **Lançamento manual pré-preenchido** pelo seu histórico (cliente → projeto → descrição), com **hora extra** em coluna própria e horário fracionado (manhã/tarde no mesmo diálogo);
+- **Clientes com aliases acento-insensíveis** ("Aurora", "aurora" e "Áurora" caem no mesmo cadastro) e cadastro completo (renomear, mesclar, desativar);
+- **Checkbox "Lançado"** por linha ou por dia inteiro (a linha lançada fica esmaecida — as pendentes saltam aos olhos);
+- **Exportação Excel** no layout clássico de planilha de apontamento e **importação do histórico** (`scribadev timesheet import planilha.xlsx`, com `--dry-run`);
+- Tudo local, no mesmo espírito do resto do app.
 
 ### Perguntar sobre as suas reuniões no Claude Code
 
@@ -287,6 +305,26 @@ Com a **diarização** ativa, as falas dos outros participantes saem como **Part
 
 > 💡 Na instalação pelo **instalador** (setup.exe/DMG), o **wizard de primeiro uso** guia esses passos — inclusive o download do torch/pyannote — sem precisar de PowerShell.
 
+## ScribaDev no macOS
+
+Suporte a partir da **v1.4.0** (macOS 14.2+, Apple Silicon), contribuição do [@dineiar](https://github.com/dineiar):
+
+- **Captura** via *process tap* do CoreAudio (o equivalente nativo do loopback WASAPI) + microfone;
+- **Transcrição acelerada por Metal** (mlx-whisper) — sem GPU NVIDIA, sem CUDA;
+- **Menu bar** com ícone template (segue o claro/escuro), notificações nativas e autostart via LaunchAgent;
+- **Atalho global** nativo (Carbon) e a pílula flutuante **fora do compartilhamento de tela** — quem está na call não a vê;
+- Detecção de calls pela mesma máquina de estados do Windows, sobre os *process objects* do CoreAudio.
+
+**Permissões** (o app pede na primeira vez; ficam em Ajustes do Sistema → Privacidade e Segurança):
+
+| Permissão | Para quê |
+|---|---|
+| Microfone | a sua voz ("Eu") |
+| Gravação de Tela e Áudio do Sistema | o áudio dos outros participantes (process tap) |
+| Acessibilidade | títulos de janela — detecção de call no navegador e nome da reunião |
+
+> ⚠️ Sem a permissão de **Gravação de Tela e Áudio do Sistema**, a trilha dos participantes sai **em silêncio** (o macOS não avisa). Se a nota vier só com "Eu", confira essa permissão primeiro.
+
 ## Privacidade
 
 - O **áudio nunca sai da sua máquina** — gravação e transcrição são 100% locais.
@@ -303,6 +341,7 @@ O ScribaDev grava **localmente** o áudio que entra e sai da sua máquina, sem a
 - Se o Teams tocar áudio numa saída diferente da padrão do Windows, configure `loopback_device`.
 - Trocar de fone **no meio** da call pode silenciar a trilha dos participantes (reabertura de stream está no roadmap).
 - Sem fone (som nas caixas), a fala dos outros entra também pelo microfone e duplica como "Eu".
+- O suporte a **macOS** é recente (v1.4.0) e ainda amadurecendo — issues e feedback são muito bem-vindos.
 
 ## Roadmap
 

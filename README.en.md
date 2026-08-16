@@ -18,7 +18,7 @@
   <img src="docs/notas.png" alt="ScribaDev — notes reader with titles" width="780">
 </p>
 
-ScribaDev lives in the Windows tray and **detects by itself when you join a Teams or Zoom call — or a meeting in the browser** (Google Meet, Teams web, Zoom web…). It records the audio (no bot ever joins the meeting), transcribes locally with Whisper on your GPU/CPU and produces a Markdown file **with a title, client and structured summary** (participants, decisions, requirements, SAP objects mentioned, action items) plus the **full transcript**, with turns attributed to **Me** (your microphone) and **Participants** (the audio you hear) — or **Participante 1/2/3** with optional diarization. Think of it as a minimalist, local, homemade "Granola" — built for people who feed meeting notes into development tools such as Claude Code.
+ScribaDev lives in the Windows tray (or the macOS menu bar) and **detects by itself when you join a Teams or Zoom call — or a meeting in the browser** (Google Meet, Teams web, Zoom web…). It records the audio (no bot ever joins the meeting), transcribes locally with Whisper on your GPU/CPU and produces a Markdown file **with a title, client and structured summary** (participants, decisions, requirements, SAP objects mentioned, action items) plus the **full transcript**, with turns attributed to **Me** (your microphone) and **Participants** (the audio you hear) — or **Participante 1/2/3** with optional diarization. Think of it as a minimalist, local, homemade "Granola" — built for people who feed meeting notes into development tools such as Claude Code.
 
 ## How it works
 
@@ -45,7 +45,7 @@ notas.md ──► exported to %LOCALAPPDATA%\ScribaDev\Notas\
 audio archived as Opus (~20 MB/h) ──► folder renamed with the note's title
 ```
 
-- **Detection without APIs**: Windows tracks when Teams/Zoom opens the microphone (`HKCU\...\CapabilityAccessManager\ConsentStore\microphone`). ScribaDev just watches that key — any account, no Graph API, no admin rights.
+- **Detection without APIs**: Windows tracks when Teams/Zoom opens the microphone (`HKCU\...\CapabilityAccessManager\ConsentStore\microphone`). ScribaDev just watches that key — any account, no Graph API, no admin rights. On **macOS**, the same state machine runs on CoreAudio *process objects* (who has the mic open) with window titles from the Accessibility API.
 - **Browser meetings**: an open mic in Chrome/Edge/Firefox could be any website, so the call is only confirmed when some browser window bears a meeting title ("Meet", "Microsoft Teams", "Zoom", "Webex" — configurable). Once confirmed, the call stays alive for as long as the mic is open: switching tabs doesn't drop the recording.
 - **"Me" vs "Participants" by construction**: your voice comes from the mic and everyone else's from the output loopback — two separate tracks. With optional diarization, remote speakers are further split into **Participante 1/2/3**.
 - **Everything local**: audio never leaves your machine. Only the transcribed *text* is sent out (and only if the Claude summary is enabled).
@@ -76,6 +76,12 @@ On first launch, the **first-run wizard** analyzes your machine (GPU, memory, di
 - **Express install** accepts the recommendations and downloads everything at once (Whisper model, CUDA libraries if you have an NVIDIA GPU);
 - **Advanced install** lets you pick the transcription model (tiny → large-v3-turbo, with size and speed for each) and the components;
 - **Speaker separation** (pyannote) has a guided walkthrough to accept the terms and create the Hugging Face token — and can be **skipped** and enabled later in Settings.
+
+<p align="center">
+  <img src="docs/setup_maquina.png" alt="ScribaDev — first-run wizard: machine analysis and Express/Advanced choice" width="560">
+  <br><br>
+  <img src="docs/setup_vozes.png" alt="ScribaDev — first-run wizard: pyannote terms and token walkthrough" width="560">
+</p>
 
 ### Option B — from source (to contribute)
 
@@ -137,11 +143,11 @@ Join a Teams call (or a Meet in the browser) and the pill shows up at the top of
 
 The pill only disappears when the call ends. With `auto_record` off (Settings), nothing is recorded until you click ⏺. When you leave the call: a "Transcribing…" toast, then "Notes ready" with a button that opens the `.md`.
 
-**Double-click the tray icon** to open the **main window** - the antechamber to your notes: **recent meetings** (click to open the note), a summary in numbers (**how many meetings, total time recorded, clients**), the **open action items** across all notes with a counter, the **live call in progress with a running duration** and the **⏺ Record** button, and a prominent **Notas** button. Service diagnostics (detection, audio, Whisper/GPU, Claude, diarization, autostart) live in a collapsible **Serviços** section. Minimizing keeps the app in the taskbar; closing (X) removes it from the taskbar while monitoring continues in the tray.
+**Double-click the tray icon** to open the **main window** - the antechamber to your notes: **recent meetings** (click to open the note; **right-click** to open the recording folder or **delete the meeting**), a summary in numbers (**how many meetings, total time recorded, clients**), the **open action items** across all notes with a counter, the **live call in progress with a running duration** and the **⏺ Record** button, and a prominent **Notas** button. Service diagnostics (detection, audio, Whisper/GPU, Claude, diarization, autostart) live in a collapsible **Serviços** section. Minimizing keeps the app in the taskbar; closing (X) removes it from the taskbar while monitoring continues in the tray.
 
-The **Notas** button opens the **Notes window** - the heart of the app: on the left, meetings **grouped by day** with **content search** (highlights matches) and **collapsible filters** (date, client, participant); on the right, the markdown reader, with **AI-identified, editable title and client** (when the client can't be inferred from the conversation, the field is left blank for you to type) and a **live progress bar** for meetings still transcribing/summarizing. An **action bar** offers generating the context prompt, copying, **"ask the meeting"** (a chat that searches the transcript), labeling speakers and deleting. Tables (e.g. **SAP objects**) render as **real tables** with **⧉ copy (Excel)** next to them - TSV that pastes straight into cells; the **full transcript** sits behind a link at the end of the document (show/hide without "jumping" your reading). Also: **keyboard shortcuts** and a **context menu** on the meeting list.
+The **Notas** button opens the **Notes window** - the heart of the app: on the left, meetings **grouped by day** with **content search** (highlights matches) and **collapsible filters** (date, client, participant); on the right, the markdown reader, with **AI-identified, editable title and client** (when the client can't be inferred from the conversation, the field is left blank for you to type) and a **live progress bar** for meetings still transcribing/summarizing. An **action bar** offers generating the context prompt, copying, **"ask the meeting"** (a chat that searches the transcript), labeling speakers and **deleting** (the trash button, the **Delete** key on the list or the right-click — with an option to also delete the audio; without it, the recording stays as backup). Tables (e.g. **SAP objects**) render as **real tables** with **⧉ copy (Excel)** next to them - TSV that pastes straight into cells; the **full transcript** sits behind a link at the end of the document (show/hide without "jumping" your reading). Also: **keyboard shortcuts** and a **context menu** on the meeting list.
 
-The **⚙** button opens **Settings**, with **Gravação / Transcrição / IA / Detecção / Pastas / Aparência / Sobre** tabs - grouped by category, including a **global record/stop hotkey** (capture the combo with the "Gravar atalho" button). In the **IA** tab, a `prompt.md` editor: the markdown instructions that drive the minutes (sections, rules, vocabulary) - customize freely, restore the default anytime. In the **Aparência** tab, pick a **theme**: *Automático* (follows Windows' light/dark mode) or one of four - **VS Code**, **Sublime**, **Claude** and **Claro** - switched instantly. The **Sobre** tab shows component health (GPU, diarization, ffmpeg) and updates.
+The **⚙** button opens **Settings**, with **Gravação / Transcrição / IA / Detecção / Pastas / Aparência / Sobre** tabs - grouped by category, including a **global record/stop hotkey** (capture the combo with the "Gravar atalho" button). In the **IA** tab, a `prompt.md` editor: the markdown instructions that drive the minutes (sections, rules, vocabulary) - customize freely, restore the default anytime. In the **Aparência** tab, pick a **theme**: *Automático* (follows the system's light/dark mode) or one of four - **VS Code**, **Sublime**, **Claude** and **Claro** - switched instantly; and adjust the **UI size** (100%–200%, hot-switched — on macOS the default already compensates the density difference). The **Sobre** tab shows component health (GPU, diarization, ffmpeg) and updates.
 
 <p align="center">
   <img src="docs/configuracoes.png" alt="ScribaDev — Settings, IA tab with the prompt.md editor" width="640">
@@ -176,8 +182,20 @@ On first run, the **profile assistant** opens by itself: describe your role, are
 | `scribadev search "terms"` | search indexed meetings (full-text, `--client`, `--participant`, dates); `--json` for AI agents |
 | `scribadev show <id-or-folder>` | print a meeting's note (`--transcript` for the transcript; `--json` for agents) |
 | `scribadev reindex` | rebuild the search index from the recording folders |
+| `scribadev timesheet list\|add\|export\|import` | timesheet module (optional — see [Timesheet](#timesheet-optional)) |
 
 Tray menu: **Record now/Stop** (covers in-person meetings and apps outside detection), **Theme** (quick switch between themes), **Open meetings/notes folder**, **Process pending** (resumes work interrupted by a shutdown) and **Quit**.
+
+### Timesheet (optional)
+
+For anyone who must log hours in a company system: the **Timesheet** module turns every processed meeting into a **suggested entry** (client, rounded times, description) — you review, tweak and confirm. It ships **disabled**; enable it in **Settings → Apontamento** (until then nothing runs and no database is created).
+
+- **Post-call suggestions**: the meeting ends and the suggestion lands in a review queue — accept, **edit & accept** or **merge** (several fragmented calls become a single entry);
+- **Manual entries pre-filled** from your own history (client → project → description), with **overtime** in its own column and split times (morning/afternoon in one dialog);
+- **Clients with accent-insensitive aliases** ("Aurora", "aurora" and "Áurora" resolve to the same client) plus full registry management (rename, merge, deactivate);
+- **"Posted" checkbox** per row or per whole day (posted rows dim — pending ones stand out);
+- **Excel export** in the classic timesheet layout and **history import** (`scribadev timesheet import sheet.xlsx`, with `--dry-run`);
+- All local, in the same spirit as the rest of the app.
 
 ### Ask about your meetings in Claude Code
 
@@ -287,6 +305,26 @@ With **diarization** on, the other participants come out as **Participante 1/2/3
 
 > 💡 When installed via the **installer** (setup.exe/DMG), the **first-run wizard** walks you through these steps — including the torch/pyannote download — no PowerShell needed.
 
+## ScribaDev on macOS
+
+Supported since **v1.4.0** (macOS 14.2+, Apple Silicon), contributed by [@dineiar](https://github.com/dineiar):
+
+- **Capture** via CoreAudio *process taps* (the native equivalent of WASAPI loopback) + microphone;
+- **Metal-accelerated transcription** (mlx-whisper) — no NVIDIA GPU, no CUDA;
+- **Menu bar** with a template icon (follows light/dark), native notifications and autostart via LaunchAgent;
+- Native **global hotkey** (Carbon) and the floating pill **excluded from screen sharing** — people on the call never see it;
+- Call detection through the same state machine as Windows, over CoreAudio *process objects*.
+
+**Permissions** (prompted on first use; managed under System Settings → Privacy & Security):
+
+| Permission | Why |
+|---|---|
+| Microphone | your voice ("Me") |
+| Screen & System Audio Recording | the other participants' audio (process tap) |
+| Accessibility | window titles — browser call detection and meeting name |
+
+> ⚠️ Without the **Screen & System Audio Recording** permission, the participants' track comes out **silent** (macOS won't warn you). If notes only contain "Me", check that permission first.
+
 ## Privacy
 
 - **Audio never leaves your machine** — recording and transcription are 100% local.
@@ -303,6 +341,7 @@ ScribaDev records **locally** the audio entering and leaving your machine, witho
 - If Teams plays audio on a non-default output device, set `loopback_device`.
 - Swapping headsets **mid-call** can silence the participants' track (stream reopen is on the roadmap).
 - Without headphones, other people's voices also enter your mic and get duplicated as "Me".
+- **macOS** support is recent (v1.4.0) and still maturing — issues and feedback are very welcome.
 
 ## Roadmap
 
