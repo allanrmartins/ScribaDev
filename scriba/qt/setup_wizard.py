@@ -179,30 +179,61 @@ class SetupWizardWindow(QWidget):
                   next_cb=lambda: self._stack.setCurrentIndex(2))
         return w
 
+    def _step_row(self, lay, num: int, html: str, btn_label: str = "", btn_cb=None) -> None:
+        """Um passo do tutorial: número em destaque + texto explicativo (com quebra)
+        e, quando faz sentido, o botão que abre a página certa ao lado."""
+        t = theme.active()
+        row = QHBoxLayout()
+        n = QLabel(str(num))
+        n.setFixedWidth(26)
+        n.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+        n.setStyleSheet(f"font-size:{t.font_size + 3}pt; font-weight:bold; color:{t.accent_hover};")
+        row.addWidget(n, 0, Qt.AlignTop)
+        lbl = QLabel(html)
+        lbl.setWordWrap(True)
+        lbl.setTextFormat(Qt.RichText)
+        row.addWidget(lbl, 1)
+        if btn_label:
+            row.addWidget(widgets.ModernButton(btn_label, btn_cb), 0, Qt.AlignTop)
+        lay.addLayout(row)
+        lay.addSpacing(8)
+
     def _page_voices(self) -> QWidget:
         from .settings_ui import _wrap_secret
 
         w = QWidget()
         lay = QVBoxLayout(w)
         self._title(lay, "Separar quem falou (opcional)",
-                    "A separação de vozes usa os modelos pyannote, gratuitos mas \"gated\": "
-                    "você aceita os termos no site do Hugging Face e usa um token seu. "
-                    "Dá para pular e ativar depois nas Configurações.")
+                    "Com a separação de vozes, a nota mostra quem disse o quê "
+                    "(\"Participante 1\", \"Participante 2\"…). Ela usa os modelos pyannote - "
+                    "gratuitos, mas você precisa aceitar os termos e usar um token do "
+                    "Hugging Face. Leva uns 2 minutos; dá para pular e fazer depois.")
         self._voices_hint = QLabel("")
         self._voices_hint.setWordWrap(True)
         lay.addWidget(self._voices_hint)
-        row = QHBoxLayout()
-        row.addWidget(widgets.ModernButton(
-            "1. Abrir os termos dos modelos", lambda: [webbrowser.open(u) for u in HF_TERMS_URLS]))
-        row.addWidget(widgets.ModernButton(
-            "2. Criar/copiar um token", lambda: webbrowser.open("https://huggingface.co/settings/tokens")))
-        row.addStretch(1)
-        lay.addLayout(row)
-        form = QHBoxLayout()
-        form.addWidget(QLabel("3. Token Hugging Face:"))
+        lay.addSpacing(10)
+        self._step_row(
+            lay, 1,
+            "<b>Aceite os termos dos dois modelos.</b><br>"
+            "Entre (ou crie uma conta gratuita) no Hugging Face; em cada uma das duas "
+            "páginas que vão abrir, preencha o formulário curto e clique em "
+            "<b>\"Agree and access repository\"</b>.",
+            "Abrir as duas páginas", lambda: [webbrowser.open(u) for u in HF_TERMS_URLS])
+        self._step_row(
+            lay, 2,
+            "<b>Gere um token de acesso.</b><br>"
+            "Na página de tokens, clique em <b>\"Create new token\"</b>, escolha o tipo "
+            "<b>Read</b> (basta), dê um nome (ex.: \"scriba\") e clique em "
+            "<b>\"Create token\"</b>. Copie o valor - ele começa com <b>hf_</b> e só "
+            "aparece uma vez.",
+            "Abrir a página de tokens",
+            lambda: webbrowser.open("https://huggingface.co/settings/tokens"))
+        self._step_row(lay, 3, "<b>Cole o token aqui:</b>")
         self._hf_token = QLineEdit()
         self._hf_token.setEchoMode(QLineEdit.Password)
         self._hf_token.setPlaceholderText("hf_...")
+        form = QHBoxLayout()
+        form.addSpacing(34)  # alinha com o texto dos passos (26 do número + espaçamento)
         form.addWidget(_wrap_secret(self._hf_token), 1)
         lay.addLayout(form)
         lay.addStretch(1)
