@@ -8,8 +8,6 @@
 
 🇧🇷 [Português](README.md) | 🇺🇸 English
 
-> ℹ️ **Personal, local fork** of Scriba, pinned at `b62e901`. It's my daily driver as a dev — it runs entirely on the machine (Whisper on **my GPU** + summary via `claude -p`). **Not a product.** The Python module is still `scriba`, but the Windows identity is **ScribaDev** (folder at `%LOCALAPPDATA%\ScribaDev`, shortcuts and the `scribadev` command) so it coexists with Scriba on the same machine without clashing.
-
 <p align="center">
   <img src="docs/pilula.png" alt="Recording pill" width="300">
   <br><br>

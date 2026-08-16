@@ -8,8 +8,6 @@
 
 🇧🇷 Português | 🇺🇸 [English](README.en.md)
 
-> ℹ️ **Fork pessoal e local** do Scriba, fixado em `b62e901`. É a minha ferramenta do dia a dia como dev — roda inteira na máquina (Whisper na **minha GPU** + resumo via `claude -p`). **Não é um produto.** O módulo Python continua `scriba`, mas a identidade no Windows é **ScribaDev** (pasta em `%LOCALAPPDATA%\ScribaDev`, atalhos e comando `scribadev`) para conviver com a Scriba na mesma máquina sem colidir.
-
 <p align="center">
   <img src="docs/pilula.png" alt="Pílula de gravação" width="300">
   <br><br>
