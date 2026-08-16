@@ -54,8 +54,8 @@ notas.md ──► exportado para %LOCALAPPDATA%\ScribaDev\Notas\
 
 | Item | Observação |
 |---|---|
-| Windows 11 | usa WASAPI loopback e toasts modernos |
-| Python 3.12–3.14 | `winget install Python.Python.3.12` se não tiver |
+| Windows 11 **ou** macOS 14.2+ (Apple Silicon) | Windows usa WASAPI loopback e toasts; macOS usa process tap do CoreAudio e transcrição Metal (MLX) |
+| Python 3.12–3.14 *(só na instalação via código-fonte)* | o **instalador** não precisa de Python — `winget install Python.Python.3.12` se for contribuir |
 | Teams/Zoom (desktop) ou reuniões no navegador | detecção automática em ambos; Meet, Teams web e afins são confirmados pelo título da janela |
 | GPU NVIDIA *(opcional)* | transcrição ~10× mais rápida; sem GPU cai para CPU automaticamente |
 | [Claude Code](https://claude.com/claude-code) *(opcional)* | só para o resumo estruturado; sem ele, sai a transcrição pura |
@@ -64,9 +64,22 @@ notas.md ──► exportado para %LOCALAPPDATA%\ScribaDev\Notas\
 
 ## Instalação
 
-A instalação é **automática**: o `setup.ps1` faz tudo — cria um ambiente Python isolado em `%LOCALAPPDATA%\ScribaDev\venv`, instala as dependências (com suporte CUDA se houver GPU NVIDIA, ~1,3 GB), baixa o modelo Whisper (~1,6 GB na primeira vez), coloca o comando `scribadev` no PATH e termina rodando o `scribadev doctor`, que confere GPU, Teams, áudio, modelo e pastas.
+### Opção A — Instalador (recomendado)
 
-**Opção A — com git:**
+Baixe na [página de Releases](https://github.com/allanrmartins/ScribaDev/releases) e instale — **sem Python, sem terminal**:
+
+- **Windows**: `ScribaDev-X.Y.Z-setup.exe`. O instalador não é assinado digitalmente (projeto open source sem certificado pago), então o SmartScreen avisa na primeira execução: clique em **"Mais informações" → "Executar mesmo assim"**. A instalação é por usuário (sem pedir administrador).
+- **macOS** (14.2+, Apple Silicon): `ScribaDev-X.Y.Z.dmg`. Arraste o app para **Applications** e, na primeira abertura, use **clique-direito → Abrir** (mesmo motivo: app não assinado). Conceda as permissões de **Microfone**, **Gravação de Tela e Áudio do Sistema** e **Acessibilidade** quando pedidas.
+
+Na primeira abertura, o **wizard de primeiro uso** analisa sua máquina (GPU, memória, disco) e recomenda a melhor configuração:
+
+- **Instalação Expressa** aceita as recomendações e baixa tudo de uma vez (modelo Whisper, bibliotecas CUDA se houver GPU NVIDIA);
+- **Instalação Avançada** deixa você escolher o modelo de transcrição (tiny → large-v3-turbo, com tamanho e velocidade de cada um) e os componentes;
+- A **separação de vozes** (pyannote) tem um passo a passo guiado para aceitar os termos e criar o token do Hugging Face — e pode ser **pulada** e ativada depois nas Configurações.
+
+### Opção B — via código-fonte (para contribuir)
+
+O `setup.ps1` faz tudo: cria um ambiente Python isolado em `%LOCALAPPDATA%\ScribaDev\venv`, instala as dependências (com suporte CUDA se houver GPU NVIDIA, ~1,3 GB), baixa o modelo Whisper (~1,6 GB na primeira vez), coloca o comando `scribadev` no PATH e termina rodando o `scribadev doctor`.
 
 ```powershell
 git clone https://github.com/allanrmartins/ScribaDev.git
@@ -74,9 +87,11 @@ cd ScribaDev
 powershell -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 
-**Opção B — sem git:** no GitHub, clique em **Code → Download ZIP**, extraia, abra um PowerShell na pasta extraída e rode `powershell -ExecutionPolicy Bypass -File .\setup.ps1`.
+No macOS, o equivalente é `./setup.sh`. Veja o [CONTRIBUTING.md](CONTRIBUTING.md).
 
-> 💡 A **diarização** (separar as falas em *Participante 1/2/3*) é **opcional** e instalada à parte. Se ela aparecer como `dependências ausentes` no painel **Serviços**, é só seguir [Separar participantes por voz](#separar-participantes-por-voz-opcional).
+**Sem git (ZIP):** no GitHub, clique em **Code → Download ZIP**, extraia, abra um PowerShell na pasta extraída e rode `powershell -ExecutionPolicy Bypass -File .\setup.ps1`.
+
+> 💡 A **diarização** (separar as falas em *Participante 1/2/3*) é **opcional**. No instalador, o wizard cuida dela; na instalação via código-fonte, siga [Separar participantes por voz](#separar-participantes-por-voz-opcional) se ela aparecer como `dependências ausentes` no painel **Serviços**.
 
 ### Onde ficam os arquivos
 
@@ -93,7 +108,9 @@ Todas as pastas de saída são **criadas automaticamente na primeira utilizaçã
 
 A versão instalada aparece na **barra de título** e na **capa** da janela (e em `scribadev --version`).
 
-**Com git (Opção A)** — atualiza por um comando:
+**Instalador (Opção A)**: quando sai versão nova, a capa mostra o aviso com o botão **Baixar**, que leva direto ao instalador do seu sistema. Instale por cima — **config, notas e gravações são preservadas**.
+
+**Código-fonte com git (Opção B)** — atualiza por um comando:
 
 ```powershell
 scribadev update --check    # só verifica se há versão nova
@@ -102,7 +119,7 @@ scribadev update            # aplica: git pull + reinstala se as dependências m
 
 Depois de atualizar, **feche e reabra** o ScribaDev (bandeja → **Sair**, depois reabra pelo atalho) para carregar a nova versão.
 
-**Sem git (Opção B — ZIP)**: baixe o ZIP novo no GitHub (**Code → Download ZIP**), extraia por cima da pasta e rode o `setup.ps1` de novo — ele reaproveita o venv e atualiza só o que mudou.
+**Sem git (ZIP)**: baixe o ZIP novo no GitHub (**Code → Download ZIP**), extraia por cima da pasta e rode o `setup.ps1` de novo — ele reaproveita o venv e atualiza só o que mudou.
 
 ## Uso
 
@@ -156,8 +173,15 @@ Na primeira execução, o **Assistente de perfil** abre sozinho: você descreve 
 | `scribadev autostart on\|off` | atalho na pasta Inicializar do Windows |
 | `scribadev shortcut` | (re)cria os atalhos na Área de Trabalho e no menu Iniciar |
 | `scribadev purge` | apaga gravações já transcritas além do prazo de retenção (`--days N` sobrepõe, `--dry-run` só lista) |
+| `scribadev search "termos"` | busca nas reuniões indexadas (texto, `--client`, `--participant`, datas); `--json` p/ agentes de IA |
+| `scribadev show <id-ou-pasta>` | mostra a nota de uma reunião (`--transcript` p/ a transcrição; `--json` p/ agentes) |
+| `scribadev reindex` | reconstrói o índice de busca a partir das pastas |
 
 Menu da bandeja: **Gravar agora/Parar** (cobre reuniões presenciais ou apps fora da detecção), **Tema** (troca rápida entre os temas), **Abrir pasta de reuniões/notas**, **Processar pendentes** (retoma o que ficou pela metade se o PC desligou no meio) e **Sair**.
+
+### Perguntar sobre as suas reuniões no Claude Code
+
+O repo traz a skill **`scriba-reunioes`** (`.claude/skills/`): abrindo o [Claude Code](https://claude.com/claude-code) na pasta do projeto, você pergunta em linguagem natural — *"qual foi a última reunião do cliente X?"*, *"o que ficou pendente na call de ontem?"* — e a IA consulta o índice local via `scribadev search --json` / `show`. Tudo 100% na sua máquina. Para usar a skill a partir de **qualquer pasta**, crie uma junction/symlink dela em `~/.claude/skills/`.
 
 ## O que sai no `notas.md`
 

@@ -54,8 +54,8 @@ audio archived as Opus (~20 MB/h) ──► folder renamed with the note's title
 
 | Item | Notes |
 |---|---|
-| Windows 11 | uses WASAPI loopback and modern toasts |
-| Python 3.12–3.14 | `winget install Python.Python.3.12` |
+| Windows 11 **or** macOS 14.2+ (Apple Silicon) | Windows uses WASAPI loopback and toasts; macOS uses CoreAudio process taps and Metal (MLX) transcription |
+| Python 3.12–3.14 *(source install only)* | the **installer** needs no Python — `winget install Python.Python.3.12` if contributing |
 | Teams/Zoom (desktop) or browser meetings | auto-detection for both; Meet, Teams web and friends are confirmed via the window title |
 | NVIDIA GPU *(optional)* | ~10× faster transcription; falls back to CPU automatically |
 | [Claude Code](https://claude.com/claude-code) *(optional)* | only for the structured summary; without it you get the plain transcript |
@@ -64,9 +64,22 @@ audio archived as Opus (~20 MB/h) ──► folder renamed with the note's title
 
 ## Install
 
-Installation is **automatic**: `setup.ps1` does everything — creates an isolated Python environment at `%LOCALAPPDATA%\ScribaDev\venv`, installs dependencies (with CUDA support if an NVIDIA GPU is present, ~1.3 GB), downloads the Whisper model (~1.6 GB on first run), puts the `scribadev` command on your PATH and finishes by running `scribadev doctor`, which checks GPU, Teams, audio, model and folders.
+### Option A — Installer (recommended)
 
-**Option A — with git:**
+Download from the [Releases page](https://github.com/allanrmartins/ScribaDev/releases) and install — **no Python, no terminal**:
+
+- **Windows**: `ScribaDev-X.Y.Z-setup.exe`. The installer is not code-signed (open source project without a paid certificate), so SmartScreen warns on first run: click **"More info" → "Run anyway"**. Per-user install (no admin prompt).
+- **macOS** (14.2+, Apple Silicon): `ScribaDev-X.Y.Z.dmg`. Drag the app to **Applications** and, on first launch, use **right-click → Open** (same reason: unsigned app). Grant the **Microphone**, **Screen & System Audio Recording** and **Accessibility** permissions when prompted.
+
+On first launch, the **first-run wizard** analyzes your machine (GPU, memory, disk) and recommends the best setup:
+
+- **Express install** accepts the recommendations and downloads everything at once (Whisper model, CUDA libraries if you have an NVIDIA GPU);
+- **Advanced install** lets you pick the transcription model (tiny → large-v3-turbo, with size and speed for each) and the components;
+- **Speaker separation** (pyannote) has a guided walkthrough to accept the terms and create the Hugging Face token — and can be **skipped** and enabled later in Settings.
+
+### Option B — from source (to contribute)
+
+`setup.ps1` does everything: creates an isolated Python environment at `%LOCALAPPDATA%\ScribaDev\venv`, installs dependencies (with CUDA support if an NVIDIA GPU is present, ~1.3 GB), downloads the Whisper model (~1.6 GB on first run), puts the `scribadev` command on your PATH and finishes by running `scribadev doctor`.
 
 ```powershell
 git clone https://github.com/allanrmartins/ScribaDev.git
@@ -74,9 +87,11 @@ cd ScribaDev
 powershell -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 
-**Option B — without git:** on GitHub, click **Code → Download ZIP**, extract it, open a PowerShell in the extracted folder and run `powershell -ExecutionPolicy Bypass -File .\setup.ps1`.
+On macOS, the equivalent is `./setup.sh`. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-> 💡 **Diarization** (splitting turns into *Participante 1/2/3*) is **optional** and installed separately. If it shows as `dependências ausentes` ("dependencies missing") in the **Services** panel, just follow [Speaker separation](#speaker-separation-optional).
+**Without git (ZIP):** on GitHub, click **Code → Download ZIP**, extract it, open a PowerShell in the extracted folder and run `powershell -ExecutionPolicy Bypass -File .\setup.ps1`.
+
+> 💡 **Diarization** (splitting turns into *Participante 1/2/3*) is **optional**. With the installer, the wizard handles it; on source installs, follow [Speaker separation](#speaker-separation-optional) if it shows as `dependências ausentes` in the **Services** panel.
 
 ### Where files live
 
@@ -93,7 +108,9 @@ All output folders are **created automatically on first use** — nothing to cre
 
 The installed version shows in the **title bar** and on the window **cover** (and in `scribadev --version`).
 
-**With git (Option A)** — update with one command:
+**Installer (Option A)**: when a new version is out, the cover shows a notice with a **Download** button pointing at your OS's installer. Install over the old one — **config, notes and recordings are preserved**.
+
+**Source with git (Option B)** — update with one command:
 
 ```powershell
 scribadev update --check    # only check whether a new version exists
@@ -156,8 +173,15 @@ On first run, the **profile assistant** opens by itself: describe your role, are
 | `scribadev autostart on\|off` | shortcut in the Windows Startup folder |
 | `scribadev shortcut` | (re)create the Desktop and Start Menu shortcuts |
 | `scribadev purge` | delete already-transcribed recordings past the retention window (`--days N` overrides, `--dry-run` lists only) |
+| `scribadev search "terms"` | search indexed meetings (full-text, `--client`, `--participant`, dates); `--json` for AI agents |
+| `scribadev show <id-or-folder>` | print a meeting's note (`--transcript` for the transcript; `--json` for agents) |
+| `scribadev reindex` | rebuild the search index from the recording folders |
 
 Tray menu: **Record now/Stop** (covers in-person meetings and apps outside detection), **Theme** (quick switch between themes), **Open meetings/notes folder**, **Process pending** (resumes work interrupted by a shutdown) and **Quit**.
+
+### Ask about your meetings in Claude Code
+
+The repo ships the **`scriba-reunioes`** skill (`.claude/skills/`): open [Claude Code](https://claude.com/claude-code) in the project folder and ask in natural language — *"what was my last meeting with client X?"*, *"what's still pending from yesterday's call?"* — and the AI queries the local index via `scribadev search --json` / `show`. Everything stays on your machine. To use the skill from **any folder**, create a junction/symlink to it in `~/.claude/skills/`.
 
 ## Output (`notas.md`)
 
