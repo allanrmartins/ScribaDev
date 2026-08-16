@@ -1,0 +1,59 @@
+# Spec do PyInstaller p/ o instalador Windows (#141/#142 do épico #138).
+#
+# UM dist com DOIS executáveis compartilhando o mesmo _internal:
+#   - scribadev.exe      (console)  — a CLI de sempre (run/doctor/search/...)
+#   - ScribaDevApp.exe   (windowed) — entry da bandeja (scriba.cli:main_tray),
+#     sem janela de console; é o alvo dos atalhos/autostart do instalador.
+#
+# Build CPU-FIRST ENXUTO (decisão do épico): torch/pyannote/CUDA ficam FORA —
+# a diarização é baixada sob demanda pelo wizard (Expressa/Avançada). Validado
+# na PoC (issue #141): 459 MB, transcrição CPU real OK (PyAV decodifica áudio
+# sem torch; o hook padrão do PyAV embarca as DLLs do ffmpeg).
+#
+# Rode via installer/windows/build.ps1 (usa a venv do app, que tem as deps).
+
+from pathlib import Path
+
+REPO = Path(SPECPATH).resolve().parents[1]  # installer/windows -> raiz do repo
+
+_excludes = [
+    # deps pesadas baixadas sob demanda (wizard do 1º uso), nunca no bundle
+    "torch", "torchaudio", "torchcodec", "pyannote", "pyannote.audio", "triton",
+]
+
+_common = dict(
+    pathex=[str(REPO)],
+    datas=[(str(REPO / "scriba" / "assets"), "scriba/assets")],
+    hiddenimports=[],
+    excludes=_excludes,
+    noarchive=False,
+)
+
+a_cli = Analysis([str(Path(SPECPATH) / "entry_cli.py")], **_common)
+a_tray = Analysis([str(Path(SPECPATH) / "entry_tray.py")], **_common)
+
+pyz_cli = PYZ(a_cli.pure)
+pyz_tray = PYZ(a_tray.pure)
+
+ICON = str(REPO / "scriba" / "assets" / "scriba.ico")
+
+exe_cli = EXE(
+    pyz_cli, a_cli.scripts, [],
+    exclude_binaries=True,
+    name="scribadev",
+    console=True,
+    icon=ICON,
+)
+exe_tray = EXE(
+    pyz_tray, a_tray.scripts, [],
+    exclude_binaries=True,
+    name="ScribaDevApp",
+    console=False,   # windowed: bandeja/GUI sem console (equivale ao pythonw)
+    icon=ICON,
+)
+
+coll = COLLECT(
+    exe_cli, a_cli.binaries, a_cli.datas,
+    exe_tray, a_tray.binaries, a_tray.datas,
+    name="scribadev",
+)

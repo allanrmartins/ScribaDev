@@ -14,6 +14,9 @@ meetings/
 # exceção: fixtures de teste versionadas (áudio sintético curto, épico #104)
 !tests/fixtures/**/*.wav
 
+# Instalador (artefatos de build; build/ e dist/ já cobertos acima)
+installer/windows/out/
+
 # Claude Code
 .claude/settings.local.json
 .claude/worktrees/
