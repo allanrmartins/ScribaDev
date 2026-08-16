@@ -8,7 +8,8 @@
 # Saída: <OutDir>\ScribaDev-<versao>-setup.exe  (default: installer\windows\out)
 
 param(
-    [string]$OutDir = ""
+    [string]$OutDir = "",
+    [string]$Python = ""   # CI (#145): python do runner; vazio = venv do app local
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,8 +17,9 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repo = (Resolve-Path (Join-Path $here "..\..")).Path
 if (-not $OutDir) { $OutDir = Join-Path $here "out" }
 
-$py = Join-Path $env:LOCALAPPDATA "ScribaDev\venv\Scripts\python.exe"
-if (-not (Test-Path $py)) { throw "venv do app nao encontrada em $py (rode o setup.ps1 primeiro)" }
+if ($Python) { $py = $Python }
+else { $py = Join-Path $env:LOCALAPPDATA "ScribaDev\venv\Scripts\python.exe" }
+if (-not (Test-Path $py)) { throw "python nao encontrado em $py (rode o setup.ps1 primeiro, ou passe -Python)" }
 
 $iscc = Get-Command iscc -ErrorAction SilentlyContinue
 if ($iscc) { $iscc = $iscc.Source }

@@ -609,7 +609,24 @@ class ScribaApp:
         self.wizard_win.show()
 
     def _maybe_offer_wizard(self) -> None:
-        """Primeiro uso (sem prompt.md): oferece o assistente de perfil uma única vez."""
+        """Primeiro uso: numa instalação CONGELADA sem setup concluído, o wizard de
+        1º uso (#147: análise da máquina + downloads) vem PRIMEIRO e, ao terminar,
+        encadeia a oferta do assistente de perfil. Fora disso, só o de perfil."""
+        try:
+            from .qt.setup_wizard import SetupWizardWindow, should_run
+
+            if should_run():
+                log.info("instalação por instalador sem setup — abrindo o wizard de 1º uso")
+                self._setup_wizard = SetupWizardWindow(
+                    self, on_finish=self._maybe_offer_profile_wizard)
+                self._setup_wizard.show()
+                return
+        except Exception:
+            log.exception("não consegui abrir o wizard de 1º uso")
+        self._maybe_offer_profile_wizard()
+
+    def _maybe_offer_profile_wizard(self) -> None:
+        """Sem prompt.md: oferece o assistente de perfil uma única vez."""
         try:
             from .promptgen import should_offer_on_boot
 

@@ -257,8 +257,11 @@ With **diarization** on, the other participants come out as **Participante 1/2/3
    & $py -m pip install "pyannote.audio>=4,<5"
    ```
 
-2. Create a free read token at [hf.co/settings/tokens](https://huggingface.co/settings/tokens) and **accept the terms** on [speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) (what pyannote 4.x actually uses), [speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) and [segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0);
-3. In the **Gravação** tab: enable "Separar participantes por voz" and paste the token. The model downloads once; everything else is offline.
+2. **Accept the terms of the three models** (free, but gated): sign in — or create a free account — on Hugging Face and, on each of these pages, fill the short form and click **"Agree and access repository"**: [speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) (what pyannote 4.x actually uses), [speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) and [segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0);
+3. **Generate an access token** at [hf.co/settings/tokens](https://huggingface.co/settings/tokens): click **"Create new token"**, pick the **Read** type (enough), name it (e.g. `scriba`) and click **"Create token"**. Copy the value — it starts with `hf_` and is **shown only once**;
+4. In the **Gravação** tab: enable "Separar participantes por voz" and paste the token. The model downloads once; everything else is offline.
+
+> 💡 When installed via the **installer** (setup.exe/DMG), the **first-run wizard** walks you through these steps — including the torch/pyannote download — no PowerShell needed.
 
 ## Privacy
 

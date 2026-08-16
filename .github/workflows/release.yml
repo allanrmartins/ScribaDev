@@ -1,0 +1,37 @@
+# CI de release (#145 do épico #138): quando um GitHub Release é PUBLICADO
+# (o ritual continua: bump -> tag -> Release; o Gist só depois dos anexos),
+# constrói o instalador Windows com o MESMO build.ps1 do build local e anexa
+# setup.exe + SHA256 ao Release. O job macOS (.dmg) entra com a issue #143.
+name: release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write   # anexar assets ao Release
+
+jobs:
+  installer-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar deps do projeto + PyInstaller
+        run: |
+          pip install -e .
+          pip install pyinstaller
+      - name: Instalar Inno Setup 6
+        run: choco install innosetup -y --no-progress
+      - name: Build do instalador (PyInstaller + ISCC)
+        run: powershell -ExecutionPolicy Bypass -File installer\windows\build.ps1 -Python (Get-Command python).Source
+      - name: Checksum SHA256
+        run: |
+          $exe = Get-ChildItem installer\windows\out\*.exe | Select-Object -First 1
+          (Get-FileHash $exe -Algorithm SHA256).Hash + "  " + $exe.Name | Out-File -Encoding ascii "$($exe.FullName).sha256"
+      - name: Anexar ao Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" (Get-ChildItem installer\windows\out\* | ForEach-Object FullName) --clobber

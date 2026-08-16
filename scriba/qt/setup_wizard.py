@@ -56,7 +56,10 @@ _MODELS = (
     ("large-v3-turbo", "a melhor qualidade (GPU/Apple Silicon)"),
 )
 
+# os TRÊS modelos gated: o community-1 é o que o pyannote 4.x realmente usa; o
+# 3.1 e o segmentation seguem no fluxo (fallback/config antiga) — mesma lista do README
 HF_TERMS_URLS = (
+    "https://huggingface.co/pyannote/speaker-diarization-community-1",
     "https://huggingface.co/pyannote/speaker-diarization-3.1",
     "https://huggingface.co/pyannote/segmentation-3.0",
 )
@@ -214,11 +217,11 @@ class SetupWizardWindow(QWidget):
         lay.addSpacing(10)
         self._step_row(
             lay, 1,
-            "<b>Aceite os termos dos dois modelos.</b><br>"
-            "Entre (ou crie uma conta gratuita) no Hugging Face; em cada uma das duas "
+            "<b>Aceite os termos dos três modelos.</b><br>"
+            "Entre (ou crie uma conta gratuita) no Hugging Face; em cada uma das "
             "páginas que vão abrir, preencha o formulário curto e clique em "
             "<b>\"Agree and access repository\"</b>.",
-            "Abrir as duas páginas", lambda: [webbrowser.open(u) for u in HF_TERMS_URLS])
+            "Abrir as três páginas", lambda: [webbrowser.open(u) for u in HF_TERMS_URLS])
         self._step_row(
             lay, 2,
             "<b>Gere um token de acesso.</b><br>"
