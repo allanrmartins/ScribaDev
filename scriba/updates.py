@@ -130,10 +130,26 @@ def update_available(timeout: float = 4.0) -> str | None:
     return latest if _is_newer(__version__, latest) else None
 
 
+# Campos OPCIONAIS do manifesto com o instalador por SO (#144/épico #138). Instalações
+# git antigas só leem "version"/"url" e seguem funcionando (retrocompatível); quando o
+# campo do SO existe, o "Baixar" cai DIRETO no arquivo certo em vez da página de releases.
+_INSTALLER_KEYS = {"win32": "installer_win", "darwin": "installer_mac"}
+
+
 def download_url() -> str:
-    """Link de download/instruções do manifesto (fallback: página de releases)."""
-    info = latest_info()
-    return (info or {}).get("url") or RELEASES_PAGE
+    """Link de download p/ ESTA instalação: o instalador do SO quando o manifesto o
+    publica (installer_win/installer_mac), senão o `url` genérico do manifesto,
+    senão a página de releases."""
+    info = latest_info() or {}
+    key = _INSTALLER_KEYS.get(sys.platform)
+    return (info.get(key) if key else None) or info.get("url") or RELEASES_PAGE
+
+
+def is_frozen_install() -> bool:
+    """True rodando do bundle congelado do PyInstaller (instalador #142) — não há
+    fonte nem venv: atualizar = baixar e rodar o instalador novo (que preserva os
+    dados do usuário). A UI/CLI usam isto p/ diagnóstico e mensagens."""
+    return bool(getattr(sys, "frozen", False))
 
 
 # -- aplicação (instalação via git) -----------------------------------------
@@ -190,6 +206,9 @@ def apply_git_update() -> tuple[bool, str]:
     pyproject mudou. Retorna (ok, mensagem). Sem git → (False, instrução p/ baixar)."""
     root = repo_root()
     if root is None:
+        if is_frozen_install():
+            return (False, "Instalação por instalador: baixe e rode o instalador novo "
+                    "(seus dados e notas são preservados):\n" + download_url())
         return (False, "Instalação sem git (ZIP/binário). Baixe a nova versão em:\n" + download_url())
     try:
         before = _git(root, "rev-parse", "HEAD").stdout.strip()

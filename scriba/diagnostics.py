@@ -102,6 +102,7 @@ def environment_report() -> str:
     return "\n".join([
         f"ScribaDev versao : {__version__}",
         f"Instalacao git   : {updates.is_git_install()}",
+        f"Instalador (exe) : {updates.is_frozen_install()}",
         f"Python           : {sys.version.split()[0]}",
         f"SO               : {platform.platform()}",
         f"GPU NVIDIA       : {gpu}",

@@ -593,7 +593,8 @@ def cmd_update(args) -> int:
         if updates.is_git_install():
             print("  rode `scribadev update` (sem --check) para aplicar via git pull.")
         else:
-            print("  baixe em: " + updates.RELEASES_PAGE)
+            # instalador (#144) ou ZIP: o manifesto pode apontar o instalador do SO
+            print("  baixe em: " + updates.download_url())
         return 0
     ok, msg = updates.apply_git_update()
     print(msg)

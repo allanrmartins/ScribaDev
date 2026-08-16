@@ -78,6 +78,47 @@ class ManifestTests(unittest.TestCase):
         up._http_json = lambda url, timeout: {"version": up.__version__}
         self.assertIsNone(up.update_available())  # igual → nada novo
 
+    def test_download_url_prefere_instalador_do_so(self):
+        """#144: com installer_win/installer_mac no manifesto, o 'Baixar' cai direto
+        no instalador do SO; sem os campos (manifesto antigo), segue no url genérico."""
+        key = up._INSTALLER_KEYS.get(sys.platform)
+        manifest = {"version": "9.9.9", "url": "http://generico",
+                    "installer_win": "http://win.exe", "installer_mac": "http://mac.dmg"}
+        up._http_json = lambda url, timeout: dict(manifest)
+        if key:  # win32/darwin: campo do SO vence
+            self.assertEqual(up.download_url(), manifest[key])
+        else:    # linux: sem campo próprio, url genérico
+            self.assertEqual(up.download_url(), "http://generico")
+        # manifesto antigo (sem os campos novos) → retrocompatível
+        up._http_json = lambda url, timeout: {"version": "9.9.9", "url": "http://generico"}
+        self.assertEqual(up.download_url(), "http://generico")
+
+
+class FrozenInstallTests(unittest.TestCase):
+    def test_is_frozen_install(self):
+        self.assertFalse(up.is_frozen_install())  # rodando do fonte
+        sys.frozen = True
+        try:
+            self.assertTrue(up.is_frozen_install())
+        finally:
+            del sys.frozen
+
+    def test_apply_em_instalacao_congelada_instrui_instalador(self):
+        """Congelado não tem git: apply_git_update explica baixar o instalador novo
+        (dados preservados) em vez da mensagem genérica de ZIP."""
+        orig_root, orig_http = up.repo_root, up._http_json
+        up._http_json = lambda url, timeout: {"version": "9.9.9", "url": "http://generico"}
+        sys.frozen = True
+        try:
+            up.repo_root = lambda: None
+            ok, msg = up.apply_git_update()
+            self.assertFalse(ok)
+            self.assertIn("instalador", msg)
+            self.assertIn("preservados", msg)
+        finally:
+            del sys.frozen
+            up.repo_root, up._http_json = orig_root, orig_http
+
 
 @unittest.skipUnless(sys.platform == "win32", "launcher pythonw/pythonww e paths C:\\ são do Windows")
 class PipInterpreterTests(unittest.TestCase):
