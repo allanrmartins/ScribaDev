@@ -16,6 +16,7 @@ meetings/
 
 # Instalador (artefatos de build; build/ e dist/ já cobertos acima)
 installer/windows/out/
+installer/macos/out/
 
 # Claude Code
 .claude/settings.local.json

@@ -1,12 +1,17 @@
-# CI de release (#145 do épico #138): quando um GitHub Release é PUBLICADO
-# (o ritual continua: bump -> tag -> Release; o Gist só depois dos anexos),
-# constrói o instalador Windows com o MESMO build.ps1 do build local e anexa
-# setup.exe + SHA256 ao Release. O job macOS (.dmg) entra com a issue #143.
+# CI de release (#145/#143 do épico #138).
+#
+# Dois gatilhos:
+# - release published: builda os instaladores (Windows setup.exe + macOS DMG),
+#   roda smokes no binário congelado e ANEXA tudo ao Release com SHA256.
+#   O ritual do Allan continua: bump -> tag -> Release -> (CI anexa) -> Gist.
+# - workflow_dispatch: mesmo build+smoke SEM Release (artefatos ficam no run) —
+#   p/ validar mudanças de empacotamento sem publicar nada.
 name: release
 
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: write   # anexar assets ao Release
@@ -27,11 +32,64 @@ jobs:
         run: choco install innosetup -y --no-progress
       - name: Build do instalador (PyInstaller + ISCC)
         run: powershell -ExecutionPolicy Bypass -File installer\windows\build.ps1 -Python (Get-Command python).Source
+      - name: Smoke no binário congelado
+        run: |
+          $exe = "installer\windows\dist\scribadev\scribadev.exe"
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { throw "--version falhou" }
+          $json = & $exe search --json --limit 1
+          if ($LASTEXITCODE -ne 0) { throw "search --json falhou" }
+          $json | python -c "import json,sys; json.load(sys.stdin)"
       - name: Checksum SHA256
         run: |
           $exe = Get-ChildItem installer\windows\out\*.exe | Select-Object -First 1
           (Get-FileHash $exe -Algorithm SHA256).Hash + "  " + $exe.Name | Out-File -Encoding ascii "$($exe.FullName).sha256"
       - name: Anexar ao Release
+        if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ github.event.release.tag_name }}" (Get-ChildItem installer\windows\out\* | ForEach-Object FullName) --clobber
+      - name: Artefato do run (workflow_dispatch)
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: instalador-windows
+          path: installer/windows/out/*
+
+  installer-macos:
+    # runner arm64 (mesmo do job test-macos); PyInstaller NÃO faz build cruzado,
+    # por isso o DMG nasce aqui e não na máquina do dev (#143)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar deps do projeto + PyInstaller
+        run: |
+          pip install -e .
+          pip install pyinstaller
+      - name: Build do .app + DMG
+        run: bash installer/macos/build.sh
+        env:
+          PYTHON: python
+      - name: Smoke no binário congelado (CLI dentro do .app)
+        run: |
+          CLI="installer/macos/dist/ScribaDev.app/Contents/MacOS/scribadev"
+          "$CLI" --version
+          "$CLI" search --json --limit 1 | python -c "import json,sys; json.load(sys.stdin)"
+      - name: Checksum SHA256
+        run: |
+          DMG=$(ls installer/macos/out/*.dmg | head -1)
+          shasum -a 256 "$DMG" | awk '{print $1 "  " "'$(basename "$DMG")'"}' > "$DMG.sha256"
+      - name: Anexar ao Release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" installer/macos/out/* --clobber
+      - name: Artefato do run (workflow_dispatch)
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: instalador-macos
+          path: installer/macos/out/*
