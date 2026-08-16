@@ -71,11 +71,14 @@ Download from the [Releases page](https://github.com/allanrmartins/ScribaDev/rel
 
 On first launch, the **first-run wizard** analyzes your machine (GPU, memory, disk) and recommends the best setup:
 
+- The first page is **the ground rules**: tell the other participants before you record, and check the rules that apply to you (same as [Legal notice](#legal-notice));
 - **Express install** accepts the recommendations and downloads everything at once (Whisper model, CUDA libraries if you have an NVIDIA GPU);
 - **Advanced install** lets you pick the transcription model (tiny → large-v3-turbo, with size and speed for each) and the components;
 - **Speaker separation** (pyannote) has a guided walkthrough to accept the terms and create the Hugging Face token — and can be **skipped** and enabled later in Settings.
 
 <p align="center">
+  <img src="docs/setup_combinado.png" alt="ScribaDev — first-run wizard: the ground rules before recording" width="560">
+  <br><br>
   <img src="docs/setup_maquina.png" alt="ScribaDev — first-run wizard: machine analysis and Express/Advanced choice" width="560">
   <br><br>
   <img src="docs/setup_vozes.png" alt="ScribaDev — first-run wizard: pyannote terms and token walkthrough" width="560">
@@ -331,7 +334,7 @@ Supported since **v1.4.0** (macOS 14.2+, Apple Silicon), contributed by [@dineia
 
 ## Legal notice
 
-ScribaDev records **locally** the audio entering and leaving your machine, without notifying the other participants (no bot joins the call). Call-recording laws vary by country, and company/client policies may require explicit consent. **Check the rules that apply to you before using it — you are responsible for how you use this tool.**
+ScribaDev records **locally** the audio entering and leaving your machine, without notifying the other participants (no bot joins the call). Call-recording laws vary by country, and company/client policies may require explicit consent. **Check the rules that apply to you before using it — you are responsible for how you use this tool.** The first-run wizard opens with these ground rules, so they don't live only in this README.
 
 ## Known limitations
 

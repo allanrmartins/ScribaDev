@@ -4,11 +4,12 @@ Não confundir com o wizard de PERFIL (wizard_ui.py, prompt.md/hotwords). Este
 aqui roda uma vez após a instalação e resolve o que o instalador enxuto (#142)
 deixou de fora, guiado pela sonda de hardware (scriba.sysprobe):
 
-  1. Sua máquina   — retrato + recomendações; escolha Expressa/Avançada
-  2. Modelo        — (só Avançada) tiny…large-v3-turbo com tamanho/velocidade
-  3. Vozes         — termos do pyannote + token HF, SEMPRE skippável
-  4. Downloads     — progresso do que foi escolhido
-  5. Pronto
+  1. Combinado     — uso responsável: avisar a sala antes de gravar
+  2. Sua máquina   — retrato + recomendações; escolha Expressa/Avançada
+  3. Modelo        — (só Avançada) tiny…large-v3-turbo com tamanho/velocidade
+  4. Vozes         — termos do pyannote + token HF, SEMPRE skippável
+  5. Downloads     — progresso do que foi escolhido
+  6. Pronto
 
 Expressa = aceita as recomendações e pula direto p/ a página de Vozes (o aceite
 dos termos do HF é inerentemente manual) e então Downloads. Tudo que o wizard
@@ -45,6 +46,11 @@ from . import theme, widgets
 log = logging.getLogger("scriba.qt.setup_wizard")
 
 _STATE_KEY = "setup_wizard_done"
+
+# índices das páginas no QStackedWidget: o fluxo salta entre elas (Expressa pula o
+# modelo, o skip de vozes cai direto no download) e um número solto no meio do
+# código desalinha em silêncio quando entra uma página nova.
+_P_DEAL, _P_MACHINE, _P_MODEL, _P_VOICES, _P_DOWNLOAD, _P_READY = range(6)
 
 # (modelo, rótulo de velocidade) na ordem do combo — tamanhos de download vêm de
 # sysprobe.MODEL_DOWNLOAD_MB
@@ -107,11 +113,12 @@ class SetupWizardWindow(QWidget):
         root.setSpacing(10)
         self._stack = QStackedWidget()
         root.addWidget(self._stack, 1)
-        self._stack.addWidget(self._page_machine())   # 0
-        self._stack.addWidget(self._page_model())     # 1
-        self._stack.addWidget(self._page_voices())    # 2
-        self._stack.addWidget(self._page_download())  # 3
-        self._stack.addWidget(self._page_ready())     # 4
+        self._stack.addWidget(self._page_deal())      # _P_DEAL
+        self._stack.addWidget(self._page_machine())   # _P_MACHINE
+        self._stack.addWidget(self._page_model())     # _P_MODEL
+        self._stack.addWidget(self._page_voices())    # _P_VOICES
+        self._stack.addWidget(self._page_download())  # _P_DOWNLOAD
+        self._stack.addWidget(self._page_ready())     # _P_READY
 
         self._progress.connect(self._append_progress)
         self._progress_frac.connect(self._bar.setValue)
@@ -141,6 +148,46 @@ class SetupWizardWindow(QWidget):
         b = widgets.ModernButton(next_label, next_cb, kind="primary")
         row.addWidget(b)
         lay.addLayout(row)
+
+    def _page_deal(self) -> QWidget:
+        """Página 1: o combinado de uso. Sem checkbox, sem gate e sem estado - o app
+        não tem como saber se a sala foi avisada, e travar o wizard num "li e aceito"
+        não avisaria ninguém. O que dá para fazer é dizer isso de frente, uma vez,
+        antes da primeira gravação: quem instala pelo .exe dificilmente lê o aviso
+        legal do README, e a captura é justamente a que não aparece na call."""
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        self._title(lay, "Primeiro, um combinado",
+                    "O ScribaDev grava direto da sua máquina, sem nenhum bot entrar na "
+                    "reunião. Isso é ótimo para a sua privacidade - e é justamente por "
+                    "isso que ninguém percebe sozinho. Essa parte fica com você.")
+        t = theme.active()
+        lay.addSpacing(6)
+        body = QLabel(
+            "<ul>"
+            "<li><b>Avise no começo da call.</b> Um \"vou gravar para gerar a ata, "
+            "tudo bem?\" resolve, e quase sempre a resposta é sim.</li>"
+            "<li><b>Se alguém não estiver confortável, não grave.</b> O × na pílula "
+            "descarta a gravação na hora, e nas Configurações dá para desligar a "
+            "gravação automática e gravar só quando você quiser.</li>"
+            "<li><b>Veja as regras do seu contexto.</b> As leis sobre gravar conversas "
+            "mudam de país para país, e empresa ou cliente podem ter política própria "
+            "e NDA. Vale conferir antes da primeira call.</li>"
+            "<li><b>A ata é da conversa toda, não só sua.</b> Trate as notas e a "
+            "transcrição com o mesmo cuidado que você trata a reunião.</li>"
+            "</ul>")
+        body.setWordWrap(True)
+        body.setTextFormat(Qt.RichText)
+        lay.addWidget(body)
+        lay.addSpacing(4)
+        closing = QLabel("Combinado assim? Então vamos configurar o resto.")
+        closing.setWordWrap(True)
+        closing.setStyleSheet(f"color:{t.muted};")
+        lay.addWidget(closing)
+        lay.addStretch(1)
+        self._nav(lay, next_label="Entendi, combinado",
+                  next_cb=lambda: self._stack.setCurrentIndex(_P_MACHINE))
+        return w
 
     def _page_machine(self) -> QWidget:
         w = QWidget()
@@ -180,8 +227,8 @@ class SetupWizardWindow(QWidget):
             self._model_radios[name] = rb
             lay.addWidget(rb)
         lay.addStretch(1)
-        self._nav(lay, back=lambda: self._stack.setCurrentIndex(0),
-                  next_cb=lambda: self._stack.setCurrentIndex(2))
+        self._nav(lay, back=lambda: self._stack.setCurrentIndex(_P_MACHINE),
+                  next_cb=lambda: self._stack.setCurrentIndex(_P_VOICES))
         return w
 
     def _step_row(self, lay, num: int, html: str, btn_label: str = "", btn_cb=None) -> None:
@@ -323,14 +370,14 @@ class SetupWizardWindow(QWidget):
         # pyannote são inerentemente manuais → a página de Vozes aparece SEMPRE
         # que a diarização não for desaconselhada
         if not self.express:
-            self._stack.setCurrentIndex(1)
+            self._stack.setCurrentIndex(_P_MODEL)
         elif self.rec and self.rec.diarization == "desaconselhada":
             self._skip_voices()
         else:
-            self._stack.setCurrentIndex(2)
+            self._stack.setCurrentIndex(_P_VOICES)
 
     def _voices_back(self) -> None:
-        self._stack.setCurrentIndex(0 if self.express else 1)
+        self._stack.setCurrentIndex(_P_MACHINE if self.express else _P_MODEL)
 
     def _selected_model(self) -> str:
         for name, rb in self._model_radios.items():
@@ -370,7 +417,7 @@ class SetupWizardWindow(QWidget):
 
     def _start_downloads(self) -> None:
         self._save_config()
-        self._stack.setCurrentIndex(3)
+        self._stack.setCurrentIndex(_P_DOWNLOAD)
         self._dl_summary.setText("Vai baixar: " + "; ".join(self._plan()) + ".")
         if self._inline_bg:
             self._download_worker()
@@ -490,7 +537,7 @@ class SetupWizardWindow(QWidget):
         voices = "pulada (ative nas Configurações)" if self.skip_voices else "ativada"
         self._ready_box.setText(
             f"Transcrição: <b>{model}</b> · Separação de vozes: <b>{voices}</b>.{extra}")
-        self._stack.setCurrentIndex(4)
+        self._stack.setCurrentIndex(_P_READY)
 
     # ------------------------------------------------------------ persistência --
 
