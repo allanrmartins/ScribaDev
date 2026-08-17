@@ -263,3 +263,25 @@ class WizardTimesheetTests(unittest.TestCase):
             cfg.timesheet, enabled=True)))
         win = WizardWindow()
         self.assertIsNone(win._timesheet_opt)
+
+    def test_janela_apertada_nao_come_o_texto_do_card(self):
+        """Regressão (texto comido, report de usuário): com a janela na altura MÍNIMA,
+        os labels com word-wrap (card do apontamento e cabeçalho) recebem a altura que
+        o texto pede — o aperto vai p/ a prévia (que tem scroll), nunca corta o texto."""
+        from PySide6.QtWidgets import QApplication, QLabel
+
+        from scriba.qt.wizard_ui import WizardWindow
+
+        win = WizardWindow()
+        win.resize(win.minimumWidth(), win.minimumHeight())
+        win.show()
+        self.addCleanup(win.close)
+        QApplication.processEvents()
+        wrapped = [lb for lb in win.findChildren(QLabel)
+                   if lb.wordWrap() and lb.text().startswith(("Reuniões processadas",
+                                                              "Descreva seu perfil",
+                                                              "Ao gerar com IA"))]
+        self.assertEqual(len(wrapped), 3)   # card + subtítulo + aviso de IA presentes
+        for lb in wrapped:
+            with self.subTest(texto=lb.text()[:30]):
+                self.assertGreaterEqual(lb.height(), lb.heightForWidth(lb.width()))

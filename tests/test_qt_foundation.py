@@ -77,6 +77,19 @@ class QtWidgetSmokeTests(unittest.TestCase):
         c.setChecked(False); c._anim.stop(); c.set_fill(0.0)
         c.repaint()
 
+    def test_animated_checkbox_nao_come_o_texto(self):
+        """Regressão (texto comido no Log): o texto é pintado à mão a partir de
+        _BOX+_GAP, então o sizeHint precisa cobrir ESSA geometria (o herdado usava o
+        indicador do estilo, mais estreito) e o layout não pode encolher abaixo dela."""
+        from scriba.qt.widgets import AnimatedCheckBox
+
+        for texto in ("auto-atualizar", "Dia", "Hora ≥"):
+            with self.subTest(texto=texto):
+                c = AnimatedCheckBox(texto)
+                need = c._BOX + c._GAP + c.fontMetrics().horizontalAdvance(texto)
+                self.assertGreaterEqual(c.sizeHint().width(), need)
+                self.assertEqual(c.minimumSizeHint(), c.sizeHint())
+
     def test_stepper(self):
         from scriba.qt.widgets import Stepper
 

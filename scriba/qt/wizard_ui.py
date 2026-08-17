@@ -52,11 +52,13 @@ class WizardWindow(QWidget):
 
         h = QLabel("Atas na língua da sua profissão")
         h.setStyleSheet(f"font-size:{theme.zpt(13)}pt; font-weight:bold;"); root.addWidget(h)
-        sub = QLabel("Descreva seu perfil e o ScribaDev escreve as instruções (prompt.md) que moldam o "
-                     "resumo das suas reuniões — e o vocabulário que guia a transcrição. Você revisa antes.")
-        sub.setProperty("role", "muted"); sub.setWordWrap(True); root.addWidget(sub)
-        warn = QLabel("Ao gerar com IA, os dados deste formulário são enviados ao provedor de IA configurado.")
-        warn.setProperty("role", "warn"); warn.setWordWrap(True); warn.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
+        # WrapLabel: no aperto o texto embrulhado não pode ser comido pelo layout —
+        # quem cede é a prévia, que tem scroll próprio
+        sub = widgets.WrapLabel("Descreva seu perfil e o ScribaDev escreve as instruções (prompt.md) que moldam o "
+                                "resumo das suas reuniões — e o vocabulário que guia a transcrição. Você revisa antes.")
+        sub.setProperty("role", "muted"); root.addWidget(sub)
+        warn = widgets.WrapLabel("Ao gerar com IA, os dados deste formulário são enviados ao provedor de IA configurado.")
+        warn.setProperty("role", "warn"); warn.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
         root.addWidget(warn)
 
         base_row = QHBoxLayout()
@@ -102,11 +104,10 @@ class WizardWindow(QWidget):
             cl.setSpacing(4)
             ct = QLabel("Novo: apontamento de horas (opcional)")
             ct.setStyleSheet(f"font-weight:bold; color:{t.warn};")
-            cd = QLabel("Reuniões processadas viram sugestões de apontamento (cliente, horários, "
-                        "descrição), com entrada manual e exportação Excel. Ativar cria o banco "
-                        "local timesheet.db; sem ativar, nada roda nem é criado.")
+            cd = widgets.WrapLabel("Reuniões processadas viram sugestões de apontamento (cliente, horários, "
+                                   "descrição), com entrada manual e exportação Excel. Ativar cria o banco "
+                                   "local timesheet.db; sem ativar, nada roda nem é criado.")
             cd.setProperty("role", "muted")
-            cd.setWordWrap(True)
             self._timesheet_opt = widgets.AnimatedCheckBox("Ativar o apontamento de horas ao aplicar")
             cl.addWidget(ct)
             cl.addWidget(cd)
