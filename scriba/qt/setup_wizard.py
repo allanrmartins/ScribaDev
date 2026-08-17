@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-import sys
 import threading
 import webbrowser
 
@@ -103,6 +102,7 @@ class SetupWizardWindow(QWidget):
         self.rec: sysprobe.Recommendation | None = None
         self.express = True
         self.skip_voices = False
+        self._voices_skip_warned = False   # aviso de skip explícito (1 clique) — #154
 
         self.setWindowTitle("ScribaDev - Primeiros passos")
         self.setMinimumSize(620, 520)
@@ -390,27 +390,33 @@ class SetupWizardWindow(QWidget):
         self._start_downloads()
 
     def _accept_voices(self) -> None:
-        self.skip_voices = not bool(self._hf_token.text().strip())
+        token = self._hf_token.text().strip()
+        if not token and not self._voices_skip_warned:
+            # skip EXPLÍCITO (#154): sem token, "Ativar e continuar" pulava as vozes
+            # em silêncio e o usuário achava que tinha mandado baixar. Avisa uma vez;
+            # o 2º clique (ou o token colado) segue em frente.
+            self._voices_skip_warned = True
+            t = theme.active()
+            self._voices_hint.setText(
+                "Sem o token, a separação de vozes FICA DE FORA por enquanto — você baixa "
+                "depois em Configurações → Sobre → Baixar componentes. Clique de novo para "
+                "continuar assim, ou cole o token acima.")
+            self._voices_hint.setStyleSheet(f"color:{t.warn};")
+            return
+        self.skip_voices = not bool(token)
         self._start_downloads()
 
     # ------------------------------------------------------------- downloads --
 
-    # pesos (MB estimados) dos itens de download — a barra avança proporcional a
-    # eles; o modelo tem % REAL por bytes (crescimento do cache HF), os pips avançam
-    # ao concluir o item (o pip não expõe bytes de forma estável)
-    _CUDA_MB = 3000
-    _VOICES_MB = 3000
-
     def _plan_items(self) -> list[tuple[str, str, int]]:
-        """[(chave, rótulo de exibição, peso_mb)] do que será baixado."""
-        model = self._selected_model()
-        model_mb = sysprobe.MODEL_DOWNLOAD_MB.get(model, 1500)
-        items = [("model", f"modelo de transcrição {model} (~{model_mb} MB)", model_mb)]
-        if self.rec and self.rec.needs_cuda_libs and updates.is_frozen_install():
-            items.append(("cuda", "bibliotecas NVIDIA (cuBLAS/cuDNN, ~3 GB)", self._CUDA_MB))
-        if not self.skip_voices:
-            items.append(("voices", "separação de vozes (torch + pyannote, ~3 GB)", self._VOICES_MB))
-        return items
+        """[(chave, rótulo de exibição, peso_mb)] — plano do `scriba.components`
+        (worker compartilhado com as Configurações, #154) a partir das escolhas."""
+        from .. import components
+
+        return components.plan_items(
+            model=self._selected_model(),
+            cuda=bool(self.rec and self.rec.needs_cuda_libs and updates.is_frozen_install()),
+            voices=not self.skip_voices)
 
     def _plan(self) -> list[str]:
         return [label for _k, label, _mb in self._plan_items()]
@@ -425,105 +431,16 @@ class SetupWizardWindow(QWidget):
             threading.Thread(target=self._download_worker, daemon=True,
                              name="setup-downloads").start()
 
-    @staticmethod
-    def _dir_mb(path) -> float:
-        """Tamanho (MB) de uma árvore de diretório; 0 em qualquer erro. Base do %
-        real do modelo: mede o CRESCIMENTO do cache HF durante o download — robusto
-        a versão de lib (nada de depender de tqdm interno do huggingface_hub)."""
-        from pathlib import Path
-
-        try:
-            return sum(f.stat().st_size for f in Path(path).rglob("*") if f.is_file()) / 1048576
-        except Exception:
-            return 0.0
-
-    def _model_cache_dir(self, model: str):
-        """Pasta do cache HF onde o modelo vai cair (existente ou futura)."""
-        from pathlib import Path
-
-        from huggingface_hub.constants import HF_HUB_CACHE
-
-        try:
-            from faster_whisper.utils import _MODELS
-
-            repo = _MODELS.get(model, f"Systran/faster-whisper-{model}")
-        except Exception:
-            repo = f"Systran/faster-whisper-{model}"
-        return Path(HF_HUB_CACHE) / ("models--" + repo.replace("/", "--"))
-
     def _download_worker(self) -> None:
-        """Baixa modelo + extras com % REAL na barra: progresso ponderado pelos MB
-        de cada item; dentro do modelo, bytes medidos pelo crescimento do cache HF
-        (thread de poll). Instalação git/venv: pip na venv; congelada: addons
-        in-process. Erro não trava o wizard - vira aviso e o item fica p/ as
-        Configurações."""
-        import subprocess
-        import time
+        """Delegado ao `scriba.components` (#154): o MESMO worker da seção "Baixar
+        componentes" das Configurações — % real ponderado por MB, pip via addons
+        (congelada) ou venv (git). Erro não trava o wizard: vira aviso e o item
+        fica re-tentável nas Configurações."""
+        from .. import components
 
-        ok_all, notes = True, []
-        emit = self._progress.emit
-        plan = self._plan_items()
-        total_mb = sum(mb for _k, _l, mb in plan) or 1
-        done_mb = 0.0
-
-        def frac(item_done_mb: float) -> None:
-            self._progress_frac.emit(min(1000, int(1000 * (done_mb + item_done_mb) / total_mb)))
-
-        try:
-            for key, _label, weight in plan:
-                frac(0)
-                if key == "model":
-                    model = self._selected_model()
-                    emit(f"baixando o modelo {model}…")
-                    cache = self._model_cache_dir(model)
-                    base = self._dir_mb(cache)
-                    stop = threading.Event()
-
-                    def poll():  # % real por bytes enquanto o download roda
-                        while not stop.wait(0.5):
-                            frac(min(weight, max(0.0, self._dir_mb(cache) - base)))
-
-                    poller = threading.Thread(target=poll, daemon=True, name="dl-poll")
-                    if not self._inline_bg:
-                        poller.start()
-                    try:
-                        from faster_whisper import WhisperModel
-
-                        WhisperModel(model, device="cpu", compute_type="int8")  # baixa/cacheia
-                        emit(f"modelo {model} pronto.")
-                    except Exception as e:
-                        ok_all = False
-                        notes.append(f"modelo: {e}")
-                        emit(f"modelo falhou ({e}) - o app baixa na primeira transcrição.")
-                    finally:
-                        stop.set()
-                else:  # cuda | voices: pip (sem bytes estáveis; a barra salta no fim do item)
-                    extras = (["nvidia-cublas-cu12", "nvidia-cudnn-cu12"] if key == "cuda"
-                              else ["torch", "pyannote.audio>=4,<5"])
-                    emit("instalando componentes: " + ", ".join(extras) + "…")
-                    if updates.is_frozen_install():
-                        from .. import addons
-
-                        ok, msg = addons.install_to_addons(extras, progress=emit)
-                    else:
-                        r = subprocess.run(
-                            [updates._pip_interpreter(sys.executable), "-m", "pip",
-                             "install", *extras],
-                            capture_output=True, text=True, timeout=3600,
-                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-                        ok, msg = r.returncode == 0, (r.stderr or r.stdout or "")[-400:]
-                    if not ok:
-                        ok_all = False
-                        notes.append(f"componentes: {msg}")
-                        emit("componentes falharam - dá para tentar de novo nas Configurações.")
-                    else:
-                        emit("componentes instalados.")
-                done_mb += weight
-                frac(0)
-        except Exception as e:  # rede caiu no meio etc.: wizard nunca trava
-            log.exception("downloads do wizard falharam")
-            ok_all, notes = False, notes + [str(e)]
-        self._done_dl.emit(ok_all, "; ".join(notes))
+        ok, notes = components.run(self._plan_items(), progress=self._progress.emit,
+                                   frac=self._progress_frac.emit, poll=not self._inline_bg)
+        self._done_dl.emit(ok, notes)
 
     def _append_progress(self, line: str) -> None:
         self._dl_log.setText((self._dl_log.text() + "\n" + line).strip())
@@ -532,9 +449,10 @@ class SetupWizardWindow(QWidget):
         self._bar.setValue(1000)
         extra = "" if ok else (
             "<br><br><b>Alguns itens não baixaram</b> - sem problema: o app funciona "
-            f"e você tenta de novo nas Configurações. Detalhe: {notes}")
+            f"e você tenta de novo em Configurações → Sobre → Baixar componentes. Detalhe: {notes}")
         model = self._selected_model()
-        voices = "pulada (ative nas Configurações)" if self.skip_voices else "ativada"
+        voices = ("pulada (baixe depois em Configurações → Sobre)" if self.skip_voices
+                  else "ativada")
         self._ready_box.setText(
             f"Transcrição: <b>{model}</b> · Separação de vozes: <b>{voices}</b>.{extra}")
         self._stack.setCurrentIndex(_P_READY)

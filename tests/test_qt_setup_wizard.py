@@ -164,23 +164,39 @@ class SetupWizardTests(unittest.TestCase):
         # com vozes: modelo + voices (cuda só em instalação congelada)
         w.skip_voices = False
         items = {k: mb for k, _l, mb in w._plan_items()}
-        self.assertIn("model", items)
+        model_key = f"model:{w._selected_model()}"   # chave composta do components (#154)
+        self.assertIn(model_key, items)
         self.assertIn("voices", items)
         self.assertNotIn("cuda", items)     # não-congelado: sem download de CUDA
-        self.assertEqual(items["model"],
+        self.assertEqual(items[model_key],
                          sysprobe.MODEL_DOWNLOAD_MB[w._selected_model()])
         # pulando as vozes, o item some e o total encolhe
         w.skip_voices = True
         self.assertNotIn("voices", [k for k, _l, _mb in w._plan_items()])
 
-    def test_dir_mb_mede_e_degrada(self):
-        from scriba.qt.setup_wizard import SetupWizardWindow as W
+    # -- skip explícito de vozes (#154) ---------------------------------------
+    def test_continuar_sem_token_avisa_antes_de_pular(self):
+        """'Ativar e continuar' sem token não pode pular as vozes em silêncio:
+        1º clique avisa e fica na página; 2º clique segue sem vozes DE PROPÓSITO."""
+        w = self._win()
+        w._from_machine()
+        idx = w._stack.currentIndex()
+        w._accept_voices()                                   # 1º clique: só o aviso
+        self.assertEqual(w._stack.currentIndex(), idx)       # não saiu da página
+        self.assertIn("FICA DE FORA", w._voices_hint.text())
+        w._accept_voices()                                   # 2º clique: segue sem vozes
+        self.qapp.processEvents()
+        self.assertTrue(w.skip_voices)
+        self.assertEqual(w._stack.currentIndex(), self.swz._P_READY)
 
-        d = self.tmp / "cache"
-        d.mkdir()
-        (d / "blob.bin").write_bytes(b"x" * 1048576)   # 1 MB
-        self.assertAlmostEqual(W._dir_mb(d), 1.0, places=2)
-        self.assertEqual(W._dir_mb(self.tmp / "nao-existe"), 0.0)
+    def test_token_colado_apos_o_aviso_ativa_direto(self):
+        w = self._win()
+        w._from_machine()
+        w._accept_voices()                                   # aviso do skip
+        w._hf_token.setText("hf_tok")
+        w._accept_voices()                                   # com token: ativa normal
+        self.qapp.processEvents()
+        self.assertFalse(w.skip_voices)
 
     def test_barra_avanca_com_progress_frac(self):
         w = self._win()

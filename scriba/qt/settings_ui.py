@@ -236,6 +236,10 @@ class SettingsWindow(QWidget):
     _about_ready = Signal(object)     # marshaling da checagem de update (thread -> UI)
     _devices_ready = Signal(object)   # marshaling da enumeração de dispositivos (thread -> UI)
     _ts_done = Signal(str)            # marshaling da ativação/desativação do timesheet (#126)
+    _comp_progress = Signal(str)      # linha de status do download de componentes (#154)
+    _comp_frac = Signal(int)          # 0..1000: % real da barra de componentes
+    _comp_done = Signal(bool, str)    # fim do worker de componentes
+    _inline_bg = False                # testes: roda o worker de componentes na própria thread
 
     def __init__(self, app):
         super().__init__()
@@ -867,7 +871,7 @@ class SettingsWindow(QWidget):
         link = QLabel('Repositório: <a href="https://github.com/allanrmartins/ScribaDev">'
                       'github.com/allanrmartins/ScribaDev</a>')
         link.setOpenExternalLinks(True); lay.addWidget(link)
-        lic = QLabel("Licença: Elastic License 2.0 © Allan Martins")
+        lic = QLabel("Licença: MIT © Allan Martins e contribuidores")
         lic.setProperty("role", "muted"); lay.addWidget(lic)
 
         upd = QHBoxLayout()
@@ -887,9 +891,90 @@ class SettingsWindow(QWidget):
             row = QLabel(f"<b>{label}:</b> {value}")
             row.setWordWrap(True); row.setStyleSheet(f"color:{color}; font-size:{theme.zpt(9)}pt;")
             lay.addWidget(row)
+        self._build_components_section(lay)
         lay.addStretch(1)
         scroll.setWidget(inner); outer.addWidget(scroll)
         self._tabs.addTab(page, "Sobre")
+
+    def _build_components_section(self, lay) -> None:
+        """Seção "Baixar componentes" (#154) — só na instalação CONGELADA (setup.exe):
+        o retry do que o wizard de 1º uso pulou/falhou (o instalador é enxuto de
+        propósito). Na instalação git/venv os extras entram via pip, como sempre."""
+        from .. import updates
+
+        if not updates.is_frozen_install():
+            return
+        import sys as _sys
+
+        head = QLabel("Baixar componentes"); head.setStyleSheet("font-weight:bold; margin-top:8px;")
+        lay.addWidget(head)
+        info = widgets.WrapLabel(
+            "O instalador é enxuto: estes itens são baixados sob demanda. Selecione o que "
+            "faltou (ou o que quer re-baixar) — o app continua funcionando durante o download.")
+        info.setProperty("role", "muted")
+        lay.addWidget(info)
+
+        model = getattr(self.app.cfg.whisper, "model", "small")
+        self._comp_model = widgets.AnimatedCheckBox(f"Modelo de transcrição ({model})")
+        self._comp_cuda = widgets.AnimatedCheckBox("Bibliotecas NVIDIA (cuBLAS/cuDNN, ~3 GB)")
+        self._comp_voices = widgets.AnimatedCheckBox("Separação de vozes (torch + pyannote, ~3 GB)")
+        try:  # default: pré-marca o que está faltando de verdade
+            import importlib.util as ilu
+
+            self._comp_voices.setChecked(ilu.find_spec("pyannote") is None)
+        except Exception:
+            pass
+        lay.addWidget(self._comp_model)
+        if _sys.platform == "win32":
+            lay.addWidget(self._comp_cuda)
+        lay.addWidget(self._comp_voices)
+
+        row = QHBoxLayout()
+        self._comp_btn = widgets.ModernButton("Baixar selecionados", self._download_components,
+                                              kind="primary")
+        row.addWidget(self._comp_btn); row.addStretch(1)
+        lay.addLayout(row)
+        self._comp_bar = QProgressBar(); self._comp_bar.setRange(0, 1000); self._comp_bar.setValue(0)
+        self._comp_bar.setVisible(False)
+        lay.addWidget(self._comp_bar)
+        self._comp_status = widgets.WrapLabel(""); self._comp_status.setProperty("role", "muted")
+        lay.addWidget(self._comp_status)
+
+        self._comp_progress.connect(self._comp_status.setText)
+        self._comp_frac.connect(self._comp_bar.setValue)
+        self._comp_done.connect(self._components_done)
+
+    def _download_components(self) -> None:
+        from .. import components
+
+        plan = components.plan_items(
+            model=(getattr(self.app.cfg.whisper, "model", "small")
+                   if self._comp_model.isChecked() else None),
+            cuda=self._comp_cuda.isChecked(),
+            voices=self._comp_voices.isChecked())
+        if not plan:
+            self._comp_status.setText("Nada selecionado.")
+            return
+        self._comp_btn.setEnabled(False)
+        self._comp_bar.setValue(0); self._comp_bar.setVisible(True)
+        self._comp_status.setText("Baixando: " + "; ".join(l for _k, l, _mb in plan) + "…")
+
+        def work():
+            ok, notes = components.run(plan, progress=self._comp_progress.emit,
+                                       frac=self._comp_frac.emit, poll=not self._inline_bg)
+            self._comp_done.emit(ok, notes)
+
+        if self._inline_bg:
+            work()
+        else:
+            threading.Thread(target=work, daemon=True, name="settings-components").start()
+
+    def _components_done(self, ok: bool, notes: str) -> None:
+        self._comp_btn.setEnabled(True)
+        self._comp_bar.setValue(1000)
+        self._comp_status.setText(
+            "Pronto — componentes instalados e já disponíveis (sem reiniciar)." if ok
+            else f"Alguns itens falharam — dá para tentar de novo. Detalhe: {notes}")
 
     def _about_components(self) -> list:
         import sys
@@ -933,8 +1018,8 @@ class SettingsWindow(QWidget):
             from .. import updates
 
             if updates.is_frozen_install():
-                return ("não instalada — o download da separação de vozes (torch + pyannote) "
-                        "não foi concluído no 1º uso", "err")
+                return ("não instalada — baixe logo abaixo, em \"Baixar componentes\" "
+                        "(separação de vozes)", "err")
             return ("não instalada — falta o extra [diarization] (pyannote + torch)", "err")
         pa = ver("pyannote.audio") or "?"
         dz = self.app.cfg.diarization
