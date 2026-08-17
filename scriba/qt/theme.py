@@ -752,12 +752,24 @@ def _restyle_top_levels(app) -> None:
                 log.exception("restyle_theme falhou em %s", type(w).__name__)
 
 
+def app_icon():
+    """QIcon do app (pergaminho): o .ico multi-resolução quando existe, senão o PNG."""
+    from PySide6.QtGui import QIcon
+
+    ico = util.ICON_ICO
+    return QIcon(str(ico if ico.exists() else util.ICON_PNG))
+
+
 def apply(app, theme: Theme | None = None) -> None:
     """Aplica fonte-base (Inter…) + QSS do tema ao QApplication e re-estiliza as janelas
     abertas (restyle_theme). Idempotente."""
     t = theme or active()
     app.setFont(qfont(t))
     app.setStyleSheet(qss(t))
+    # ícone default de TODA janela top-level (wizard, Notas, Config…): apply() é o
+    # chokepoint comum aos entry points (main, cli, harnesses) — sem isto, janela que
+    # não chama setWindowIcon próprio abre com o ícone genérico do SO
+    app.setWindowIcon(app_icon())
     _restyle_top_levels(app)
 
 

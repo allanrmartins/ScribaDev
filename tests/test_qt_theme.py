@@ -209,6 +209,40 @@ class RestyleContractTests(unittest.TestCase):
         self.assertTrue(ok)                      # a boa ainda rodou
 
 
+@unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")
+class AppIconTests(unittest.TestCase):
+    """theme.apply define o ícone default do QApplication: TODA janela top-level
+    (wizard de 1º uso, Notas, Config…) nasce com o pergaminho. Regressão: o wizard
+    abria com o ícone genérico do Windows porque o ícone era por-janela (só a capa)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_app_icon_resolve_arquivo_existente(self):
+        self.assertFalse(theme.app_icon().isNull())
+
+    def test_apply_define_icone_default_do_app(self):
+        from PySide6.QtGui import QIcon
+
+        self.app.setWindowIcon(QIcon())   # zera (estado pode vir de outro teste)
+        self.assertTrue(self.app.windowIcon().isNull())
+        theme.apply(self.app)
+        self.assertFalse(self.app.windowIcon().isNull())
+
+    def test_janela_sem_icone_proprio_herda_o_do_app(self):
+        from PySide6.QtWidgets import QWidget
+
+        theme.apply(self.app)
+        w = QWidget()
+        w.setWindowTitle("qualquer janela")
+        w.show()
+        self.addCleanup(w.close)
+        self.assertFalse(w.windowIcon().isNull())
+
+
 # -- ícones Fluent vendorizados (#59) -----------------------------------------
 
 # Vocabulário que a fundação promete (scriba/qt/icons/*.svg). Se um nome sumir do
