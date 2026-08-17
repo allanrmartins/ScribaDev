@@ -73,11 +73,14 @@ Baixe na [página de Releases](https://github.com/allanrmartins/ScribaDev/releas
 
 Na primeira abertura, o **wizard de primeiro uso** analisa sua máquina (GPU, memória, disco) e recomenda a melhor configuração:
 
+- A primeira página é **o combinado de uso**: avisar os participantes antes de gravar e conferir as regras do seu contexto (o mesmo do [Aviso legal](#aviso-legal));
 - **Instalação Expressa** aceita as recomendações e baixa tudo de uma vez (modelo Whisper, bibliotecas CUDA se houver GPU NVIDIA);
 - **Instalação Avançada** deixa você escolher o modelo de transcrição (tiny → large-v3-turbo, com tamanho e velocidade de cada um) e os componentes;
 - A **separação de vozes** (pyannote) tem um passo a passo guiado para aceitar os termos e criar o token do Hugging Face — e pode ser **pulada** e ativada depois nas Configurações.
 
 <p align="center">
+  <img src="docs/setup_combinado.png" alt="ScribaDev — wizard de primeiro uso: o combinado de uso antes de gravar" width="560">
+  <br><br>
   <img src="docs/setup_maquina.png" alt="ScribaDev — wizard de primeiro uso: análise da máquina e escolha Expressa/Avançada" width="560">
   <br><br>
   <img src="docs/setup_vozes.png" alt="ScribaDev — wizard de primeiro uso: passo a passo dos termos do pyannote e token" width="560">
@@ -333,7 +336,7 @@ Suporte a partir da **v1.4.0** (macOS 14.2+, Apple Silicon), contribuição do [
 
 ## Aviso legal
 
-O ScribaDev grava **localmente** o áudio que entra e sai da sua máquina, sem avisar os demais participantes (nenhum bot entra na call). As leis sobre gravação de conversas variam por país, e políticas de empresas/clientes podem exigir consentimento explícito. **Verifique as regras do seu contexto antes de usar — a responsabilidade pelo uso é sua.**
+O ScribaDev grava **localmente** o áudio que entra e sai da sua máquina, sem avisar os demais participantes (nenhum bot entra na call). As leis sobre gravação de conversas variam por país, e políticas de empresas/clientes podem exigir consentimento explícito. **Verifique as regras do seu contexto antes de usar — a responsabilidade pelo uso é sua.** O wizard de primeiro uso abre com esse combinado, para ele não ficar só aqui no README.
 
 ## Limitações conhecidas
 

@@ -1,5 +1,5 @@
-"""Testes do wizard de 1º uso (#147): fluxo Expressa/Avançada, skip de vozes,
-persistência no config e gate should_run. Sonda/downloads mockados (determinístico,
+"""Testes do wizard de 1º uso (#147): página do combinado, fluxo Expressa/Avançada,
+skip de vozes, persistência no config e gate should_run. Sonda/downloads mockados (determinístico,
 sem rede); Qt offscreen; APP_DIR/CONFIG_PATH isolados em tempdir.
 
 Roda sem dependências externas:  python -m unittest discover -s tests
@@ -62,7 +62,27 @@ class SetupWizardTests(unittest.TestCase):
             w._download_worker = lambda: w._done_dl.emit(True, "")
         return w
 
-    # -- sonda + recomendação na página 1 ------------------------------------
+    # -- combinado de uso (1ª página) ----------------------------------------
+    def test_pagina_do_combinado_abre_primeiro(self):
+        w = self._win()
+        self.assertEqual(w._stack.currentIndex(), self.swz._P_DEAL)
+
+    def test_combinado_fala_de_avisar_os_participantes_e_segue(self):
+        from PySide6.QtWidgets import QLabel, QPushButton
+
+        w = self._win()
+        page = w._stack.widget(self.swz._P_DEAL)
+        texto = " ".join(lbl.text() for lbl in page.findChildren(QLabel))
+        self.assertIn("Avise no começo da call", texto)
+        self.assertIn("não estiver confortável, não grave", texto)
+        # o botão de aceite leva para a página da máquina (sem gravar estado: o
+        # combinado é informativo, não um gate)
+        btns = [b for b in page.findChildren(QPushButton) if "Entendi" in b.text()]
+        self.assertEqual(len(btns), 1)
+        btns[0].click()
+        self.assertEqual(w._stack.currentIndex(), self.swz._P_MACHINE)
+
+    # -- sonda + recomendação na página da máquina ---------------------------
     def test_probe_prefill(self):
         w = self._win()
         self.assertIn("GPU NVIDIA", w._machine_box.text())
@@ -75,13 +95,13 @@ class SetupWizardTests(unittest.TestCase):
         w = self._win()
         w._rb_express.setChecked(True)
         w._from_machine()
-        self.assertEqual(w._stack.currentIndex(), 2)  # Vozes (termos são manuais)
+        self.assertEqual(w._stack.currentIndex(), self.swz._P_VOICES)  # termos são manuais
 
     def test_avancada_passa_pela_pagina_de_modelo(self):
         w = self._win()
         w._rb_custom.setChecked(True)
         w._from_machine()
-        self.assertEqual(w._stack.currentIndex(), 1)
+        self.assertEqual(w._stack.currentIndex(), self.swz._P_MODEL)
 
     # -- vozes: skip e aceite -------------------------------------------------
     def test_skip_vozes_nao_ativa_diarizacao(self):
@@ -89,7 +109,7 @@ class SetupWizardTests(unittest.TestCase):
         w._from_machine()
         w._skip_voices()
         self.qapp.processEvents()
-        self.assertEqual(w._stack.currentIndex(), 4)  # downloads mock → Pronto
+        self.assertEqual(w._stack.currentIndex(), self.swz._P_READY)  # downloads mock → Pronto
         cfg = self._reload_cfg()
         self.assertFalse(cfg.diarization.enabled)
         self.assertIn("pulada", w._ready_box.text())
