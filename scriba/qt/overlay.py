@@ -47,13 +47,25 @@ def _pos_in_bounds(x: int, y: int, gx: int, gy: int, gw: int, gh: int) -> bool:
     return gx <= x <= gx + gw - _W and gy <= y <= gy + gh - _H
 
 
-def _pos_visible(x: int, y: int) -> bool:
-    """(x,y) deixa a pílula inteira dentro de ALGUM monitor? (coords lógicas do Qt)."""
+def _clamp_to_screens(x: int, y: int) -> tuple[int, int]:
+    """Agarra (x,y) à posição VISÍVEL mais próxima (pílula inteira em algum monitor).
+
+    Antes a posição salva era DESCARTADA p/ o default quando não passava no teste
+    de visibilidade — e monitor girado/removido ou resolução trocada invalidam o
+    ponto antigo, então a pílula "esquecia" onde o usuário a deixou (bug real do
+    Allan ao girar o monitor). Pior: uma pílula na DIVISA de dois monitores não
+    cabe inteira em nenhum e falhava o teste mesmo 100% visível. Clampar preserva
+    a intenção: posição válida sai intacta (deslocamento zero no monitor em que
+    já cabe); inválida anda o MÍNIMO p/ caber no monitor mais próximo."""
+    best = None
     for screen in QApplication.screens():
         g = screen.geometry()
-        if _pos_in_bounds(x, y, g.x(), g.y(), g.width(), g.height()):
-            return True
-    return False
+        cx = min(max(x, g.x()), g.x() + g.width() - _W)
+        cy = min(max(y, g.y()), g.y() + g.height() - _H)
+        d = abs(cx - x) + abs(cy - y)
+        if best is None or d < best[0]:
+            best = (d, cx, cy)
+    return (best[1], best[2]) if best else _default_pos()
 
 
 def _default_pos() -> tuple[int, int]:
@@ -129,6 +141,16 @@ class RecordingPill(QWidget):
         self.setFixedSize(_W, _H)
         self.setMouseTracking(True)
         self.setCursor(Qt.SizeAllCursor)
+
+        # Monitor girado/plugado/removido COM a pílula na tela: re-agarra na hora
+        # (sem isso ela só se corrigia no próximo show, e podia ficar fora da área
+        # visível durante a call). Telas novas ganham o hook no screenAdded.
+        app = QApplication.instance()
+        if app is not None:
+            app.screenAdded.connect(self._on_screens_changed)
+            app.screenRemoved.connect(self._on_screens_changed)
+            for s in app.screens():
+                s.geometryChanged.connect(self._on_screens_changed)
 
         self._pulse = QTimer(self)
         self._pulse.setInterval(600)
@@ -359,6 +381,24 @@ class RecordingPill(QWidget):
 
     # -- visibilidade / posição ----------------------------------------------
 
+    def _on_screens_changed(self, obj=None) -> None:
+        """Geometria de tela mudou (rotação, plug/unplug, resolução): se a pílula
+        está visível, re-agarra a posição atual à área visível e persiste. Nunca
+        levanta — mudança de monitor não pode derrubar a gravação."""
+        try:
+            from PySide6.QtGui import QScreen
+
+            if isinstance(obj, QScreen):  # screenAdded: engancha a tela nova também
+                obj.geometryChanged.connect(self._on_screens_changed)
+            if not self._shown:
+                return
+            x, y = _clamp_to_screens(self.x(), self.y())
+            if (x, y) != (self.x(), self.y()):
+                self.move(x, y)
+                _save_pos(x, y)
+        except Exception:
+            pass
+
     def _ensure_visible(self) -> None:
         """Mantém no topo e visível durante a call (um fullscreen/compartilhamento pode
         roubar o topmost). NÃO mexe na captura (segue oculta no compartilhamento)."""
@@ -371,10 +411,7 @@ class RecordingPill(QWidget):
 
     def show(self) -> None:  # noqa: A003 (mantém o nome da API pública)
         pos = _load_pos()
-        if pos and _pos_visible(*pos):
-            x, y = pos
-        else:
-            x, y = _default_pos()
+        x, y = _clamp_to_screens(*pos) if pos else _default_pos()
         self.move(x, y)
         self._shown = True
         super().show()

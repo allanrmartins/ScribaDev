@@ -36,6 +36,25 @@ class PosAndFormatTests(unittest.TestCase):
         self.assertEqual(overlay._fmt_elapsed(65), "01:05")
         self.assertEqual(overlay._fmt_elapsed(3661), "1:01:01")
 
+    def test_clamp_preserva_pos_valida_e_agarra_a_invalida(self):
+        """Rotação de monitor: a posição salva é CLAMPADA à área visível, nunca
+        descartada p/ o default (a pílula 'esquecia' o lugar ao girar a tela)."""
+        from PySide6.QtWidgets import QApplication
+
+        from scriba.qt import overlay
+
+        QApplication.instance() or QApplication([])
+        g = QApplication.primaryScreen().geometry()
+        # posição válida (dentro da tela): sai intacta
+        ok = (g.x() + 10, g.y() + 10)
+        self.assertEqual(overlay._clamp_to_screens(*ok), ok)
+        # posição de um monitor que 'girou' (muito além da borda): agarra ao canto
+        # visível mais próximo — e NÃO no default centro-inferior
+        cx, cy = overlay._clamp_to_screens(g.x() + g.width() + 5000, g.y() + 20)
+        self.assertEqual(cx, g.x() + g.width() - overlay._W)
+        self.assertEqual(cy, g.y() + 20)
+        self.assertNotEqual((cx, cy), overlay._default_pos())
+
 
 @unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")
 class PillSmokeTests(unittest.TestCase):
@@ -130,6 +149,33 @@ class PillSmokeTests(unittest.TestCase):
             self.assertEqual(util.read_state().get("overlay_pos"), [120, 60])
             pill.hide()
             self.assertFalse(pill.isVisible())
+            pill.destroy()
+        finally:
+            util.STATE_PATH = orig
+
+    def test_show_reclampa_pos_salva_fora_da_tela(self):
+        """Posição salva que ficou FORA (monitor girado): o show re-agarra à borda
+        visível em vez de resetar p/ o default — a intenção do usuário sobrevive."""
+        import json
+
+        from PySide6.QtWidgets import QApplication
+
+        from scriba import util
+        from scriba.qt import overlay
+
+        orig = util.STATE_PATH
+        util.STATE_PATH = Path(tempfile.mkdtemp(prefix="scriba_qt_pill_")) / "state.json"
+        try:
+            g = QApplication.primaryScreen().geometry()
+            longe = [g.x() + g.width() + 5000, g.y() + 20]  # além da borda direita
+            util.STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            util.STATE_PATH.write_text(json.dumps({"overlay_pos": longe}), encoding="utf-8")
+            pill = self._pill()
+            pill.show()
+            self.assertEqual(pill.x(), g.x() + g.width() - overlay._W)  # borda, não default
+            self.assertEqual(pill.y(), g.y() + 20)                      # intenção preservada
+            self.assertNotEqual((pill.x(), pill.y()), overlay._default_pos())
+            pill.hide()
             pill.destroy()
         finally:
             util.STATE_PATH = orig
