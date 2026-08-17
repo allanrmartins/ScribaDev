@@ -290,6 +290,31 @@ class SettingsTests(unittest.TestCase):
         comps = win._about_components()
         self.assertTrue(any(label == "Python" for label, _v, _l in comps))
 
+    def test_pkg_version_honesta_sem_metadata(self):
+        """Report de usuário (instalador): o bundle PyInstaller não traz o dist-info,
+        então metadata ausente com o MÓDULO presente não pode virar 'AUSENTE
+        (reinstale o app)' — cai p/ find_spec e responde 'presente'."""
+        from scriba.qt.settings_ui import _pkg_version
+
+        self.assertEqual(_pkg_version("dist-que-nao-existe", "json"), "presente")
+        self.assertIsNone(_pkg_version("dist-que-nao-existe", "modulo_inexistente_xyz"))
+        self.assertNotIn(_pkg_version("PySide6"), (None, "presente"))  # metadata real
+
+    def test_diar_health_ausencia_nao_e_erro_ao_checar(self):
+        """find_spec('pyannote.audio') LEVANTA ModuleNotFoundError quando nem o
+        namespace 'pyannote' existe — é 'não instalada', nunca 'erro ao checar'."""
+        from unittest import mock
+
+        from scriba.qt.settings_ui import SettingsWindow
+
+        win = SettingsWindow(self._app())
+        with mock.patch("importlib.util.find_spec",
+                        side_effect=ModuleNotFoundError("No module named 'pyannote'")):
+            text, level = win._diar_health(lambda *_a, **_k: None)
+        self.assertEqual(level, "err")
+        self.assertIn("não instalada", text)
+        self.assertNotIn("erro ao checar", text)
+
     def test_show_about_update(self):
         from scriba.qt.settings_ui import SettingsWindow
 

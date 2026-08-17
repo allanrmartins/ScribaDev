@@ -29,6 +29,32 @@ from . import theme, widgets
 log = logging.getLogger("scriba.qt.wizard_ui")
 
 
+def _ai_unavailable_msg() -> str | None:
+    """Aviso IMEDIATO quando o provider de IA nem existe na máquina — o caso típico
+    do instalador: claude CLI ausente (report de usuário: 'Gerar com IA' falhava
+    mudo). Só o which(), sem round-trip de rede: CLI deslogada/endpoint fora
+    aparecem na falha da geração, com dica própria (_ai_fail_msg)."""
+    from .. import config, util
+
+    provider = (config.load().summary.provider or "claude").strip().lower()
+    if provider == "claude" and util.claude_command() is None:
+        return ("IA indisponível: a CLI `claude` não foi encontrada nesta máquina. "
+                'Use "Usar modelo pronto" (funciona offline) — ou instale a Claude CLI, '
+                "faça login e tente de novo.")
+    return None
+
+
+def _ai_fail_msg(generic: str) -> str:
+    """Mensagem de falha da geração por IA: se a causa detectada foi a CLI claude
+    DESLOGADA (ai.last_error), diz isso com a receita; senão, o texto genérico."""
+    from .. import ai
+
+    if ai.last_error == ai.ERR_LOGGED_OUT:
+        return ("Não consegui gerar: a CLI `claude` está deslogada. Rode `claude` no terminal, "
+                'faça /login e tente de novo — ou use "Usar modelo pronto" (offline).')
+    return generic
+
+
 class WizardWindow(QWidget):
     _prompt_ready = Signal(object)   # (prompt, hotwords) | None
     _jargon_ready = Signal(object)   # str | None
@@ -183,6 +209,13 @@ class WizardWindow(QWidget):
     def _generate_ai(self) -> None:
         if self._busy:
             return
+        msg = _ai_unavailable_msg()
+        if msg:
+            self._status.setText(msg)
+            return
+        from .. import ai
+
+        ai.last_error = None   # a falha DESTA geração é que decide a dica (login)
         profile = self._profile()
         self._set_busy(True)
         self._ai_btn.setText("Gerando…")
@@ -197,12 +230,20 @@ class WizardWindow(QWidget):
             prompt, hotwords = outcome
             self._show_result(prompt, hotwords, "gerado por IA e validado")
         else:
-            self._status.setText('Não consegui gerar com IA agora (claude indisponível ou resposta '
-                                 'fora do padrão). O botão "Usar modelo pronto" funciona offline.')
+            self._status.setText(_ai_fail_msg(
+                'Não consegui gerar com IA agora (provedor indisponível ou resposta '
+                'fora do padrão). O botão "Usar modelo pronto" funciona offline.'))
 
     def _suggest_jargon(self) -> None:
         if self._busy:
             return
+        msg = _ai_unavailable_msg()
+        if msg:
+            self._status.setText(msg)
+            return
+        from .. import ai
+
+        ai.last_error = None
         profile = self._profile()
         self._set_busy(True)
         self._jargon_link.setText("Sugerindo…")
@@ -214,8 +255,9 @@ class WizardWindow(QWidget):
         self._set_busy(False)
         self._jargon_link.setText("Sugerir com IA")
         if not suggested:
-            self._status.setText("Não consegui sugerir agora (claude indisponível). Digite alguns termos "
-                                 "que você ouve nas reuniões — ou siga sem: o campo é opcional.")
+            self._status.setText(_ai_fail_msg(
+                "Não consegui sugerir agora (provedor de IA indisponível). Digite alguns termos "
+                "que você ouve nas reuniões — ou siga sem: o campo é opcional."))
             return
         current = [t.strip() for t in self._jargon.toPlainText().split(",") if t.strip()]
         merged = list(current)
