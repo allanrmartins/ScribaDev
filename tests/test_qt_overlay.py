@@ -153,6 +153,36 @@ class PillSmokeTests(unittest.TestCase):
         finally:
             util.STATE_PATH = orig
 
+    def test_transicao_de_estagio_nao_teleporta_a_pilula(self):
+        """Bug real: o main re-chama show() a cada estágio (gravando→transcrevendo→
+        resumindo) e o re-read do state teleportava a pílula. A posição da SESSÃO
+        (último drag) tem que vencer o arquivo em qualquer show() subsequente."""
+        import json
+
+        from scriba import util
+        from scriba.qt import overlay
+
+        orig = util.STATE_PATH
+        util.STATE_PATH = Path(tempfile.mkdtemp(prefix="scriba_qt_pill_")) / "state.json"
+        try:
+            util.STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            util.STATE_PATH.write_text(json.dumps({"overlay_pos": [30, 30]}), encoding="utf-8")
+            pill = self._pill()
+            pill.show()
+            self.assertEqual((pill.x(), pill.y()), (30, 30))
+            # usuário arrasta p/ (200, 90) durante a call
+            pill.move(200, 90)
+            pill._end_drag()
+            # arquivo diverge (outra escrita qualquer) e o main re-mostra num estágio
+            util.STATE_PATH.write_text(json.dumps({"overlay_pos": [30, 30]}), encoding="utf-8")
+            pill.hide()
+            pill.show()   # transição: NÃO pode voltar p/ (30, 30)
+            self.assertEqual((pill.x(), pill.y()), (200, 90))
+            pill.hide()
+            pill.destroy()
+        finally:
+            util.STATE_PATH = orig
+
     def test_show_reclampa_pos_salva_fora_da_tela(self):
         """Posição salva que ficou FORA (monitor girado): o show re-agarra à borda
         visível em vez de resetar p/ o default — a intenção do usuário sobrevive."""

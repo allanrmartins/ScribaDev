@@ -130,6 +130,7 @@ class RecordingPill(QWidget):
         self._spk_committed = False
         self._shown = False
         self._drag_off = None
+        self._last_pos: tuple[int, int] | None = None  # posição DESTA sessão (drag vence o arquivo)
         self._pressed: str | None = None
         self._hover: str | None = None
         self._tip: QWidget | None = None
@@ -286,11 +287,20 @@ class RecordingPill(QWidget):
     def mouseReleaseEvent(self, e) -> None:
         if self._drag_off is not None:
             self._drag_off = None
-            _save_pos(self.x(), self.y())
+            self._end_drag()
             return
         if self._pressed and self._pressed == self._button_at(e.position().toPoint()):
             self._fire(self._pressed)
         self._pressed = None
+
+    def _end_drag(self) -> None:
+        """Fim do arrasto: a posição vira a verdade DESTA sessão (além de persistir).
+        `_last_pos` é o que impede o teleporte nas transições de estágio — o show()
+        re-executado pelo main a cada mudança (gravando→transcrevendo→resumindo)
+        prefere a posição da sessão ao re-ler o arquivo (bug real do Allan: pílula
+        'mudando de local' quando a call virava processamento)."""
+        self._last_pos = (self.x(), self.y())
+        _save_pos(self.x(), self.y())
 
     def _fire(self, region: str) -> None:
         if region == "stop":
@@ -395,6 +405,7 @@ class RecordingPill(QWidget):
             x, y = _clamp_to_screens(self.x(), self.y())
             if (x, y) != (self.x(), self.y()):
                 self.move(x, y)
+                self._last_pos = (x, y)
                 _save_pos(x, y)
         except Exception:
             pass
@@ -410,8 +421,15 @@ class RecordingPill(QWidget):
             pass
 
     def show(self) -> None:  # noqa: A003 (mantém o nome da API pública)
-        pos = _load_pos()
-        x, y = _clamp_to_screens(*pos) if pos else _default_pos()
+        # posição desta sessão (último drag/show) VENCE o arquivo: o main re-chama
+        # show() a cada estágio (gravando→transcrevendo→resumindo) e re-ler o
+        # state aqui teleportava a pílula se o arquivo divergisse do lugar atual
+        if self._last_pos is not None:
+            x, y = _clamp_to_screens(*self._last_pos)
+        else:
+            pos = _load_pos()
+            x, y = _clamp_to_screens(*pos) if pos else _default_pos()
+        self._last_pos = (x, y)
         self.move(x, y)
         self._shown = True
         super().show()
