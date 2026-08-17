@@ -196,10 +196,6 @@ class MainWindow(QWidget):
         self.setWindowTitle(f"ScribaDev v{__version__}")
         self.setMinimumSize(520, 560)
         widgets.remember_geometry(self, "qt_main", default=(200, 120, 580, 680))
-        try:
-            self.setWindowIcon(util_icon())
-        except Exception:
-            pass
 
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 14, 18, 12)
@@ -1099,15 +1095,6 @@ class MainWindow(QWidget):
         """O X tira da barra mas o app segue na bandeja (paridade com WM_DELETE_WINDOW)."""
         event.ignore()
         self.hide()
-
-
-def util_icon():
-    from PySide6.QtGui import QIcon
-
-    ico = getattr(util, "ICON_ICO", None)
-    if ico and ico.exists():
-        return QIcon(str(ico))
-    return QIcon(str(util.ICON_PNG))
 
 
 # --------------------------------------------------------------- harness ------
