@@ -49,11 +49,40 @@ def bootstrap() -> bool:
         return False
 
 
+def pip_log_path() -> Path:
+    """logs/pip.log — TODA a saída do pip in-process vai aqui (ver install_to_addons)."""
+    from . import util
+
+    return util.LOGS_DIR / "pip.log"
+
+
+def _pip_log_tail(n: int = 3) -> str:
+    """Últimas linhas úteis do pip.log p/ a mensagem de erro (prioriza ERROR/Traceback)."""
+    try:
+        lines = [l.strip() for l in pip_log_path().read_text(
+            encoding="utf-8", errors="replace").splitlines() if l.strip()]
+    except OSError:
+        return ""
+    errs = [l for l in lines if "error" in l.lower()]
+    return " | ".join((errs or lines)[-n:])
+
+
 def install_to_addons(packages: list[str], progress=print) -> tuple[bool, str]:
     """Instala `packages` em APP_DIR/addons com o pip IN-PROCESS (o bundle não tem
     `python -m pip`; o pip precisa estar coletado no bundle — ver installer/windows/
     scribadev.spec). Devolve (ok, mensagem). Usado pelo wizard na instalação
-    congelada; na instalação git/venv o wizard usa `sys.executable -m pip` normal."""
+    congelada; na instalação git/venv o wizard usa `sys.executable -m pip` normal.
+
+    Blindagens do caminho congelado (relato de campo: "pip retornou 2" sem NENHUMA
+    pista — rc 2 = crash interno do pip, e o traceback ia p/ um stderr que não
+    existe num app sem console):
+    - stdout/stderr redirecionados p/ logs/pip.log DURANTE o pip: o traceback de um
+      crash e toda a saída ficam gravados; a mensagem de erro aponta o arquivo;
+    - `--only-binary=:all:`: proibido resolver sdist — o build rodaria
+      `sys.executable` (que no bundle é o PRÓPRIO ScribaDev.exe, não um Python);
+    - `--no-input` (sem console p/ perguntar) e barra de progresso desligada."""
+    import contextlib
+
     d = addons_dir()
     d.mkdir(parents=True, exist_ok=True)
     try:
@@ -62,14 +91,26 @@ def install_to_addons(packages: list[str], progress=print) -> tuple[bool, str]:
         return (False, "pip não disponível no bundle — atualize o app (instalador novo) "
                 "ou instale via git (CONTRIBUTING.md).")
     progress(f"instalando em {d}: {', '.join(packages)}")
+    args = ["install", "--target", str(d), "--upgrade", "--only-binary=:all:",
+            "--no-input", "--disable-pip-version-check", "--progress-bar", "off",
+            *packages]
+    plog = pip_log_path()
     try:
-        rc = pip_main(["install", "--target", str(d), "--upgrade", *packages])
-    except SystemExit as e:  # pip às vezes sai via SystemExit
-        rc = int(e.code or 0)
+        plog.parent.mkdir(parents=True, exist_ok=True)
+        with open(plog, "a", encoding="utf-8", errors="replace") as f:
+            f.write(f"\n=== pip {' '.join(args)}\n")
+            with contextlib.redirect_stdout(f), contextlib.redirect_stderr(f):
+                try:
+                    rc = pip_main(args)
+                except SystemExit as e:  # pip às vezes sai via SystemExit
+                    rc = int(e.code or 0)
     except Exception as e:
         log.exception("pip in-process falhou")
-        return (False, f"instalação falhou: {e}")
+        return (False, f"instalação falhou: {e} — detalhes em {plog}")
     if rc != 0:
-        return (False, f"pip retornou {rc} — veja o log")
+        log.warning("pip retornou %d — saída completa em %s", rc, plog)
+        tail = _pip_log_tail()
+        return (False, f"pip retornou {rc} ({tail}) — saída completa em {plog}"
+                if tail else f"pip retornou {rc} — saída completa em {plog}")
     bootstrap()  # entra no sys.path já nesta execução
     return (True, "instalado")
