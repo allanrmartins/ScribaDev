@@ -48,6 +48,32 @@ from . import theme, widgets
 
 log = logging.getLogger("scriba.qt.settings_ui")
 
+
+def _pkg_version(pkg: str, module: str | None = None) -> str | None:
+    """Versão de um pacote p/ a aba Sobre — honesta também no app CONGELADO.
+
+    `importlib.metadata.version()` lê o dist-info, que o bundle PyInstaller NÃO
+    coleta: no instalador ela falha com o pacote PRESENTE e funcionando, e o Sobre
+    acusava "AUSENTE (reinstale o app)" p/ faster-whisper/ctranslate2/pyaudiowpatch
+    (report de usuário). Antes de acusar ausência, confere o MÓDULO via find_spec
+    (sem importar — torch é pesado demais p/ abrir uma aba): achou → "presente"
+    (sem número mesmo, o bundle não tem a metadata). None = ausente de verdade."""
+    try:
+        from importlib.metadata import version
+
+        return version(pkg)
+    except Exception:
+        pass
+    try:
+        import importlib.util as ilu
+
+        if ilu.find_spec(module or pkg) is not None:
+            return "presente"
+    except Exception:
+        pass
+    return None
+
+
 _ARCHIVE = {"Opus (~20 MB/h)": "opus", "FLAC (~110 MB/h)": "flac", "WAV (cru)": "wav"}
 _WHISPER_MODELS = ("tiny", "base", "small", "medium", "large-v3", "large-v3-turbo")
 _WHISPER_DEVICES = {"Automático": "auto", "GPU (CUDA)": "cuda", "CPU": "cpu"}
@@ -868,18 +894,12 @@ class SettingsWindow(QWidget):
     def _about_components(self) -> list:
         import sys
 
-        def ver(pkg):
-            try:
-                from importlib.metadata import version
-
-                return version(pkg)
-            except Exception:
-                return None
+        ver = _pkg_version
 
         def core(label, text, present):
             return (label, text if present else text + " — AUSENTE (reinstale o app)", "ok" if present else "err")
 
-        fw, ct, pa = ver("faster-whisper"), ver("ctranslate2"), ver("pyaudiowpatch")
+        fw, ct, pa = ver("faster-whisper", "faster_whisper"), ver("ctranslate2"), ver("pyaudiowpatch")
         torch_v = ver("torch")
         if sys.platform == "win32":
             audio_row = core("Áudio (WASAPI)", f"pyaudiowpatch {pa or '?'}", bool(pa))
@@ -903,9 +923,18 @@ class SettingsWindow(QWidget):
 
         try:
             present = ilu.find_spec("pyannote.audio") is not None
+        except ModuleNotFoundError:
+            # nem o namespace 'pyannote' existe (find_spec de submódulo LEVANTA em
+            # vez de devolver None): é ausência normal, não "erro ao checar"
+            present = False
         except Exception as e:
             return (f"erro ao checar — {e}", "err")
         if not present:
+            from .. import updates
+
+            if updates.is_frozen_install():
+                return ("não instalada — o download da separação de vozes (torch + pyannote) "
+                        "não foi concluído no 1º uso", "err")
             return ("não instalada — falta o extra [diarization] (pyannote + torch)", "err")
         pa = ver("pyannote.audio") or "?"
         dz = self.app.cfg.diarization

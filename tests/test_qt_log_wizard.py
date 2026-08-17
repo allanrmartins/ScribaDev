@@ -205,6 +205,42 @@ class WizardTests(unittest.TestCase):
         win._on_prompt(None)
         self.assertIn("Não consegui gerar", win._status.text())
 
+    def test_gerar_com_ia_avisa_cli_ausente(self):
+        """Report de usuário (instalador sem claude CLI): 'Gerar com IA' avisa NA HORA
+        que a CLI não existe — não falha mudo depois de um minuto de espera."""
+        from unittest import mock
+
+        from scriba.qt.wizard_ui import WizardWindow
+
+        win = WizardWindow()
+        with mock.patch("scriba.util.claude_command", return_value=None):
+            win._generate_ai()
+        self.assertIn("não foi encontrada", win._status.text())
+        self.assertFalse(win._busy)   # nem entrou em "Gerando…"
+
+    def test_sugerir_jargao_avisa_cli_ausente(self):
+        from unittest import mock
+
+        from scriba.qt.wizard_ui import WizardWindow
+
+        win = WizardWindow()
+        with mock.patch("scriba.util.claude_command", return_value=None):
+            win._suggest_jargon()
+        self.assertIn("não foi encontrada", win._status.text())
+        self.assertFalse(win._busy)
+
+    def test_falha_com_cli_deslogada_da_receita_de_login(self):
+        from scriba import ai
+        from scriba.qt.wizard_ui import WizardWindow
+
+        win = WizardWindow()
+        ai.last_error = ai.ERR_LOGGED_OUT
+        self.addCleanup(lambda: setattr(ai, "last_error", None))
+        win._on_prompt(None)
+        self.assertIn("/login", win._status.text())
+        win._on_jargon(None)
+        self.assertIn("/login", win._status.text())
+
     def test_on_jargon_mescla(self):
         from scriba.qt.wizard_ui import WizardWindow
 
