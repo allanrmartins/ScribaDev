@@ -446,6 +446,157 @@ class LivePollRobustnessTests(unittest.TestCase):
         self.assertFalse(any("Teams" in t for t in textos))
 
 
+@unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")
+class PendingActiveTests(unittest.TestCase):
+    """#86: as pendências ATIVAS da capa vêm do ÍNDICE (`_pending_active` index-first,
+    sem re-parsear os .md da janela), com fallback ao parse (`notes.open_action_items`)
+    quando o índice falha ou parece defasado (0 ativas com reuniões na janela).
+    Índice isolado em tempdir (#84) — nunca toca o index.db real."""
+
+    def setUp(self):
+        import shutil
+        import tempfile
+
+        from scriba import meetings_index as mi
+        from scriba import util
+
+        self.tmp = Path(tempfile.mkdtemp(prefix="scriba_capa_idx_"))
+        self._app0, self._logs0, self._db0 = util.APP_DIR, util.LOGS_DIR, mi.DB_PATH
+        util.APP_DIR = self.tmp / "app"
+        util.LOGS_DIR = util.APP_DIR / "logs"
+        mi.DB_PATH = self.tmp / "index.db"
+        self.rec = self.tmp / "rec"
+        self.rec.mkdir(parents=True)
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+
+    def tearDown(self):
+        from scriba import meetings_index as mi
+        from scriba import util
+
+        util.APP_DIR, util.LOGS_DIR, mi.DB_PATH = self._app0, self._logs0, self._db0
+
+    def _meeting(self, name, started_at, pendencias):
+        """Pasta de gravação real (meta.json + notas.md com '## Pendências e Ações')
+        e o dict correspondente no formato de `meetings_index.search`."""
+        import json
+
+        folder = self.rec / name
+        folder.mkdir()
+        note = folder / "notas.md"
+        meta = {"status": "done", "started_at": started_at, "title": f"Reunião {name}",
+                "client": "ACME", "export_path": str(note)}
+        (folder / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        lines = [f"# Reunião {name}", "", "## Resumo", "ok", "", "## Pendências e Ações"]
+        lines += [f"- {p}" for p in pendencias]
+        note.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return {"folder": str(folder), "export_path": str(note), "title": f"Reunião {name}",
+                "client": "ACME", "started_at": started_at}
+
+    _CUTOFF = "2026-06-01T00:00:00"
+
+    def _fixture(self):
+        """2 reuniões na janela (uma com item resolvido) + 1 antiga (fora do recorte)."""
+        from scriba import meetings_index as mi
+        from scriba import notes
+
+        nova = self._meeting("nova", "2026-06-20T09:00:00",
+                             ["**[BLOQUEANTE]** Aplicar nota", "**[ABERTO]** Enviar estimativa"])
+        outra = self._meeting("outra", "2026-06-10T09:00:00", ["**[ABERTO]** Revisar spec"])
+        antiga = self._meeting("antiga", "2026-03-01T09:00:00", ["**[ABERTO]** Item velho"])
+        for m in (nova, outra, antiga):
+            self.assertTrue(mi.index_meeting(Path(m["folder"])))
+        # resolve o 1º item da 'nova': não pode aparecer nas ativas (nem no índice, nem no parse)
+        md = (Path(nova["folder"]) / "notas.md").read_text(encoding="utf-8")
+        done_key = notes.parse_action_items(md)[0]["key"]
+        notes.set_action_done(Path(nova["folder"]), done_key, True)
+        return [nova, outra, antiga]
+
+    @staticmethod
+    def _essencia(items):
+        """Campos que a capa consome, p/ comparar índice x parse item a item."""
+        return [(i["key"], i["text"], i["note_path"], i["folder"], i["title"],
+                 i["client"], i["started_at"]) for i in items]
+
+    def test_index_first_bate_com_o_parse_sem_ler_md(self):
+        from unittest import mock
+
+        from scriba.qt.main_window import _pending_active, _started_within
+
+        meetings = self._fixture()
+        recent = [m for m in meetings if _started_within(m, self._CUTOFF)]
+        from scriba import notes
+        esperado = self._essencia(notes.open_action_items(recent))
+        self.assertEqual(len(esperado), 2)   # 1 aberto da 'nova' + 1 da 'outra'; antiga fora
+        # índice populado: o parse NÃO pode ser chamado (é justamente o ponto da #86)
+        with mock.patch("scriba.notes.open_action_items",
+                        side_effect=AssertionError("re-parseou .md com índice saudável")):
+            got = _pending_active(meetings, self._CUTOFF)
+        self.assertEqual(self._essencia(got), esperado)
+
+    def test_sem_recorte_tambem_vem_do_indice(self):
+        from unittest import mock
+
+        from scriba.qt.main_window import _pending_active
+
+        meetings = self._fixture()
+        with mock.patch("scriba.notes.open_action_items",
+                        side_effect=AssertionError("re-parseou .md com índice saudável")):
+            got = _pending_active(meetings)   # days == 0: sem cutoff, tudo conta
+        self.assertEqual({i["text"] for i in got},
+                         {"Enviar estimativa", "Revisar spec", "Item velho"})
+
+    def test_fallback_quando_o_indice_falha(self):
+        from unittest import mock
+
+        from scriba import notes
+        from scriba.qt.main_window import _pending_active, _started_within
+
+        meetings = self._fixture()
+        recent = [m for m in meetings if _started_within(m, self._CUTOFF)]
+        esperado = self._essencia(notes.open_action_items(recent))
+        with mock.patch("scriba.meetings_index.list_action_items",
+                        side_effect=RuntimeError("índice fora")):
+            got = _pending_active(meetings, self._CUTOFF)
+        self.assertEqual(self._essencia(got), esperado)
+
+    def test_fallback_quando_indice_zerado_mas_ha_reunioes_na_janela(self):
+        # índice stale (ex.: recém-reconstruído sem as pendências): 0 ativas com reuniões
+        # recentes NÃO é confiável — cai no parse e as pendências reais aparecem
+        from unittest import mock
+
+        from scriba.qt.main_window import _pending_active
+
+        meetings = self._fixture()
+        with mock.patch("scriba.meetings_index.list_action_items", return_value=[]):
+            got = _pending_active(meetings, self._CUTOFF)
+        self.assertEqual({i["text"] for i in got}, {"Enviar estimativa", "Revisar spec"})
+
+    def test_indice_vazio_sem_reunioes_na_janela_e_confiavel(self):
+        # nada na janela: vazio do índice é o estado real — não dispara parse nenhum
+        from unittest import mock
+
+        from scriba.qt.main_window import _pending_active
+
+        antiga = self._meeting("antiga", "2026-03-01T09:00:00", ["**[ABERTO]** Item velho"])
+        with mock.patch("scriba.notes.open_action_items",
+                        side_effect=AssertionError("parse desnecessário")):
+            self.assertEqual(_pending_active([antiga], self._CUTOFF), [])
+        self.assertEqual(_pending_active([], self._CUTOFF), [])
+
+    def test_mapeamento_dos_campos_do_indice(self):
+        from scriba.qt.main_window import _pending_from_index
+
+        got = _pending_from_index([{
+            "key": "abc123", "label": "ABERTO", "text": "Fazer X", "state": "open",
+            "position": 0, "meeting_id": 1, "folder": "C:/rec/m",
+            "export_path": "C:/rec/m/notas.md", "title": "", "meeting_title": "Weekly",
+            "client": "ACME", "started_at": "2026-06-20T09:00:00"}])
+        self.assertEqual(got[0]["note_path"], "C:/rec/m/notas.md")   # export_path → note_path
+        self.assertEqual(got[0]["title"], "Weekly")                  # cai no meeting_title
+        self.assertEqual(got[0]["folder"], "C:/rec/m")
+        self.assertEqual(got[0]["key"], "abc123")
+
+
 class RefreshTimesheetTests(unittest.TestCase):
     """Sugestão criada no fim de uma call tem que APARECER na janela de
     Apontamentos aberta, sem fechar e reabrir - mesmo padrão do refresh da capa:

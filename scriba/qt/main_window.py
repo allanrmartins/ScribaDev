@@ -109,6 +109,41 @@ def _started_within(m: dict, cutoff_iso: str) -> bool:
     return bool(started) and started >= cutoff_iso
 
 
+def _pending_from_index(rows: list) -> list:
+    """Itens de `meetings_index.list_action_items` no shape que a capa consome — o mesmo
+    de `notes.open_action_items` (#86): `note_path` ← `export_path` e `title` com a
+    precedência de exibição (título da nota vence o meeting_title da janela)."""
+    return [{
+        "key": r.get("key") or "",
+        "label": r.get("label") or "",
+        "text": r.get("text") or "",
+        "title": ((r.get("title") or r.get("meeting_title")) or "").strip(),
+        "client": (r.get("client") or "").strip(),
+        "note_path": (r.get("export_path") or "").strip(),
+        "folder": (r.get("folder") or "").strip(),
+        "started_at": (r.get("started_at") or "").strip(),
+    } for r in rows]
+
+
+def _pending_active(meetings: list, cutoff: str | None = None) -> list:
+    """Pendências ATIVAS da capa, index-first (#86): lê do índice (sem re-parsear os
+    `.md` da janela) e cai no parse (`notes.open_action_items`) quando o índice falha
+    OU devolve 0 ativas havendo reuniões na janela — índice vazio/defasado (ex.: recém-
+    reconstruído após incidente) nunca pode esconder pendência real; se estiver mesmo
+    tudo resolvido, o parse das poucas reuniões recentes confirma barato o vazio."""
+    from .. import meetings_index, notes
+
+    recent = meetings if cutoff is None else [m for m in meetings if _started_within(m, cutoff)]
+    try:
+        rows = meetings_index.list_action_items(state="open", since=cutoff, limit=500)
+        if rows or not recent:
+            return _pending_from_index(rows)
+        log.debug("índice sem ativas com %d reuniões na janela — conferindo via parse", len(recent))
+    except Exception as e:
+        log.debug("list_action_items falhou — caindo no parse dos .md: %s", e)
+    return notes.open_action_items(recent)
+
+
 def _dot(diameter: int = 10) -> QLabel:
     d = QLabel()
     d.setFixedSize(diameter, diameter)
@@ -526,7 +561,7 @@ class MainWindow(QWidget):
         a capa fica no estado inicial e não toca o índice."""
         if getattr(self.app, "cfg", None) is None:
             return
-        from .. import meetings_index, notes
+        from .. import meetings_index
 
         data = {"total": 0, "recent": [], "seconds": 0.0, "clients": 0,
                 "pending": [], "pending_stale": 0, "pending_days": 0}
@@ -556,8 +591,7 @@ class MainWindow(QWidget):
             if days > 0:
                 from datetime import datetime, timedelta
                 cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-                recent = [m for m in done if _started_within(m, cutoff)]
-                data["pending"] = notes.open_action_items(recent)
+                data["pending"] = _pending_active(done, cutoff)
                 # backlog completo vem do índice (não da lista truncada em 500); guarda
                 # contra índice defasado com max(0, ...).
                 try:
@@ -567,9 +601,9 @@ class MainWindow(QWidget):
                     total_open = len(data["pending"])
                 data["pending_stale"] = max(0, total_open - len(data["pending"]))
             else:
-                data["pending"] = notes.open_action_items(done)
+                data["pending"] = _pending_active(done)
         except Exception as e:
-            log.debug("open_action_items falhou: %s", e)
+            log.debug("pendências da capa falharam: %s", e)
         self.app.ui(lambda: self._render_home(data))
 
     def _render_home(self, data: dict) -> None:
