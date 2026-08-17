@@ -326,8 +326,17 @@ class AnimatedCheckBox(QCheckBox):
     fill = Property(float, get_fill, set_fill)
 
     def sizeHint(self) -> QSize:
+        # o texto é PINTADO à mão a partir de x = _BOX + _GAP (paintEvent): a largura
+        # herdada do QCheckBox usa o indicador do ESTILO (~20px < 27px) e nascia curta —
+        # o fim do rótulo era comido ("auto-atualiza…") em fontes mais largas
         base = super().sizeHint()
-        return QSize(base.width(), max(base.height(), self._BOX + 6))
+        w = self._BOX + 4   # box desenhado a partir de x=1 + folga à direita
+        if self.text():
+            w += self._GAP + self.fontMetrics().horizontalAdvance(self.text())
+        return QSize(max(base.width(), w), max(base.height(), self._BOX + 6))
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()   # encolher abaixo do hint = cortar o texto pintado
 
     def hitButton(self, pos) -> bool:
         return self.rect().contains(pos)   # clicar em qualquer lugar (box ou texto) alterna
@@ -364,6 +373,26 @@ class AnimatedCheckBox(QCheckBox):
             tx = box + self._GAP
             p.drawText(QRectF(tx, 0, self.width() - tx, self.height()),
                        int(Qt.AlignVCenter | Qt.AlignLeft), self.text())
+
+
+# == label com word-wrap que nunca é "comido" ================================
+
+class WrapLabel(QLabel):
+    """QLabel com word-wrap cujo texto NUNCA é cortado pelo layout no aperto.
+
+    O QLabel embrulhado anuncia heightForWidth, mas quando está aninhado (ex.:
+    dentro de um QFrame de card) o layout externo pode espremê-lo abaixo da altura
+    do texto — o meio da frase some (visto na máquina de um usuário, fontes mais
+    largas). A cada resize impõe minimumHeight = heightForWidth(largura atual):
+    o aperto vai p/ os vizinhos que sabem ceder (scroll), nunca p/ o texto."""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self.setWordWrap(True)
+
+    def resizeEvent(self, e) -> None:
+        super().resizeEvent(e)
+        self.setMinimumHeight(self.heightForWidth(max(1, self.width())))
 
 
 # == campo com placeholder ====================================================
