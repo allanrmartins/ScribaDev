@@ -8,6 +8,8 @@
 
 🇧🇷 Português | 🇺🇸 [English](README.en.md)
 
+> ⚠️ **Aviso importante:** as leis sobre gravação de conversas **variam por país**, e políticas de empresas/clientes podem exigir **consentimento explícito**. Dependendo do seu contexto, **informe os participantes de que a call está sendo gravada para transcrição**. O app grava localmente e não avisa por você — a responsabilidade pelo uso é sua. Veja o [Aviso legal](#aviso-legal).
+
 <p align="center">
   <img src="docs/pilula.png" alt="Pílula de gravação" width="300">
   <br><br>

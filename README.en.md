@@ -8,6 +8,8 @@
 
 🇧🇷 [Português](README.md) | 🇺🇸 English
 
+> ⚠️ **Important notice:** call-recording laws **vary by country**, and company/client policies may require **explicit consent**. Depending on your context, **let participants know the call is being recorded for transcription**. The app records locally and does not notify anyone for you — you are responsible for how you use it. See the [Legal notice](#legal-notice).
+
 <p align="center">
   <img src="docs/pilula.png" alt="Recording pill" width="300">
   <br><br>
