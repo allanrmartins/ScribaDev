@@ -315,6 +315,63 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("não instalada", text)
         self.assertNotIn("erro ao checar", text)
 
+    # -- seção "Baixar componentes" (#154, só instalação congelada) -----------
+    def test_secao_componentes_so_na_instalacao_congelada(self):
+        from unittest import mock
+
+        from scriba.qt.settings_ui import SettingsWindow
+
+        win = SettingsWindow(self._app())
+        self.assertFalse(hasattr(win, "_comp_btn"))      # git/venv: extras via pip, sem seção
+        with mock.patch("scriba.updates.is_frozen_install", return_value=True):
+            win2 = SettingsWindow(self._app())
+        self.assertTrue(hasattr(win2, "_comp_btn"))
+
+    def test_baixar_componentes_monta_o_plano_e_conclui(self):
+        from unittest import mock
+
+        from scriba import components
+        from scriba.qt.settings_ui import SettingsWindow
+
+        with mock.patch("scriba.updates.is_frozen_install", return_value=True):
+            win = SettingsWindow(self._app())
+        win._inline_bg = True
+        win._comp_model.setChecked(False)
+        win._comp_cuda.setChecked(False)
+        win._comp_voices.setChecked(True)
+        with mock.patch.object(components, "run", return_value=(True, "")) as run:
+            win._download_components()
+        self.assertEqual([k for k, _l, _mb in run.call_args[0][0]], ["voices"])
+        self.assertIn("Pronto", win._comp_status.text())
+        self.assertTrue(win._comp_btn.isEnabled())
+
+    def test_baixar_componentes_falha_reabilita_e_avisa(self):
+        from unittest import mock
+
+        from scriba import components
+        from scriba.qt.settings_ui import SettingsWindow
+
+        with mock.patch("scriba.updates.is_frozen_install", return_value=True):
+            win = SettingsWindow(self._app())
+        win._inline_bg = True
+        win._comp_voices.setChecked(True)
+        with mock.patch.object(components, "run", return_value=(False, "componentes: pip 1")):
+            win._download_components()
+        self.assertIn("falharam", win._comp_status.text())
+        self.assertTrue(win._comp_btn.isEnabled())       # re-tentável
+
+    def test_baixar_componentes_nada_selecionado(self):
+        from unittest import mock
+
+        from scriba.qt.settings_ui import SettingsWindow
+
+        with mock.patch("scriba.updates.is_frozen_install", return_value=True):
+            win = SettingsWindow(self._app())
+        for chk in (win._comp_model, win._comp_cuda, win._comp_voices):
+            chk.setChecked(False)
+        win._download_components()
+        self.assertIn("Nada selecionado", win._comp_status.text())
+
     def test_show_about_update(self):
         from scriba.qt.settings_ui import SettingsWindow
 
