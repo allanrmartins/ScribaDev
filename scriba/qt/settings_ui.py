@@ -932,13 +932,19 @@ class SettingsWindow(QWidget):
         row = QHBoxLayout()
         self._comp_btn = widgets.ModernButton("Baixar selecionados", self._download_components,
                                               kind="primary")
-        row.addWidget(self._comp_btn); row.addStretch(1)
+        row.addWidget(self._comp_btn)
+        # aparece SÓ quando um download falha: zip do diagnóstico + issue pré-preenchida
+        self._comp_report_btn = widgets.ModernButton("Reportar erro no GitHub",
+                                                     self._report_components_error)
+        self._comp_report_btn.setVisible(False)
+        row.addWidget(self._comp_report_btn); row.addStretch(1)
         lay.addLayout(row)
         self._comp_bar = QProgressBar(); self._comp_bar.setRange(0, 1000); self._comp_bar.setValue(0)
         self._comp_bar.setVisible(False)
         lay.addWidget(self._comp_bar)
         self._comp_status = widgets.WrapLabel(""); self._comp_status.setProperty("role", "muted")
         lay.addWidget(self._comp_status)
+        self._comp_last_notes = ""
 
         self._comp_progress.connect(self._comp_status.setText)
         self._comp_frac.connect(self._comp_bar.setValue)
@@ -972,9 +978,28 @@ class SettingsWindow(QWidget):
     def _components_done(self, ok: bool, notes: str) -> None:
         self._comp_btn.setEnabled(True)
         self._comp_bar.setValue(1000)
+        self._comp_last_notes = notes
+        self._comp_report_btn.setVisible(not ok)
         self._comp_status.setText(
             "Pronto — componentes instalados e já disponíveis (sem reiniciar)." if ok
-            else f"Alguns itens falharam — dá para tentar de novo. Detalhe: {notes}")
+            else f"Alguns itens falharam — dá para tentar de novo, ou reporte o erro "
+                 f"(o botão salva o log e abre a issue). Detalhe: {notes}")
+
+    def _report_components_error(self) -> None:
+        """Botão do erro: zip de diagnóstico (com o pip.log) + issue pré-preenchida."""
+        from .. import support
+
+        try:
+            rec = self.app.cfg.output.resolved_recordings_dir()
+        except Exception:
+            rec = None
+        z = support.open_report("Download de componentes falhou (Configurações → Sobre)",
+                                self._comp_last_notes, rec)
+        self._comp_status.setText(
+            f"Abri a página da issue no navegador. Para anexar, arraste o arquivo "
+            f"{z.name} (deixei selecionado no gerenciador de arquivos)." if z else
+            "Abri a página da issue no navegador — não consegui gerar o zip; "
+            "descreva o cenário na issue, por favor.")
 
     def _about_components(self) -> list:
         import sys

@@ -174,6 +174,25 @@ class SetupWizardTests(unittest.TestCase):
         w.skip_voices = True
         self.assertNotIn("voices", [k for k, _l, _mb in w._plan_items()])
 
+    def test_falha_de_download_oferece_reportar_no_github(self):
+        from unittest import mock
+
+        w = self._win(no_downloads=False)
+        w._download_worker = lambda: w._done_dl.emit(False, "componentes: pip retornou 2")
+        w._from_machine()
+        w._skip_voices()
+        self.qapp.processEvents()
+        self.assertFalse(w._report_btn.isHidden())         # erro → botão visível
+        with mock.patch("scriba.support.open_report", return_value=None) as rep:
+            w._report_dl_error()
+        self.assertIn("pip retornou 2", rep.call_args[0][1])
+        # sucesso não oferece o botão
+        w2 = self._win()                                   # downloads mock ok
+        w2._from_machine()
+        w2._skip_voices()
+        self.qapp.processEvents()
+        self.assertTrue(w2._report_btn.isHidden())
+
     # -- skip explícito de vozes (#154) ---------------------------------------
     def test_continuar_sem_token_avisa_antes_de_pular(self):
         """'Ativar e continuar' sem token não pode pular as vozes em silêncio:

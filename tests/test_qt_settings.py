@@ -355,10 +355,27 @@ class SettingsTests(unittest.TestCase):
             win = SettingsWindow(self._app())
         win._inline_bg = True
         win._comp_voices.setChecked(True)
+        self.assertTrue(win._comp_report_btn.isHidden())  # sem erro, sem botão de reporte
         with mock.patch.object(components, "run", return_value=(False, "componentes: pip 1")):
             win._download_components()
         self.assertIn("falharam", win._comp_status.text())
         self.assertTrue(win._comp_btn.isEnabled())       # re-tentável
+        self.assertFalse(win._comp_report_btn.isHidden())  # erro → oferece reportar
+
+    def test_reportar_erro_de_componentes_abre_issue(self):
+        from unittest import mock
+
+        from scriba.qt.settings_ui import SettingsWindow
+
+        with mock.patch("scriba.updates.is_frozen_install", return_value=True):
+            win = SettingsWindow(self._app())
+        win._comp_last_notes = "componentes: pip retornou 2"
+        fake_zip = Path(tempfile.mkdtemp(prefix="scriba_rep_")) / "diag.zip"
+        fake_zip.write_bytes(b"z")
+        with mock.patch("scriba.support.open_report", return_value=fake_zip) as rep:
+            win._report_components_error()
+        self.assertIn("pip retornou 2", rep.call_args[0][1])   # detalhe vai p/ a issue
+        self.assertIn("diag.zip", win._comp_status.text())     # instrução de arraste
 
     def test_baixar_componentes_nada_selecionado(self):
         from unittest import mock

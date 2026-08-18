@@ -103,6 +103,7 @@ class SetupWizardWindow(QWidget):
         self.express = True
         self.skip_voices = False
         self._voices_skip_warned = False   # aviso de skip explícito (1 clique) — #154
+        self._dl_notes = ""                # notas do último download (p/ o Reportar erro)
 
         self.setWindowTitle("ScribaDev - Primeiros passos")
         self.setMinimumSize(620, 520)
@@ -322,9 +323,24 @@ class SetupWizardWindow(QWidget):
         self._ready_box = QLabel("")
         self._ready_box.setWordWrap(True)
         lay.addWidget(self._ready_box)
+        # só aparece se algum download falhou: zip do diagnóstico + issue pré-preenchida
+        self._report_btn = widgets.ModernButton("Reportar erro no GitHub", self._report_dl_error)
+        self._report_btn.setVisible(False)
+        row = QHBoxLayout(); row.addWidget(self._report_btn); row.addStretch(1)
+        lay.addLayout(row)
         lay.addStretch(1)
         self._nav(lay, next_label="Começar a usar", next_cb=self._finish)
         return w
+
+    def _report_dl_error(self) -> None:
+        from .. import support
+
+        z = support.open_report("Download de componentes falhou no wizard de 1º uso",
+                                self._dl_notes)
+        extra = (f"<br><br>Abri a página da issue. Para anexar, arraste o arquivo {z.name} "
+                 "(deixei selecionado no gerenciador de arquivos)." if z else
+                 "<br><br>Abri a página da issue — descreva o cenário, por favor.")
+        self._ready_box.setText(self._ready_box.text() + extra)
 
     # ------------------------------------------------------------ sonda/fluxo --
 
@@ -447,6 +463,8 @@ class SetupWizardWindow(QWidget):
 
     def _downloads_finished(self, ok: bool, notes: str) -> None:
         self._bar.setValue(1000)
+        self._dl_notes = notes
+        self._report_btn.setVisible(not ok)
         extra = "" if ok else (
             "<br><br><b>Alguns itens não baixaram</b> - sem problema: o app funciona "
             f"e você tenta de novo em Configurações → Sobre → Baixar componentes. Detalhe: {notes}")

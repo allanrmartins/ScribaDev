@@ -169,8 +169,10 @@ def export_zip(recordings_dir=None) -> Path:
     desktop = Path.home() / "Desktop"
     dest = (desktop if desktop.is_dir() else Path.home()) / f"scribadev-diagnostico-{stamp}.zip"
     with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z:
-        # 1) log(s) do app (atual + rotacionados .1/.2/.3)
-        for p in sorted(util.LOGS_DIR.glob("scriba.log*")):
+        # 1) TODOS os logs do app: scriba.log (+ rotacionados), pip.log (downloads de
+        # componentes — sem ele o "pip retornou N" chega sem o traceback), hang.log,
+        # relaunch.log
+        for p in sorted(util.LOGS_DIR.glob("*.log*")):
             try:
                 z.write(p, f"logs/{p.name}")
             except OSError:

@@ -333,6 +333,20 @@ def show_crash_dialog(app, detail: str) -> None:
             except Exception:
                 log.exception("crash dialog: falha ao exportar diagnóstico")
 
+        def _issue():
+            """Zip do diagnóstico + issue do GitHub pré-preenchida (o corpo pede o
+            arraste do zip, que fica selecionado no gerenciador)."""
+            from .. import support
+
+            try:
+                rec = app.cfg.output.resolved_recordings_dir()
+            except Exception:
+                rec = None
+            try:
+                support.open_report("Erro inesperado durante a execução", detail, rec)
+            except Exception:
+                log.exception("crash dialog: falha ao abrir o reporte de issue")
+
         def _close():
             global _crash_win
             _crash_win = None
@@ -341,7 +355,8 @@ def show_crash_dialog(app, detail: str) -> None:
         bar = QHBoxLayout(); bar.addStretch(1)
         bar.addWidget(widgets.ModernButton("Copiar erro", _copy))
         bar.addWidget(widgets.ModernButton("Abrir log", _open_log))
-        bar.addWidget(widgets.ModernButton("Exportar diagnóstico", _export, kind="primary"))
+        bar.addWidget(widgets.ModernButton("Exportar diagnóstico", _export))
+        bar.addWidget(widgets.ModernButton("Reportar no GitHub", _issue, kind="primary"))
         bar.addWidget(widgets.ModernButton("Fechar", _close))
         lay.addLayout(bar)
 
