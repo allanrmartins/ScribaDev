@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -87,6 +88,62 @@ class ResourcePathTests(unittest.TestCase):
         sys._MEIPASS = r"X:\bundle"
         self.assertEqual(util.resource_path("assets", "scriba.ico"),
                          Path(r"X:\bundle") / "scriba" / "assets" / "scriba.ico")
+
+
+class AppCommandTests(unittest.TestCase):
+    """Subprocessos do app na instalação CONGELADA (#142/#147).
+
+    Um exe do PyInstaller NÃO entende `-m módulo`: `[exe, "-X", "utf8", "-m",
+    "scriba.cli", "process", pasta]` chegava inteiro no argparse do app
+    ("unrecognized arguments") e NENHUMA gravação era processada na instalação por
+    instalador/DMG. O subprocesso tem de ser o exe de console irmão + subcomando.
+    """
+
+    def setUp(self):
+        # resolve(): /var é symlink p/ /private/var no mac e frozen_console_exe
+        # resolve o caminho do bundle (bundles reais podem estar sob symlink)
+        self.tmp = Path(tempfile.mkdtemp(prefix="scriba_appcmd_")).resolve()
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+        if hasattr(sys, "frozen"):
+            self.addCleanup(lambda: setattr(sys, "frozen", True))
+
+    def _finge_bundle(self, nome: str):
+        """Cria <tmp>/{ScribaDevApp,<nome>} e aponta o sys.executable p/ o windowed."""
+        (self.tmp / "ScribaDevApp").write_text("", encoding="utf-8")
+        (self.tmp / nome).write_text("", encoding="utf-8")
+        return mock.patch.object(sys, "executable", str(self.tmp / "ScribaDevApp"))
+
+    def test_congelado_usa_o_exe_de_console_irmao_com_subcomando(self):
+        nome = "scribadev.exe" if sys.platform == "win32" else "scribadev"
+        with mock.patch.object(sys, "frozen", True, create=True), self._finge_bundle(nome):
+            self.assertEqual(util.app_command("process", "/pasta"),
+                             [str(self.tmp / nome), "process", "/pasta"])
+            self.assertEqual(util.frozen_console_exe(), self.tmp / nome)
+
+    def test_congelado_nunca_passa_dash_m(self):
+        nome = "scribadev.exe" if sys.platform == "win32" else "scribadev"
+        with mock.patch.object(sys, "frozen", True, create=True), self._finge_bundle(nome):
+            cmd = util.app_command("process", "/pasta")
+        self.assertNotIn("-m", cmd)
+        self.assertNotIn("scriba.cli", cmd)
+
+    def test_fonte_mantem_o_dash_m_de_sempre(self):
+        cmd = util.app_command("process", "/pasta")
+        self.assertEqual(cmd[1:], ["-X", "utf8", "-m", "scriba.cli", "process", "/pasta"])
+        self.assertEqual(cmd[0], str(util.console_python()))
+        self.assertIsNone(util.frozen_console_exe())
+
+    def test_bundle_sem_o_exe_de_console_cai_no_caminho_de_fonte(self):
+        with mock.patch.object(sys, "frozen", True, create=True), \
+                mock.patch.object(sys, "executable", str(self.tmp / "ScribaDevApp")):
+            self.assertIsNone(util.frozen_console_exe())
+            self.assertIn("-m", util.app_command("process", "/pasta"))
+
+    def test_sonda_de_audio_vai_pelo_app_command(self):
+        with mock.patch.object(util, "app_command",
+                               return_value=[sys.executable, "-c", "print('{\"mic\": \"m\"}')"]) as m:
+            self.assertEqual(util.run_audio_probe(), {"mic": "m"})
+        m.assert_called_once_with("audioprobe")
 
 
 class FfmpegStatusTests(unittest.TestCase):

@@ -254,16 +254,47 @@ def console_python() -> Path:
     return Path(sys.executable)
 
 
+def frozen_console_exe() -> Path | None:
+    """Na instalação CONGELADA, o executável de CONSOLE irmão no bundle
+    (`scribadev`/`scribadev.exe`); None fora do bundle (ou se ele faltar).
+
+    É ele — não o `sys.executable`, que na GUI é o windowed sem stdout — quem roda
+    os subprocessos do app. Os dois exes saem do mesmo COLLECT e moram na mesma
+    pasta (ver installer/*/…spec).
+    """
+    if not getattr(sys, "frozen", False):
+        return None
+    nome = "scribadev.exe" if sys.platform == "win32" else "scribadev"
+    exe = Path(sys.executable).resolve().parent / nome
+    return exe if exe.exists() else None
+
+
+def app_command(*args: str) -> list[str]:
+    """argv para rodar um subcomando do ScribaDev num processo NOVO.
+
+    Congelado: `[<bundle>/scribadev, *args]`. Um exe congelado NÃO entende
+    `-m módulo` — os argumentos vão inteiros para o argparse do app. Era esse o bug
+    da instalação por instalador/DMG: `[sys.executable, "-X", "utf8", "-m",
+    "scriba.cli", "process", pasta]` virava "unrecognized arguments" e NENHUMA
+    gravação era transcrita (o meta ia para "failed" sem explicação).
+
+    Fonte/venv: `[<python de console>, -X utf8, -m scriba.cli, *args]` — o de sempre.
+    """
+    exe = frozen_console_exe()
+    if exe is not None:
+        return [str(exe), *args]
+    return [str(console_python()), "-X", "utf8", "-m", "scriba.cli", *args]
+
+
 def _audio_probe(extra_args: list[str], timeout: float) -> dict | None:
     """Roda a sonda de áudio (scriba.audioprobe) num subprocesso descartável — o
     PortAudio pode abortar o processo com assert de CRT ao enumerar. None se falhar."""
     import json
     import subprocess
 
-    python = console_python()
     try:
         proc = subprocess.run(
-            [str(python), "-X", "utf8", "-m", "scriba.audioprobe", *extra_args],
+            app_command("audioprobe", *extra_args),
             capture_output=True,
             text=True,
             encoding="utf-8",

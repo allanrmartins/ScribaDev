@@ -52,8 +52,11 @@ def _list(pa) -> dict:
     }
 
 
-def main() -> int:
-    mode = sys.argv[1] if len(sys.argv) > 1 else ""
+def main(mode: str | None = None) -> int:
+    """`mode` explícito vem do subcomando oculto `scribadev audioprobe` (caminho do
+    app congelado, que não tem `python -m`); None = lê do argv (`python -m`)."""
+    if mode is None:
+        mode = sys.argv[1] if len(sys.argv) > 1 else ""
     if sys.platform == "darwin":
         # No macOS a sonda não precisa do isolamento anti-abort (pathologia do
         # PortAudio/WASAPI), mas manter o subprocesso preserva os call sites e

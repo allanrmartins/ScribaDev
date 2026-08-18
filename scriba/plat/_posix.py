@@ -45,6 +45,82 @@ def has_nvidia_gpu() -> bool:
         return False
 
 
+# ------------------------------------------------------- PATH do usuário ----
+# App lançado do Finder/Dock/LaunchAgent NÃO herda o PATH do shell: o launchd
+# entrega `/usr/bin:/bin:/usr/sbin:/sbin` e nada mais. Resultado no app instalado
+# (e só nele — do terminal tudo funciona): `shutil.which` não acha o `claude` nem
+# o `ffmpeg`, e a UI/doctor dizem que não estão instalados.
+
+# Onde ferramentas de usuário costumam morar. Só entram no PATH se existirem.
+_DIRS_EXTRA = (
+    "~/.local/bin",       # instalador nativo do Claude Code, pipx, uv
+    "~/.claude/local",    # instalação "local" (antiga) do Claude Code
+    "~/bin",
+    "/opt/homebrew/bin",  # Homebrew no Apple Silicon — onde o ffmpeg do mac mora
+    "/opt/homebrew/sbin",
+    "/usr/local/bin",     # Homebrew no Intel + instaladores diversos
+    "/usr/local/sbin",
+    "/opt/local/bin",     # MacPorts
+    "/opt/local/sbin",
+    "/snap/bin",          # Linux
+)
+
+# PATH que o launchd dá a app de GUI: se o nosso é subconjunto disto, fomos
+# lançados por ele (não por um shell) e vale perguntar o PATH real ao shell.
+_PATH_DO_LAUNCHD = frozenset(("/usr/bin", "/bin", "/usr/sbin", "/sbin"))
+
+_MARCA = ("__scriba_path_ini__", "__scriba_path_fim__")
+
+
+def _path_do_shell(timeout: float = 5.0) -> list[str]:
+    """PATH do shell de login+interativo do usuário, ou [] se não der.
+
+    `-l -i` de propósito: muita gente monta o PATH no ~/.zshrc, que um shell
+    SÓ-login não lê. Os marcadores isolam o valor do ruído que rc com plugins
+    costuma imprimir. Qualquer falha (rc quebrado, shell inexistente, timeout)
+    devolve [] — os _DIRS_EXTRA cobrem o caso comum.
+    """
+    import re
+    import subprocess
+
+    shell = os.environ.get("SHELL") or "/bin/sh"
+    ini, fim = _MARCA
+    try:
+        out = subprocess.run(
+            [shell, "-l", "-i", "-c", f'printf "{ini}%s{fim}" "$PATH"'],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=timeout, check=False,
+        ).stdout or ""
+    except (OSError, subprocess.SubprocessError, ValueError):
+        log.debug("não deu para perguntar o PATH ao shell", exc_info=True)
+        return []
+    m = re.search(f"{re.escape(ini)}(.*?){re.escape(fim)}", out, re.S)
+    return [d for d in m.group(1).split(os.pathsep) if d] if m else []
+
+
+def ensure_user_path() -> str:
+    """Completa o PATH do processo com os diretórios de ferramentas do usuário.
+
+    Só ACRESCENTA no fim: a ordem do que já estava no PATH é preservada, então
+    rodando da CLI (PATH do shell) isto não muda qual binário é escolhido. O
+    shell só é consultado quando o PATH é o do launchd — na CLI nem spawna.
+
+    Devolve o PATH final (para log/diagnóstico).
+    """
+    atual = [d for d in os.environ.get("PATH", "").split(os.pathsep) if d]
+    vistos = set(atual)
+    candidatos = []
+    if all(d in _PATH_DO_LAUNCHD for d in atual):
+        candidatos += _path_do_shell()
+    candidatos += [str(Path(d).expanduser()) for d in _DIRS_EXTRA]
+    for d in candidatos:
+        if d not in vistos and Path(d).is_dir():
+            atual.append(d)
+            vistos.add(d)
+    os.environ["PATH"] = os.pathsep.join(atual)
+    return os.environ["PATH"]
+
+
 def open_path(path) -> None:
     """Abre arquivo ou pasta no gerenciador do SO (xdg-open no Linux, open no macOS)."""
     import subprocess

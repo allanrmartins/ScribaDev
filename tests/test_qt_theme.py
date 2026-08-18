@@ -268,6 +268,31 @@ class IconTests(unittest.TestCase):
     def test_icone_inexistente_falha_graciosa(self):
         self.assertEqual(theme.icon("nao-existe-xyz"), "")
 
+    def test_fonte_dos_svgs_sai_de_resource_path(self):
+        """Congelado, os SVGs vivem sob sys._MEIPASS — não ao lado do theme.py.
+
+        Regressão do DMG 1.4.3: o app instalado abria sem ícone nenhum porque a
+        fonte era `Path(__file__).parent/"icons"`, caminho que não existe em bundle.
+        """
+        from scriba import util
+
+        tmp = Path(tempfile.mkdtemp(prefix="scriba_meipass_"))
+        (tmp / "scriba" / "qt" / "icons").mkdir(parents=True)
+        (tmp / "scriba" / "qt" / "icons" / "settings.svg").write_text(
+            "<svg><!--do-meipass--><rect fill='#212121'/></svg>", encoding="utf-8")
+        orig_state = util.STATE_PATH
+        util.STATE_PATH = tmp / "state" / "state.json"
+        sys._MEIPASS = str(tmp)
+        try:
+            gerado = theme.icon("settings", "#010203")
+        finally:
+            del sys._MEIPASS
+            util.STATE_PATH = orig_state
+        self.assertTrue(gerado, "não achou o SVG empacotado sob _MEIPASS")
+        txt = Path(gerado).read_text(encoding="utf-8")
+        self.assertIn("do-meipass", txt, "leu o SVG do repo em vez do empacotado")
+        self.assertIn("#010203", txt)
+
     def test_svgs_e_licenca_vendorizados(self):
         d = Path(theme.__file__).resolve().parent / "icons"
         self.assertTrue((d / "LICENSE").exists(), "faltou a licença MIT do Fluent")
