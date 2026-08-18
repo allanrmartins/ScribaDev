@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import __version__
+from . import __version__, plat
 
 
 class _VersionAction(argparse.Action):
@@ -63,6 +63,12 @@ def _timestamp_subprocess_output() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # ANTES de qualquer shutil.which: app lançado do Finder/Dock/LaunchAgent recebe
+    # do launchd um PATH mínimo (/usr/bin:/bin:/usr/sbin:/sbin) e não enxerga o
+    # `claude` (~/.local/bin) nem o `ffmpeg` (/opt/homebrew/bin) — a UI dizia que
+    # não estavam instalados só na instalação pelo DMG. No-op no Windows.
+    plat.ensure_user_path()
+
     parser = argparse.ArgumentParser(
         prog="scribadev",
         description="Gravação e transcrição automática de reuniões do Microsoft Teams — local e privada.",
@@ -109,6 +115,12 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     sub.add_parser("devices", help="lista dispositivos de áudio (microfone e loopback)")
+
+    # infraestrutura, não comando de usuário (SUPPRESS): a sonda de áudio roda em
+    # processo isolado (util._audio_probe) e no app CONGELADO não existe
+    # `python -m scriba.audioprobe` — o subprocesso é o próprio exe com subcomando.
+    p_probe = sub.add_parser("audioprobe", help=argparse.SUPPRESS)
+    p_probe.add_argument("mode", nargs="?", default="", choices=("", "list"))
     sub.add_parser("detect", help="modo debug: imprime as transições de estado da detecção")
     sub.add_parser("wizard", help="assistente de perfil: gera o prompt.md e as hotwords")
 
@@ -202,6 +214,10 @@ def main(argv: list[str] | None = None) -> int:
         from .recorder import list_devices
 
         return list_devices()
+    if args.cmd == "audioprobe":
+        from . import audioprobe
+
+        return audioprobe.main(args.mode)
     if args.cmd == "transcribe":
         from .pipeline import transcribe_folder
 
@@ -673,7 +689,16 @@ def cmd_doctor(args) -> int:
             _print(_FAIL, "pip embarcado (addons)", "ausente no bundle — rebuild do instalador")
             failures += 1
         d = _addons.addons_dir()
-        _print(_OK, "Pasta de addons", f"{d} ({'existe' if d.is_dir() else 'ainda não criada'})")
+        abi = _addons.abi_dos_addons(d) if d.is_dir() else None
+        if abi and abi != _addons.abi_atual():
+            # o bootstrap IGNORA essa pasta (ela shadowaria o numpy do bundle e
+            # derrubaria a transcrição); dizer "OK, existe" aqui seria mentira
+            _print(_WARN, "Pasta de addons",
+                   f"{d} — instalada p/ {abi}, este app é {_addons.abi_atual()}: "
+                   "ignorada. Reinstale os componentes no wizard para ter diarização.")
+        else:
+            _print(_OK, "Pasta de addons",
+                   f"{d} ({'existe' if d.is_dir() else 'ainda não criada'})")
 
     # Imports nativos — pyaudiowpatch/windows_toasts só existem (e só instalam,
     # pelos markers do #95) no Windows; fora dele são não-aplicáveis (#98)

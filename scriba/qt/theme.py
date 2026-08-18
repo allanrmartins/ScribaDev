@@ -437,6 +437,11 @@ def _calendar_icon_path(color: str) -> str:
 # licença em scriba/qt/icons/LICENSE). São SVGs de cor única (#212121 na origem);
 # recolorimos para o token do tema e gravamos no MESMO cache de _icon_path. É só
 # texto no repo: nenhuma dependência de runtime. Vocabulário em scriba/qt/icons/*.svg.
+#
+# O caminho da fonte sai de util.resource_path (NÃO de __file__): num bundle
+# PyInstaller os dados do pacote ficam sob sys._MEIPASS e o __file__ dos módulos
+# aponta para dentro do arquivo congelado — era por isso que o app instalado pelo
+# DMG/instalador aparecia SEM ícones (a engrenagem da config e cia.).
 
 _FLUENT_SRC_COLOR = "#212121"
 
@@ -445,9 +450,7 @@ def icon(name: str, color: str | None = None) -> str:
     """Path (em cache) de um ícone Fluent recolorido para `color` (default: texto do
     tema). Serve tanto p/ `url()` do QSS quanto p/ QIcon (ver `qicon`). Devolve ''
     quando o ícone não existe (falha graciosa, sem levantar)."""
-    from pathlib import Path
-
-    src = Path(__file__).resolve().parent / "icons" / f"{name}.svg"
+    src = util.resource_path("qt", "icons", f"{name}.svg")
     try:
         svg = src.read_text(encoding="utf-8")
     except OSError:

@@ -15,7 +15,7 @@
 import re
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_dynamic_libs
 
 REPO = Path(SPECPATH).resolve().parents[1]
 
@@ -28,11 +28,44 @@ _excludes = [
 
 _pip_datas, _pip_binaries, _pip_hidden = collect_all("pip")
 
+# mlx (transcrição Metal, #104 M5) — o pacote precisa de TRÊS coletas, e faltando
+# qualquer uma o `import mlx_whisper` morre no app instalado (ficou tudo em CPU):
+#   1. collect_all: os submódulos PUROS que o core.so importa em tempo de execução
+#      (mlx._reprlib_fix e cia.). O scanner estático não os vê — o import vem de
+#      dentro do nanobind — e a falha aparece como o inútil "Encountered an error
+#      while initializing the extension.";
+#   2. o mlx.metallib (155 MB de shaders Metal compilados) vem nos datas do
+#      collect_all — o mlx o procura AO LADO do libmlx.dylib (dladdr);
+#   3. o libjaccl.dylib no destino "." (raiz do bundle = Contents/Frameworks):
+#      é dependência @rpath do próprio libmlx, o scanner do PyInstaller a perde, e
+#      os rpaths do libmlx procuram exatamente aí (`mlx/lib/../..`).
+# Tudo vazio quando o mlx não está instalado (build fora do Apple Silicon).
+_mlx_datas, _mlx_binaries, _mlx_hidden = collect_all("mlx")
+_mlx_binaries += [(src, ".") for src, _dest in collect_dynamic_libs("mlx")]
+
+# ...e o mlx_whisper tem assets/ próprios (mel_filters.npz + os .tiktoken). Sem eles
+# o modelo até carrega "em metal" e morre na 1ª transcrição, com um erro que não
+# menciona arquivo nenhum: "[load_npz] Input must be a zip file...".
+_mlxw_datas, _mlxw_binaries, _mlxw_hidden = collect_all("mlx_whisper")
+
+# faster-whisper: o silero_vad_v6.onnx (assets/) não é código e o PyInstaller não o
+# leva sozinho — como o transcriber roda SEMPRE com vad_filter=True, sem ele a
+# transcrição morre em "NO_SUCHFILE: Load model ... silero_vad_v6.onnx failed".
+_fw_datas = collect_data_files("faster_whisper", includes=["**/*.onnx"])
+
+# Dados do pacote: `assets` (ícones do app/bandeja) e `qt/icons` (SVGs Fluent da UI).
+# Os SVGs faltavam até a 1.4.3 e o app instalado abria SEM ícone nenhum na UI (a
+# engrenagem da config e cia.) — theme.icon() falha graciosamente e não avisa.
+_pkg_datas = [
+    (str(REPO / "scriba" / "assets"), "scriba/assets"),
+    (str(REPO / "scriba" / "qt" / "icons"), "scriba/qt/icons"),
+]
+
 _common = dict(
     pathex=[str(REPO)],
-    binaries=_pip_binaries,
-    datas=[(str(REPO / "scriba" / "assets"), "scriba/assets")] + _pip_datas,
-    hiddenimports=_pip_hidden,
+    binaries=_pip_binaries + _mlx_binaries + _mlxw_binaries,
+    datas=_pkg_datas + _pip_datas + _mlx_datas + _mlxw_datas + _fw_datas,
+    hiddenimports=_pip_hidden + _mlx_hidden + _mlxw_hidden,
     excludes=_excludes,
     noarchive=False,
 )
@@ -75,6 +108,14 @@ app = BUNDLE(
         "CFBundleDisplayName": "ScribaDev",
         "CFBundleShortVersionString": VERSION,
         "NSHighResolutionCapable": True,
+        # OBRIGATÓRIO: o BUNDLE do PyInstaller herda o `console` do ÚLTIMO EXE do
+        # COLLECT (aqui a CLI, console=True) e, com isso, grava LSBackgroundOnly=True
+        # no Info.plist. Um app background-only NÃO pode ser ativado pelo macOS: as
+        # janelas aparecem, mas o foco/menu bar fica no app anterior e TODO o teclado
+        # vai para lá (bug do DMG da 1.4.3). Explicitar False aqui vence o default do
+        # PyInstaller (o info_plist do .spec é mesclado por cima) e não depende da
+        # ordem dos EXEs no COLLECT.
+        "LSBackgroundOnly": False,
         # CATapDescription (process tap do áudio do sistema) é macOS 14.2+
         "LSMinimumSystemVersion": "14.2",
         "NSMicrophoneUsageDescription":

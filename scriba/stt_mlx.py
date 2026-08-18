@@ -54,11 +54,22 @@ class MlxWhisperProvider:
 
     def ensure_loaded(self) -> str:
         """Confirma o mlx_whisper importável e devolve o device. O download/carga do
-        modelo acontece na primeira transcribe (o mlx_whisper cacheia por repo)."""
+        modelo acontece na primeira transcribe (o mlx_whisper cacheia por repo).
+
+        Import quebrado cai para faster-whisper CPU (mesmo fallback do transcribe):
+        `mlx_disponivel()` só checa o find_spec, e no bundle congelado o pacote
+        EXISTE mas o dlopen pode falhar (dylib do mlx faltando) — deixar o ImportError
+        subir matava a transcrição inteira em vez de perder só a aceleração."""
         if self._fallback is not None:
             return self._fallback.ensure_loaded()
-        import mlx_whisper  # noqa: F401 — ImportError aqui = ambiente sem MLX
-
+        try:
+            import mlx_whisper  # noqa: F401
+        except Exception as e:
+            log.warning("MLX indisponível (%s); usando faster-whisper em CPU", e)
+            print(f"AVISO: MLX/Metal indisponível ({e}); usando CPU")
+            self._fallback = Transcriber(self.cfg, force_cpu=True)
+            self.device_used = self._fallback.ensure_loaded()
+            return self.device_used
         self.device_used = "metal"
         return self.device_used
 

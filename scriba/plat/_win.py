@@ -36,6 +36,16 @@ def has_nvidia_gpu() -> bool:
         return False
 
 
+def ensure_user_path() -> str:
+    """No-op: no Windows o PATH do registro chega inteiro no processo de GUI.
+
+    O par POSIX existe porque o launchd entrega um PATH mínimo a app lançado do
+    Finder/Dock (o `claude`/`ffmpeg` sumiam do `which`); aqui nada muda — o
+    comportamento histórico do Windows fica intocado (#104).
+    """
+    return os.environ.get("PATH", "")
+
+
 def open_path(path) -> None:
     """Abre arquivo ou pasta no Explorer (substituto do os.startfile).
 

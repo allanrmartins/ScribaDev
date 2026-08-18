@@ -793,8 +793,7 @@ class ScribaApp:
 
         folder = Path(folder)
         log.info("processando %s (subprocesso)", folder.name)
-        python = util.console_python()
-        args = [str(python), "-X", "utf8", "-m", "scriba.cli", "process", str(folder)]
+        args = util.app_command("process", str(folder))
         meta_path = folder / "meta.json"
         log_path = folder / "process.log"
         out = None

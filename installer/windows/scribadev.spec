@@ -14,7 +14,7 @@
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_data_files
 
 REPO = Path(SPECPATH).resolve().parents[1]  # installer/windows -> raiz do repo
 
@@ -28,10 +28,23 @@ _excludes = [
 # um exe congelado não tem `python -m pip`.
 _pip_datas, _pip_binaries, _pip_hidden = collect_all("pip")
 
+# Dados do pacote: `assets` (ícones do app/bandeja) e `qt/icons` (SVGs Fluent da UI).
+# Os SVGs faltavam até a 1.4.3 e o app instalado abria SEM ícone nenhum na UI (a
+# engrenagem da config e cia.) — theme.icon() falha graciosamente e não avisa.
+# faster-whisper: o silero_vad_v6.onnx (assets/) não é código e o PyInstaller não o
+# leva sozinho — como o transcriber roda SEMPRE com vad_filter=True, sem ele a
+# transcrição morre em "NO_SUCHFILE: Load model ... silero_vad_v6.onnx failed".
+_fw_datas = collect_data_files("faster_whisper", includes=["**/*.onnx"])
+
+_pkg_datas = [
+    (str(REPO / "scriba" / "assets"), "scriba/assets"),
+    (str(REPO / "scriba" / "qt" / "icons"), "scriba/qt/icons"),
+]
+
 _common = dict(
     pathex=[str(REPO)],
     binaries=_pip_binaries,
-    datas=[(str(REPO / "scriba" / "assets"), "scriba/assets")] + _pip_datas,
+    datas=_pkg_datas + _pip_datas + _fw_datas,
     hiddenimports=_pip_hidden,
     excludes=_excludes,
     noarchive=False,

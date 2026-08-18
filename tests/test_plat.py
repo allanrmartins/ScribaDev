@@ -7,6 +7,7 @@ testado aqui mesmo no Windows, direto em scriba.plat._posix.
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -78,11 +79,85 @@ class TestHasNvidiaGpu(unittest.TestCase):
             self.assertIs(_posix.has_nvidia_gpu(), False)
 
 
+class TestEnsureUserPath(unittest.TestCase):
+    """PATH do usuário no app de GUI (bug do DMG: `claude`/`ffmpeg` "não instalados").
+
+    App lançado do Finder/Dock/LaunchAgent herda do launchd só
+    /usr/bin:/bin:/usr/sbin:/sbin — sem Homebrew e sem ~/.local/bin.
+    """
+
+    # montado com os.pathsep: o código divide o PATH pelo separador DA PLATAFORMA —
+    # com ":" literal os testes passavam no macOS e quebravam no Windows (CI 3 SOs)
+    _LAUNCHD_DIRS = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
+    LAUNCHD = os.pathsep.join(_LAUNCHD_DIRS)
+
+    def test_acrescenta_dirs_do_usuario_que_existem(self):
+        d = Path(tempfile.mkdtemp(prefix="scriba_bin_"))
+        with mock.patch.dict(os.environ, {"PATH": self.LAUNCHD}), \
+                mock.patch.object(_posix, "_DIRS_EXTRA", (str(d),)), \
+                mock.patch.object(_posix, "_path_do_shell", return_value=[]):
+            novo = _posix.ensure_user_path()
+        self.assertEqual(tuple(novo.split(os.pathsep)[:4]), self._LAUNCHD_DIRS)
+        self.assertIn(str(d), novo.split(os.pathsep))
+
+    def test_ignora_dir_inexistente(self):
+        fake = "/nao/existe/scriba-bin"
+        with mock.patch.dict(os.environ, {"PATH": self.LAUNCHD}), \
+                mock.patch.object(_posix, "_DIRS_EXTRA", (fake,)), \
+                mock.patch.object(_posix, "_path_do_shell", return_value=[]):
+            novo = _posix.ensure_user_path()
+        self.assertNotIn(fake, novo.split(os.pathsep))
+
+    def test_nao_duplica_nem_reordena_o_que_ja_estava(self):
+        """Rodando da CLI o PATH do shell já está certo: só append, sem reordenar."""
+        d = Path(tempfile.mkdtemp(prefix="scriba_bin_"))
+        antes = f"{d}{os.pathsep}/usr/bin{os.pathsep}/bin"
+        with mock.patch.dict(os.environ, {"PATH": antes}), \
+                mock.patch.object(_posix, "_DIRS_EXTRA", (str(d),)), \
+                mock.patch.object(_posix, "_path_do_shell", return_value=[]):
+            novo = _posix.ensure_user_path()
+        self.assertEqual(novo, antes)
+
+    def test_so_pergunta_ao_shell_quando_o_path_e_do_launchd(self):
+        """Spawnar shell de login é caro (~centenas de ms): na CLI não deve acontecer."""
+        with mock.patch.object(_posix, "_path_do_shell") as m:
+            path_de_shell = os.pathsep.join(("/opt/homebrew/bin", "/usr/bin"))
+            with mock.patch.dict(os.environ, {"PATH": path_de_shell}):
+                _posix.ensure_user_path()
+            m.assert_not_called()
+            with mock.patch.dict(os.environ, {"PATH": self.LAUNCHD}):
+                _posix.ensure_user_path()
+            m.assert_called_once()
+
+    def test_path_do_shell_le_entre_os_marcadores(self):
+        ini, fim = _posix._MARCA
+        saida = f"ruído do rc\n{ini}/a{os.pathsep}/b{fim}"
+        with mock.patch("subprocess.run", return_value=mock.Mock(stdout=saida)):
+            self.assertEqual(_posix._path_do_shell(), ["/a", "/b"])
+
+    def test_path_do_shell_tolera_falha(self):
+        for erro in (OSError("boom"), subprocess.TimeoutExpired("zsh", 5)):
+            with self.subTest(erro=type(erro).__name__):
+                with mock.patch("subprocess.run", side_effect=erro):
+                    self.assertEqual(_posix._path_do_shell(), [])
+
+    def test_path_do_shell_sem_marcador_devolve_vazio(self):
+        with mock.patch("subprocess.run", return_value=mock.Mock(stdout="nada aqui")):
+            self.assertEqual(_posix._path_do_shell(), [])
+
+    def test_windows_e_no_op(self):
+        """Regra de ouro do #104: o comportamento do Windows não muda."""
+        with mock.patch.dict(os.environ, {"PATH": r"C:\Windows"}):
+            self.assertEqual(_win.ensure_user_path(), r"C:\Windows")
+            self.assertEqual(os.environ["PATH"], r"C:\Windows")
+
+
 class TestDespacho(unittest.TestCase):
     def test_backend_casa_com_o_so_atual(self):
         esperado = _win if sys.platform == "win32" else _posix
         self.assertIs(plat.app_data_dir, esperado.app_data_dir)
         self.assertIs(plat.default_recordings_dir, esperado.default_recordings_dir)
+        self.assertIs(plat.ensure_user_path, esperado.ensure_user_path)
         self.assertIs(plat.has_nvidia_gpu, esperado.has_nvidia_gpu)
         self.assertIs(plat.open_path, esperado.open_path)
 

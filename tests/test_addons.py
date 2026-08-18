@@ -84,5 +84,65 @@ class InstallToAddonsTests(unittest.TestCase):
         self.assertIn("pip retornou 1", msg)
 
 
+class AbiDosAddonsTests(unittest.TestCase):
+    """Guarda de ABI (#147): addons de `pip --target` valem só para o Python que os
+    instalou. Sem esta guarda, reconstruir o app com outro minor (3.12 -> 3.14) faz o
+    numpy do addons shadowar o do bundle e a TRANSCRIÇÃO para de importar."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="scriba_abi_"))
+        self._app0 = util.APP_DIR
+        util.APP_DIR = self.tmp
+        self.d = addons.addons_dir()
+        self.d.mkdir(parents=True)
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+
+    def tearDown(self):
+        util.APP_DIR = self._app0
+
+    def test_abi_atual_e_do_interprete(self):
+        self.assertEqual(addons.abi_atual(),
+                         f"cpython-{sys.version_info.major}{sys.version_info.minor}")
+
+    def test_le_o_carimbo_quando_existe(self):
+        (self.d / addons._ABI_STAMP).write_text("cpython-312", encoding="utf-8")
+        self.assertEqual(addons.abi_dos_addons(self.d), "cpython-312")
+
+    def test_sonda_o_nome_do_so_sem_carimbo(self):
+        """Pasta escrita por app antigo (sem carimbo): a tag vem do nome do .so."""
+        so = self.d / "numpy" / "_core" / "_multiarray_umath.cpython-312-darwin.so"
+        so.parent.mkdir(parents=True)
+        so.write_bytes(b"")
+        self.assertEqual(addons.abi_dos_addons(self.d), "cpython-312")
+
+    def test_sem_pista_devolve_none(self):
+        (self.d / "puro").mkdir()
+        (self.d / "puro" / "__init__.py").write_text("", encoding="utf-8")
+        self.assertIsNone(addons.abi_dos_addons(self.d))
+
+    def test_bootstrap_ignora_addons_de_outra_abi(self):
+        (self.d / addons._ABI_STAMP).write_text("cpython-312", encoding="utf-8")
+        with mock.patch.object(sys, "frozen", True, create=True), \
+                mock.patch.object(addons, "abi_atual", return_value="cpython-314"), \
+                mock.patch.object(sys, "path", list(sys.path)):
+            self.assertFalse(addons.bootstrap())
+            self.assertNotIn(str(self.d), sys.path)
+
+    def test_bootstrap_aceita_addons_da_mesma_abi(self):
+        (self.d / addons._ABI_STAMP).write_text(addons.abi_atual(), encoding="utf-8")
+        with mock.patch.object(sys, "frozen", True, create=True), \
+                mock.patch.object(sys, "path", list(sys.path)):
+            self.assertTrue(addons.bootstrap())
+            self.assertIn(str(self.d), sys.path)
+
+    def test_bootstrap_aceita_quando_a_abi_e_desconhecida(self):
+        """Sem pista de ABI não há incompatibilidade a detectar — não regride o
+        comportamento histórico (addons entra no sys.path)."""
+        with mock.patch.object(sys, "frozen", True, create=True), \
+                mock.patch.object(sys, "path", list(sys.path)):
+            self.assertTrue(addons.bootstrap())
+            self.assertIn(str(self.d), sys.path)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

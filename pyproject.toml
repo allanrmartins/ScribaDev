@@ -82,4 +82,6 @@ packages = ["scriba", "scriba.plat", "scriba.qt"]
 version = { attr = "scriba.__version__" }
 
 [tool.setuptools.package-data]
-scriba = ["assets/*.ico", "assets/*.png"]
+# os SVGs de qt/icons são recursos de RUNTIME (theme.icon): sem eles a UI abre sem
+# ícone nenhum — um install não-editável precisa deles tanto quanto dos assets
+scriba = ["assets/*.ico", "assets/*.png", "qt/icons/*.svg", "qt/icons/LICENSE"]

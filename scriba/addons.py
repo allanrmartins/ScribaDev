@@ -13,10 +13,20 @@ congelado (lá o pip normal instala os extras `[cuda]`/`[diarization]` na venv).
 from __future__ import annotations
 
 import logging
+import re
 import sys
 from pathlib import Path
 
 log = logging.getLogger("scriba.addons")
+
+# Carimbo da ABI de quem instalou os addons. Um `pip --target` produz wheels do
+# interpretador que rodou o pip: se o app for reconstruído com outro Python minor
+# (3.12 -> 3.14), o numpy/torch de lá passam a SHADOWAR os do bundle e o import
+# explode com "_multiarray_umath.cpython-312-darwin.so ... The Python version is
+# 3.14" — sintoma: faster_whisper/ctranslate2 param de importar (nada a ver com o
+# que o usuário fez). Melhor ignorar o addons incompatível e seguir sem diarização
+# (o wizard reinstala) do que quebrar a transcrição, que é o núcleo do app.
+_ABI_STAMP = ".scriba-abi"
 
 
 def addons_dir() -> Path:
@@ -27,14 +37,48 @@ def addons_dir() -> Path:
     return util.APP_DIR / "addons"
 
 
+def abi_atual() -> str:
+    """Tag de ABI do Python em execução ("cpython-314")."""
+    return f"cpython-{sys.version_info.major}{sys.version_info.minor}"
+
+
+def abi_dos_addons(d: Path) -> str | None:
+    """ABI dos wheels instalados em `d`, ou None quando não há como saber.
+
+    Prefere o carimbo deixado por `install_to_addons`; sem ele (pasta escrita por
+    uma versão antiga do app) sonda o nome de UM .so — wheel binário carrega a tag
+    no nome do arquivo (`..._multiarray_umath.cpython-312-darwin.so`). A varredura
+    é rasa e para no primeiro achado; wheels abi3/puros não carimbam e caem em None
+    (nesses casos não há incompatibilidade de ABI para detectar de todo jeito).
+    """
+    try:
+        marca = (d / _ABI_STAMP).read_text(encoding="utf-8").strip()
+        if marca:
+            return marca
+    except OSError:
+        pass
+    for padrao in ("*/*.so", "*/*/*.so", "*/*/*/*.so", "*/*.pyd", "*/*/*.pyd"):
+        for lib in d.glob(padrao):
+            m = re.search(r"(cpython-3\d+)", lib.name)
+            if m:
+                return m.group(1)
+    return None
+
+
 def bootstrap() -> bool:
-    """No bundle congelado, põe APP_DIR/addons no sys.path (se existir e ainda não
-    estiver). Devolve True se adicionou. Fora do bundle: no-op. Nunca levanta."""
+    """No bundle congelado, põe APP_DIR/addons no sys.path (se existir, ainda não
+    estiver e a ABI casar). Devolve True se adicionou. Fora do bundle: no-op.
+    Nunca levanta."""
     try:
         if not getattr(sys, "frozen", False):
             return False
         d = addons_dir()
         if not d.is_dir():
+            return False
+        abi = abi_dos_addons(d)
+        if abi and abi != abi_atual():
+            log.warning("addons ignorados: instalados p/ %s, este app é %s — reinstale "
+                        "os componentes no wizard (%s)", abi, abi_atual(), d)
             return False
         s = str(d)
         if s not in sys.path:
@@ -112,5 +156,9 @@ def install_to_addons(packages: list[str], progress=print) -> tuple[bool, str]:
         tail = _pip_log_tail()
         return (False, f"pip retornou {rc} ({tail}) — saída completa em {plog}"
                 if tail else f"pip retornou {rc} — saída completa em {plog}")
+    try:  # carimba a ABI: um app futuro com outro Python minor sabe ignorar isto
+        (d / _ABI_STAMP).write_text(abi_atual(), encoding="utf-8")
+    except OSError:
+        log.debug("não deu para carimbar a ABI do addons", exc_info=True)
     bootstrap()  # entra no sys.path já nesta execução
     return (True, "instalado")

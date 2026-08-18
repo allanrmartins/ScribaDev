@@ -7,6 +7,7 @@ Exceção: os hints _H da config são computados no IMPORT (como o wintitles) �
 testes de template recarregam o módulo sob o sys.platform desejado.
 """
 
+import builtins
 import importlib
 import subprocess as subprocess_mod
 import sys
@@ -390,6 +391,30 @@ class TestMakeTranscriberMlx(unittest.TestCase):
                 mock.patch("scriba.stt_mlx.Transcriber", return_value=fake_fw):
             self.assertEqual(prov2.transcribe("x.wav"), ["seg"])
         self.assertEqual(prov2.device_used, "cpu")
+
+    def test_import_quebrado_no_ensure_loaded_cai_pra_cpu(self):
+        """No bundle congelado o pacote mlx EXISTE (find_spec passa) mas o dlopen pode
+        falhar ("Library not loaded: @rpath/libjaccl.dylib"): deixar o ImportError
+        subir do ensure_loaded matava a transcrição inteira no app instalado."""
+        from scriba.stt_mlx import MlxWhisperProvider
+
+        prov = MlxWhisperProvider(mock.Mock(model="tiny", language="pt", hotwords=""))
+        fake_fw = mock.Mock()
+        fake_fw.ensure_loaded.return_value = "cpu"
+        fake_fw.transcribe.return_value = ["seg"]
+        # import de mlx_whisper explode (dylib faltando no bundle)
+        real_import = builtins.__import__
+
+        def boom(name, *a, **kw):
+            if name == "mlx_whisper":
+                raise ImportError("dlopen: Library not loaded: @rpath/libjaccl.dylib")
+            return real_import(name, *a, **kw)
+
+        with mock.patch.object(builtins, "__import__", boom), \
+                mock.patch("scriba.stt_mlx.Transcriber", return_value=fake_fw):
+            self.assertEqual(prov.ensure_loaded(), "cpu")
+            self.assertEqual(prov.transcribe("x.wav"), ["seg"])  # segue pelo fallback
+        self.assertEqual(prov.device_used, "cpu")
 
 
 class TestNotifyMac(unittest.TestCase):

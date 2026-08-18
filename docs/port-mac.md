@@ -102,6 +102,88 @@ existente (TOML rejeita tabela duplicada).
    p/ lá) — e, com token fine-grained, a permissão "read gated repos". Validado
    E2E no mac em 2026-08-15 (~20s de áudio → 10s de diarização em CPU).
 
+## Empacotamento `.app`/DMG — armadilhas do PyInstaller (corrigidas na 1.4.4)
+
+O DMG da 1.4.3 abria, mas o app instalado tinha problemas que NÃO apareciam
+rodando do código-fonte — três causas, todas de empacotamento/contexto de launch
+(nenhuma linha de lógica do app estava errada):
+
+1. **`LSBackgroundOnly=True` no Info.plist → o app não recebia foco.** O `BUNDLE`
+   do PyInstaller herda o `console` do **último** `EXE` do `COLLECT` — aqui a CLI
+   (`console=True`) — e traduz isso para `LSBackgroundOnly=True`. Um app
+   background-only não pode ser ativado pelo macOS: as janelas abrem, mas a menu
+   bar continua mostrando o app anterior e **todo o teclado vai para lá**. Correção:
+   `"LSBackgroundOnly": False` explícito no `info_plist` do `.spec` (o dict do spec
+   é mesclado por cima do default) — não dependa da ordem dos EXEs no COLLECT.
+   Verificação: `lsappinfo info "ScribaDev"` deve dizer `type="Foreground"`.
+2. **`scriba/qt/icons/*.svg` fora dos `datas` → UI sem ícone nenhum** (a engrenagem
+   da config e cia.). Somado a isso, `theme.icon()` resolvia a fonte por
+   `Path(__file__).parent/"icons"`, caminho que não existe em bundle: os dados do
+   pacote ficam sob `sys._MEIPASS`. Correção: `util.resource_path("qt", "icons", …)`
+   (o seam de sempre) + os SVGs nos `datas` dos DOIS specs e no `package-data` do
+   `pyproject.toml` (um install não-editável tinha o mesmo furo). `theme.icon()`
+   falha graciosamente devolvendo `""` — por isso o bug era silencioso.
+
+3. **PATH do launchd → `claude`/`ffmpeg` "não instalados".** App lançado do
+   Finder/Dock/LaunchAgent não herda o PATH do shell: o launchd entrega
+   `/usr/bin:/bin:/usr/sbin:/sbin` e nada mais (confirmado com
+   `ps eww -p <pid>`; lançar com `open` do terminal MASCARA o bug, porque aí o
+   ambiente do shell é repassado). Sem Homebrew nem `~/.local/bin` no PATH,
+   `shutil.which` não acha o `claude` nem o `ffmpeg` e a UI/doctor dizem que não
+   estão instalados. Correção: `plat.ensure_user_path()` no topo do `cli.main()`
+   (no-op no Windows, onde o PATH do registro chega inteiro). Ele só ACRESCENTA
+   diretórios no fim — a ordem do PATH que já existia é preservada, então na CLI
+   nada muda — e só pergunta o PATH ao shell (`$SHELL -l -i -c`, com marcadores e
+   timeout) quando o PATH do processo é o mínimo do launchd. O `-i` é obrigatório:
+   PATH montado no `~/.zshrc` não aparece num shell só-login.
+
+4. **Subprocesso com `-m` → nada era processado.** O app roda a pipeline (e a sonda
+   de áudio) num processo separado, e o argv era
+   `[sys.executable, "-X", "utf8", "-m", "scriba.cli", "process", pasta]`. Um exe
+   do PyInstaller NÃO entende `-m`: os argumentos chegam inteiros no argparse do
+   app ("unrecognized arguments"), o subprocesso sai com erro e a gravação ia para
+   `failed` sem explicação — **no app instalado nenhuma gravação era transcrita**
+   (e os seletores de dispositivo ficavam vazios, porque a sonda falhava igual).
+   Vale para Windows e macOS. Correção: `util.app_command(...)` monta o argv —
+   congelado usa o exe de CONSOLE irmão no bundle (`scribadev`, não o windowed, que
+   não tem stdout) com SUBCOMANDO; fora do bundle segue o `-m` de sempre. A sonda
+   ganhou o subcomando oculto `scribadev audioprobe [list]` para isso.
+
+5. **Dependências de transcrição incompletas no bundle → transcrição CRASHAVA e o
+   Metal nunca ligava.** Quatro coletas faltavam no `.spec`, cada uma com um sintoma
+   ilegível, e só a última era visível de fora:
+   - `libjaccl.dylib` (dep `@rpath` do próprio `libmlx.dylib`, que o scanner perde):
+     `import mlx_whisper` morria em `dlopen`. Coletado com `collect_dynamic_libs`
+     no destino `"."` — a raiz do bundle, onde os rpaths do libmlx procuram;
+   - os submódulos PUROS que o `mlx/core.…so` importa de dentro do nanobind
+     (`mlx._reprlib_fix`), invisíveis para a análise estática: viravam
+     "Encountered an error while initializing the extension." → `collect_all("mlx")`
+     (que também traz o `mlx.metallib`, 155 MB de shaders);
+   - `mlx_whisper/assets/` (`mel_filters.npz`, `*.tiktoken`): o modelo carregava
+     "em metal" e a 1ª transcrição morria em `[load_npz] Input must be a zip
+     file...` — erro que não menciona arquivo nenhum → `collect_all("mlx_whisper")`;
+   - `faster_whisper/assets/silero_vad_v6.onnx` (ver item 4 da lista de dados).
+
+   Além da coleta, `stt_mlx.ensure_loaded()` passou a cair para faster-whisper CPU
+   como o `transcribe()` já fazia: o ImportError subia dali e derrubava o processo
+   inteiro ("Failed to execute script 'entry_cli'"). Perder a aceleração Metal é
+   aceitável; perder a transcrição não. **Verificado no bundle:** a fixture
+   transcreve com `whisper_device: metal` e o mesmo texto do código-fonte.
+
+Achado durante a validação (mesma família, corrigido junto): os addons de
+`APP_DIR/addons` são um `pip install --target`, ou seja, wheels do interpretador
+que rodou o pip. Reconstruir o app com outro Python minor (o DMG 1.4.3 era 3.12;
+o ambiente validado do repo é 3.14) fazia o numpy de lá **shadowar** o do bundle
+e a transcrição parava de importar (`_multiarray_umath.cpython-312-darwin.so ...
+The Python version is 3.14` no `import faster_whisper`/`ctranslate2`). Agora
+`addons.bootstrap()` compara a ABI (carimbo `.scriba-abi`, com sonda pelo nome do
+`.so` para pastas de versões antigas) e IGNORA o addons incompatível: perde-se a
+diarização até reinstalar pelo wizard, mas a transcrição — o núcleo — continua.
+
+Guarda-corpo: `tests/test_installers.py` quebra se um dir de recursos novo do
+pacote não entrar nos specs ou se o `LSBackgroundOnly=False` sumir;
+`tests/test_plat.py::TestEnsureUserPath` cobre o PATH (inclusive o no-op no Windows).
+
 ## Checklist manual (Mac real)
 
 - [x] M0/M1/M3/M4/M5/M6: aceites automatizáveis acima (2026-08-15).
