@@ -99,11 +99,19 @@ class ScribaApp:
     # ------------------------------------------------------------- helpers --
 
     def _toast(self, title: str, body: str = "") -> None:
-        if self.notifier:
+        """Toast SEMPRE em thread própria (#161): a entrega fala com o serviço de
+        notificações por COM (cross-process) — se o serviço estiver pendurado, quem
+        chamou (GUI, detector, worker) segue vivo; no pior caso o toast atrasa/some."""
+        if not self.notifier:
+            return
+
+        def _go() -> None:
             try:
                 self.notifier.info(title, body)
             except Exception:
                 log.exception("toast falhou")
+
+        threading.Thread(target=_go, daemon=True, name="toast").start()
 
     def ui(self, fn) -> None:
         """Agenda um callable para rodar na thread da GUI (drenado pelo UiPump)."""

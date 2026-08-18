@@ -30,12 +30,15 @@ class GuiWatchdog:
     `beat`/`check` aceitam `now` explícito p/ teste determinístico (default = monotonic).
     """
 
-    def __init__(self, threshold_s: float = 10.0, poll_s: float = 1.0, dump=None):
+    def __init__(self, threshold_s: float = 10.0, poll_s: float = 1.0, dump=None,
+                 early_s: float = 5.0):
         self.threshold_s = float(threshold_s)
         self.poll_s = float(poll_s)
+        self.early_s = float(early_s)
         self._dump = dump if dump is not None else self._dump_stacks
         self._last_beat = time.monotonic()
         self._hung_since: float | None = None   # início do episódio em curso (já despejado)
+        self._early_marked = False   # marcador precoce (#161) já logado neste episódio
         self._stop = threading.Event()
 
     # -- API ------------------------------------------------------------------
@@ -66,6 +69,13 @@ class GuiWatchdog:
         heartbeat volta (senão um travamento longo geraria um dump por segundo)."""
         now = time.monotonic() if now is None else now
         stalled_s = now - self._last_beat
+        # marcador PRECOCE (#161): travamento curto finalizado pelo usuário no "não
+        # está respondendo" morria antes do dump — esta linha no scriba.log é o rastro
+        # mínimo que sobrevive (o incidente de 18/08 ficou sem NENHUM registro nosso)
+        if stalled_s > self.early_s and not self._early_marked:
+            self._early_marked = True
+            log.warning("GUI sem responder há ~%.0fs (marcador precoce; pilhas só em %.0fs)",
+                        stalled_s, self.threshold_s)
         if stalled_s > self.threshold_s:
             if self._hung_since is None:
                 self._hung_since = self._last_beat
@@ -74,10 +84,12 @@ class GuiWatchdog:
                 except Exception:
                     log.exception("watchdog: dump falhou")
                 return True
-        elif self._hung_since is not None:
-            log.warning("GUI voltou a responder após ~%.0fs travada (pilhas em %s)",
-                        now - self._hung_since, self.hang_log_path())
-            self._hung_since = None
+        elif stalled_s <= self.early_s:
+            self._early_marked = False   # GUI viva: rearma o marcador p/ o próximo episódio
+            if self._hung_since is not None:
+                log.warning("GUI voltou a responder após ~%.0fs travada (pilhas em %s)",
+                            now - self._hung_since, self.hang_log_path())
+                self._hung_since = None
         return False
 
     # -- dump -------------------------------------------------------------------

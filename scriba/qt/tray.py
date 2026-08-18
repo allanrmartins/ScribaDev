@@ -21,7 +21,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QActionGroup, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QMenu, QMessageBox, QSystemTrayIcon
 
-from .. import autostart, util
+from .. import autostart, shellprobe, util
 from . import theme
 
 log = logging.getLogger("scriba.qt.tray")
@@ -70,6 +70,9 @@ class Tray:
         self.app = app
         self._tray = QSystemTrayIcon(_icon(False))
         self._tray.setToolTip("ScribaDev — aguardando call do Teams")
+        # #161: sonda do shell no ar desde já — set_recording consulta responsive()
+        self._shell_skip_logged = False
+        shellprobe.ensure_started()
 
         m = QMenu()
         self._menu = m
@@ -206,5 +209,17 @@ class Tray:
         self._tray.hide()
 
     def set_recording(self, recording: bool, title: str, dim: bool = False) -> None:
+        # #161: setIcon/setToolTip = Shell_NotifyIcon = SendMessage SÍNCRONO para o
+        # Explorer. Com o shell pendurado, a GUI congelava aqui (AppHangXProcB1) e o
+        # "não está respondendo" derrubou uma gravação real. A atualização é COSMÉTICA:
+        # shell sem responder → pula (o ícone fica parado uns segundos) e segue vivo.
+        if not shellprobe.responsive():
+            if not self._shell_skip_logged:
+                self._shell_skip_logged = True
+                log.warning("shell sem responder — atualizações da bandeja pausadas até ele voltar (#161)")
+            return
+        if self._shell_skip_logged:
+            self._shell_skip_logged = False
+            log.info("shell voltou a responder — bandeja atualizando de novo")
         self._tray.setIcon(_icon(recording, dim=dim))
         self._tray.setToolTip(title)
