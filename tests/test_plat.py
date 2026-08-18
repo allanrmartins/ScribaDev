@@ -86,7 +86,10 @@ class TestEnsureUserPath(unittest.TestCase):
     /usr/bin:/bin:/usr/sbin:/sbin — sem Homebrew e sem ~/.local/bin.
     """
 
-    LAUNCHD = "/usr/bin:/bin:/usr/sbin:/sbin"
+    # montado com os.pathsep: o código divide o PATH pelo separador DA PLATAFORMA —
+    # com ":" literal os testes passavam no macOS e quebravam no Windows (CI 3 SOs)
+    _LAUNCHD_DIRS = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
+    LAUNCHD = os.pathsep.join(_LAUNCHD_DIRS)
 
     def test_acrescenta_dirs_do_usuario_que_existem(self):
         d = Path(tempfile.mkdtemp(prefix="scriba_bin_"))
@@ -94,7 +97,7 @@ class TestEnsureUserPath(unittest.TestCase):
                 mock.patch.object(_posix, "_DIRS_EXTRA", (str(d),)), \
                 mock.patch.object(_posix, "_path_do_shell", return_value=[]):
             novo = _posix.ensure_user_path()
-        self.assertEqual(novo.split(os.pathsep)[:4], self.LAUNCHD.split(":"))
+        self.assertEqual(tuple(novo.split(os.pathsep)[:4]), self._LAUNCHD_DIRS)
         self.assertIn(str(d), novo.split(os.pathsep))
 
     def test_ignora_dir_inexistente(self):
@@ -118,7 +121,8 @@ class TestEnsureUserPath(unittest.TestCase):
     def test_so_pergunta_ao_shell_quando_o_path_e_do_launchd(self):
         """Spawnar shell de login é caro (~centenas de ms): na CLI não deve acontecer."""
         with mock.patch.object(_posix, "_path_do_shell") as m:
-            with mock.patch.dict(os.environ, {"PATH": "/opt/homebrew/bin:/usr/bin"}):
+            path_de_shell = os.pathsep.join(("/opt/homebrew/bin", "/usr/bin"))
+            with mock.patch.dict(os.environ, {"PATH": path_de_shell}):
                 _posix.ensure_user_path()
             m.assert_not_called()
             with mock.patch.dict(os.environ, {"PATH": self.LAUNCHD}):
