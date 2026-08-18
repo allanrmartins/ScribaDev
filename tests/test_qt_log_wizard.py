@@ -161,6 +161,25 @@ class LogTests(unittest.TestCase):
         win._render(stick_bottom=False)                    # setHtml volta o cursor ao início
         self.assertFalse(win._view.textCursor().atEnd())
 
+    def test_reportar_erro_abre_issue_com_os_ultimos_erros(self):
+        """#157: erro operacional (mic/loopback) só dava toast — a janela de Log agora
+        tem o reporte de 1 clique, com os últimos ERROs do log no corpo da issue."""
+        from unittest import mock
+
+        from scriba import diagnostics
+        from scriba.qt.log_ui import LogWindow
+
+        win = LogWindow(_App())
+        fake_log = ("17/08/2026 10:00:01 ERROR scriba: dispositivos de áudio indisponíveis\n"
+                    "Traceback: boom no PortAudio\n")
+        with mock.patch.object(diagnostics, "read_tail", return_value=fake_log), \
+                mock.patch("scriba.support.open_report", return_value=None) as rep:
+            win._report_issue()
+        detail = rep.call_args[0][1]
+        self.assertIn("dispositivos de áudio indisponíveis", detail)
+        self.assertIn("boom no PortAudio", detail)
+        self.assertIn("issue", win._status.text().lower())
+
     def test_crash_dialog_singleton(self):
         from scriba.qt import log_ui
 

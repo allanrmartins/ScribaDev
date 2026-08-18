@@ -46,6 +46,33 @@ class RedactTests(unittest.TestCase):
         self.assertEqual(dg.redact_config(""), "")
 
 
+class ErrorTailTests(unittest.TestCase):
+    """error_tail: as últimas entradas de ERRO (com traceback) p/ o corpo da issue."""
+
+    _LOG = ("17/08/2026 10:00:00 INFO scriba: subiu\n"
+            "17/08/2026 10:00:01 ERROR scriba: mic falhou\n"
+            "Traceback (most recent call last):\n"
+            "  boom no PortAudio\n"
+            "17/08/2026 10:00:02 INFO scriba: seguindo\n"
+            "17/08/2026 10:00:03 ERROR scriba: loopback falhou\n")
+
+    def test_pega_so_erros_com_traceback_junto(self):
+        out = dg.error_tail(self._LOG)
+        self.assertIn("mic falhou", out)
+        self.assertIn("boom no PortAudio", out)     # traceback incorporado na entrada
+        self.assertIn("loopback falhou", out)
+        self.assertNotIn("seguindo", out)           # INFO fica de fora quando há erro
+
+    def test_sem_erros_cai_nas_ultimas_entradas(self):
+        out = dg.error_tail("17/08/2026 10:00:00 INFO scriba: a\n"
+                            "17/08/2026 10:00:01 INFO scriba: b\n")
+        self.assertIn("b", out)
+
+    def test_trunca_no_limite(self):
+        out = dg.error_tail("17/08/2026 10:00:00 ERROR scriba: " + "x" * 5000, max_chars=200)
+        self.assertLessEqual(len(out), 200)
+
+
 class ExportZipTests(unittest.TestCase):
     """export_zip TEM de levar todos os .log (pip.log incluso — sem ele o 'pip
     retornou N' do Baixar componentes chega sem o traceback). Home/dirs isolados."""

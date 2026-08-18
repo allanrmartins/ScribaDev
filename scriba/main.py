@@ -196,7 +196,9 @@ class ScribaApp:
         # buraco no início da call 2. Se Recording() falhar, o try/except cobre.
         if probe and util.run_audio_probe() is None:
             log.error("dispositivos de áudio indisponíveis — gravação não iniciada (%s)", source)
-            self._toast("ScribaDev: áudio indisponível", "Não consegui acessar microfone/loopback agora.")
+            self._toast("ScribaDev: áudio indisponível",
+                        "Não consegui acessar microfone/loopback agora. "
+                        "Detalhes e reporte: janela de Log (bandeja).")
             return
         with self.rec_lock:
             if self.rec is not None or self._rec_starting:
@@ -211,7 +213,8 @@ class ScribaApp:
             rec = Recording(self.cfg)
         except Exception as e:
             log.exception("falha ao iniciar gravação")
-            self._toast("ScribaDev: erro ao iniciar gravação", str(e))
+            self._toast("ScribaDev: erro ao iniciar gravação",
+                        f"{e} — detalhes e reporte na janela de Log (bandeja).")
             return
         finally:
             with self.rec_lock:

@@ -58,6 +58,16 @@ def level_num(level: str) -> int:
     return LEVELS.get(str(level).upper(), 20)  # nível desconhecido ~ INFO
 
 
+def error_tail(text: str, n: int = 3, max_chars: int = 900) -> str:
+    """Últimas `n` entradas de nível ERROR+ do log (cada uma já com o traceback
+    incorporado por parse_entries), p/ o corpo de um reporte de issue. Sem nenhum
+    erro no recorte, cai nas últimas entradas quaisquer (contexto ainda ajuda)."""
+    entries = parse_entries(text)
+    errs = [e for e in entries if level_num(e["level"]) >= level_num("ERROR")]
+    pick = (errs or entries)[-n:]
+    return "\n".join(e["text"] for e in pick)[-max_chars:]
+
+
 def filter_entries(entries, level_min: int = 0, date_br: str = "", time_from: str = "") -> list:
     """Filtra por nível mínimo, dia (DD/MM/AAAA exato) e hora a partir de (HH:MM)."""
     out = []

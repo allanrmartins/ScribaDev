@@ -50,13 +50,26 @@ class LogWindow(QWidget):
         bar = QHBoxLayout()
         t_lbl = QLabel("Log do app"); t_lbl.setStyleSheet(f"font-size:{theme.zpt(13)}pt; font-weight:bold;")
         bar.addWidget(t_lbl); bar.addStretch(1)
-        bar.addWidget(widgets.ModernButton("Copiar", self._copy))
-        bar.addWidget(widgets.ModernButton("Abrir pasta", self._open_folder))
-        # "Diagnóstico" (era "Exportar diagnóstico"): o rótulo longo estourava a barra no
-        # tamanho mínimo (#64 pegou o corte); o tooltip mantém o sentido completo.
-        _exp = widgets.ModernButton("Diagnóstico", self._export, kind="primary")
+        # Copiar/Abrir pasta viram icon-only (mesmo padrão dos botões de busca): a barra
+        # precisa caber no mínimo de 640px com os DOIS botões de texto (#64 guarda o corte)
+        _cp = widgets.ModernButton("", self._copy)
+        _cp.setIcon(theme.qicon("copy"))
+        widgets.add_tooltip(_cp, "Copiar o log")
+        bar.addWidget(_cp)
+        _fo = widgets.ModernButton("", self._open_folder)
+        _fo.setIcon(theme.qicon("folder"))
+        widgets.add_tooltip(_fo, "Abrir a pasta do log")
+        bar.addWidget(_fo)
+        _exp = widgets.ModernButton("Diagnóstico", self._export)
         widgets.add_tooltip(_exp, "Exportar diagnóstico (.zip) para suporte")
         bar.addWidget(_exp)
+        # reporte de 1 clique p/ QUALQUER erro (#157: mic/loopback falham só com um
+        # toast — a janela de Log é o lugar p/ onde todo erro aponta). Rótulo curto
+        # p/ caber no mínimo de 640px (#64); o tooltip carrega o sentido completo.
+        _rep = widgets.ModernButton("Reportar", self._report_issue, kind="primary")
+        widgets.add_tooltip(_rep, "Reportar erro no GitHub: salva o diagnóstico (.zip) e abre "
+                                  "uma issue já preenchida com os últimos erros do log")
+        bar.addWidget(_rep)
         root.addLayout(bar)
 
         row1 = QHBoxLayout()
@@ -266,6 +279,22 @@ class LogWindow(QWidget):
         except Exception as e:
             log.exception("falha ao exportar diagnóstico")
             self._status.setText(f"Falha ao exportar: {e}")
+
+    def _report_issue(self) -> None:
+        """Reporte de 1 clique (#157 e afins): zip do diagnóstico + issue no GitHub
+        pré-preenchida com as últimas entradas de ERRO do log (traceback junto)."""
+        from .. import support
+
+        try:
+            rec = self.app.cfg.output.resolved_recordings_dir()
+        except Exception:
+            rec = None
+        detail = diagnostics.error_tail(diagnostics.read_tail(diagnostics.LOG_FILE, _MAX_LINES))
+        z = support.open_report("Erro em uso (reportado pela janela de Log)", detail, rec)
+        self._status.setText(
+            f"Abri a página da issue. Para anexar, arraste o arquivo {z.name} "
+            "(deixei selecionado no gerenciador de arquivos)." if z else
+            "Abri a página da issue — não consegui gerar o zip; descreva o cenário, por favor.")
 
     def show(self) -> None:  # noqa: A003
         super().show()
