@@ -224,6 +224,24 @@ def open_path(path) -> None:
     plat.open_path(path)
 
 
+def reveal_path(path) -> None:
+    """Abre o gerenciador de arquivos COM o arquivo já SELECIONADO (win/mac) — o
+    'Reportar erro' deixa o zip pronto p/ arrastar na issue. Fallback: abre a pasta."""
+    import subprocess
+
+    p = Path(path)
+    try:
+        if sys.platform == "win32":
+            subprocess.Popen(["explorer", f"/select,{p}"])
+            return
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", str(p)])
+            return
+    except Exception:
+        log.debug("reveal_path falhou — abrindo a pasta", exc_info=True)
+    open_path(p.parent)
+
+
 def console_python() -> Path:
     """python de CONSOLE do venv para subprocessos (não o pythonw da GUI).
 

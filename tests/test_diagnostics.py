@@ -46,6 +46,47 @@ class RedactTests(unittest.TestCase):
         self.assertEqual(dg.redact_config(""), "")
 
 
+class ExportZipTests(unittest.TestCase):
+    """export_zip TEM de levar todos os .log (pip.log incluso — sem ele o 'pip
+    retornou N' do Baixar componentes chega sem o traceback). Home/dirs isolados."""
+
+    def setUp(self):
+        import zipfile
+
+        from scriba import util
+        from unittest import mock
+
+        self.zipfile = zipfile
+        self.tmp = Path(tempfile.mkdtemp(prefix="scriba_diagzip_"))
+        self._saved = (util.APP_DIR, util.LOGS_DIR, util.CONFIG_PATH)
+        util.APP_DIR = self.tmp / "app"
+        util.LOGS_DIR = util.APP_DIR / "logs"
+        util.CONFIG_PATH = self.tmp / "config.toml"
+        util.LOGS_DIR.mkdir(parents=True)
+        util.CONFIG_PATH.write_text("[audio]\n", encoding="utf-8")
+        (util.LOGS_DIR / "scriba.log").write_text("linha\n", encoding="utf-8")
+        (util.LOGS_DIR / "pip.log").write_text("=== pip install\nERROR: x\n", encoding="utf-8")
+        self._home = mock.patch("pathlib.Path.home", return_value=self.tmp / "home")
+        (self.tmp / "home").mkdir()
+        self._home.start()
+        self.addCleanup(self._home.stop)
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+
+    def tearDown(self):
+        from scriba import util
+
+        util.APP_DIR, util.LOGS_DIR, util.CONFIG_PATH = self._saved
+
+    def test_zip_inclui_pip_log_e_scriba_log(self):
+        dest = dg.export_zip(None)
+        self.assertTrue(str(dest).endswith(".zip"))
+        with self.zipfile.ZipFile(dest) as z:
+            names = z.namelist()
+        self.assertIn("logs/scriba.log", names)
+        self.assertIn("logs/pip.log", names)
+        self.assertIn("ambiente.txt", names)
+
+
 class ReadTailTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="scriba_diag_"))
