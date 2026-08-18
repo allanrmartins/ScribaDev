@@ -54,6 +54,29 @@ class TrayTests(unittest.TestCase):
 
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_set_recording_pula_com_shell_pendurado(self):
+        """#161: Shell_NotifyIcon é SendMessage síncrono p/ o Explorer — com o shell
+        sem responder, o pulso NÃO pode chamar setIcon/setToolTip (congelava a GUI e
+        derrubou uma gravação real); com o shell de volta, atualiza de novo."""
+        from unittest import mock
+
+        from scriba.qt.tray import Tray
+
+        tray = Tray(_FakeApp(recording=True))
+        with mock.patch.object(tray._tray, "setIcon") as si, \
+                mock.patch.object(tray._tray, "setToolTip") as st, \
+                mock.patch("scriba.shellprobe.responsive", return_value=False):
+            tray.set_recording(True, "gravando 0:07", dim=True)
+            tray.set_recording(True, "gravando 0:08", dim=False)
+        si.assert_not_called()
+        st.assert_not_called()
+        with mock.patch.object(tray._tray, "setIcon") as si2, \
+                mock.patch.object(tray._tray, "setToolTip") as st2, \
+                mock.patch("scriba.shellprobe.responsive", return_value=True):
+            tray.set_recording(True, "gravando 0:09")
+        si2.assert_called_once()
+        st2.assert_called_once()
+
     def test_sync_esconde_acoes_fora_de_gravacao(self):
         from scriba.qt.tray import Tray
 
