@@ -28,6 +28,15 @@ _excludes = [
 # um exe congelado não tem `python -m pip`.
 _pip_datas, _pip_binaries, _pip_hidden = collect_all("pip")
 
+# ...mas como FONTE em disco, não no PYZ (#164): o distlib vendorizado do pip
+# enumera os próprios recursos via finder do loader (distlib/resources.py) e só
+# conhece FileFinder/zipimport — sob o PyiFrozenImporter ele morre com "Unable
+# to locate finder for 'pip._vendor.distlib'" na fase de instalar as wheels
+# (depois de baixar os GB todos), e TODO download de componentes falhava com
+# "pip retornou 2". Com 'py' o pip inteiro vira .py real em _internal/ e importa
+# pelo FileFinder normal, como um pip de verdade.
+_pip_collection_mode = {"pip": "py"}
+
 # Dados do pacote: `assets` (ícones do app/bandeja) e `qt/icons` (SVGs Fluent da UI).
 # Os SVGs faltavam até a 1.4.3 e o app instalado abria SEM ícone nenhum na UI (a
 # engrenagem da config e cia.) — theme.icon() falha graciosamente e não avisa.
@@ -48,6 +57,7 @@ _common = dict(
     hiddenimports=_pip_hidden,
     excludes=_excludes,
     noarchive=False,
+    module_collection_mode=_pip_collection_mode,
 )
 
 a_cli = Analysis([str(Path(SPECPATH) / "entry_cli.py")], **_common)

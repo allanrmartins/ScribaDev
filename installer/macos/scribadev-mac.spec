@@ -28,6 +28,12 @@ _excludes = [
 
 _pip_datas, _pip_binaries, _pip_hidden = collect_all("pip")
 
+# pip como FONTE em disco, não no PYZ (#164, espelho do spec Windows): o distlib
+# vendorizado enumera recursos via finder do loader e não conhece o do PyInstaller
+# — in-process ele morria com "Unable to locate finder for 'pip._vendor.distlib'"
+# ao instalar as wheels, e todo download de componentes falhava ("pip retornou 2").
+_pip_collection_mode = {"pip": "py"}
+
 # mlx (transcrição Metal, #104 M5) — o pacote precisa de TRÊS coletas, e faltando
 # qualquer uma o `import mlx_whisper` morre no app instalado (ficou tudo em CPU):
 #   1. collect_all: os submódulos PUROS que o core.so importa em tempo de execução
@@ -68,6 +74,7 @@ _common = dict(
     hiddenimports=_pip_hidden + _mlx_hidden + _mlxw_hidden,
     excludes=_excludes,
     noarchive=False,
+    module_collection_mode=_pip_collection_mode,
 )
 
 a_cli = Analysis([str(Path(SPECPATH) / "entry_cli.py")], **_common)

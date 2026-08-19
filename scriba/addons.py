@@ -139,6 +139,7 @@ def install_to_addons(packages: list[str], progress=print) -> tuple[bool, str]:
             "--no-input", "--disable-pip-version-check", "--progress-bar", "off",
             *packages]
     plog = pip_log_path()
+    root_handlers = list(logging.getLogger().handlers)
     try:
         plog.parent.mkdir(parents=True, exist_ok=True)
         with open(plog, "a", encoding="utf-8", errors="replace") as f:
@@ -151,6 +152,13 @@ def install_to_addons(packages: list[str], progress=print) -> tuple[bool, str]:
     except Exception as e:
         log.exception("pip in-process falhou")
         return (False, f"instalação falhou: {e} — detalhes em {plog}")
+    finally:
+        # o pip configura o PRÓPRIO logging no root (rich console) e não desfaz:
+        # o handler órfão fica preso ao pip.log já fechado e TODO log do app dali
+        # em diante viraria "--- Logging error ---: I/O operation on closed file"
+        for h in logging.getLogger().handlers[:]:
+            if h not in root_handlers:
+                logging.getLogger().removeHandler(h)
     if rc != 0:
         log.warning("pip retornou %d — saída completa em %s", rc, plog)
         tail = _pip_log_tail()

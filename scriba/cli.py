@@ -127,6 +127,17 @@ def main(argv: list[str] | None = None) -> int:
     p_doc = sub.add_parser("doctor", help="diagnóstico do ambiente")
     p_doc.add_argument("--toast", action="store_true", help="dispara uma notificação de teste")
 
+    p_comp = sub.add_parser(
+        "components",
+        help="baixa/instala os componentes pesados sem abrir a GUI — mesmo fluxo do "
+             "wizard/Configurações → Sobre (retry de campo, #164)")
+    p_comp.add_argument("--model", metavar="NOME", default=None,
+                        help="modelo Whisper a baixar (ex.: small, medium, large-v3)")
+    p_comp.add_argument("--cuda", action="store_true",
+                        help="bibliotecas NVIDIA (cuBLAS/cuDNN, ~3 GB)")
+    p_comp.add_argument("--voices", action="store_true",
+                        help="separação de vozes (torch + pyannote, ~3 GB)")
+
     p_auto = sub.add_parser("autostart", help="liga/desliga o início automático com o Windows")
     p_auto.add_argument("mode", choices=["on", "off"])
 
@@ -200,6 +211,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "doctor":
         return cmd_doctor(args)
+    if args.cmd == "components":
+        return cmd_components(args)
     if args.cmd == "detect":
         from .detector import debug_loop
 
@@ -286,6 +299,32 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_timesheet(args)
     parser.error(f"comando desconhecido: {args.cmd}")
     return 2
+
+
+def cmd_components(args) -> int:
+    """`scribadev components`: baixa os componentes pesados pela linha de comando —
+    mesmo worker do wizard/Configurações (#154). Nasceu do #164: o download só
+    existia dentro da GUI e não havia como um usuário em campo re-tentar/diagnosticar
+    por terminal (no app instalado, o pip roda in-process — scriba.addons)."""
+    from . import components
+
+    plan = components.plan_items(model=args.model, cuda=args.cuda, voices=args.voices)
+    if not plan:
+        print("nada a fazer - passe --model NOME, --cuda e/ou --voices (veja --help)")
+        return 2
+    last_pct = -1
+
+    def _frac(f: int) -> None:  # barra da GUI vira % no console, de 10 em 10
+        nonlocal last_pct
+        pct = f // 100 * 10
+        if pct > last_pct:
+            last_pct = pct
+            print(f"  {pct}%", flush=True)
+
+    ok, notes = components.run(plan, progress=print, frac=_frac)
+    if not ok:
+        print(f"falhou: {notes}")
+    return 0 if ok else 1
 
 
 def cmd_split(args) -> int:
