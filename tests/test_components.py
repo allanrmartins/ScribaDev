@@ -78,6 +78,30 @@ class RunTests(unittest.TestCase):
         self.assertEqual(ie.call_args[0][0], components.CUDA_PKGS)
 
 
+class CliComponentsTests(unittest.TestCase):
+    """`scribadev components` (#164): retry dos downloads por terminal, sem GUI."""
+
+    def test_roda_o_plano_selecionado(self):
+        from scriba import cli
+        with mock.patch.object(components, "run", return_value=(True, "")) as r:
+            rc = cli.main(["components", "--voices"])
+        self.assertEqual(rc, 0)
+        self.assertEqual([k for k, _l, _mb in r.call_args[0][0]], ["voices"])
+
+    def test_sem_selecao_e_erro_de_uso(self):
+        from scriba import cli
+        with mock.patch.object(components, "run") as r:
+            rc = cli.main(["components"])
+        self.assertEqual(rc, 2)
+        r.assert_not_called()
+
+    def test_falha_vira_exit_code_1(self):
+        from scriba import cli
+        with mock.patch.object(components, "run", return_value=(False, "pip retornou 2")):
+            rc = cli.main(["components", "--cuda"])
+        self.assertEqual(rc, 1)
+
+
 class DirMbTests(unittest.TestCase):
     def test_dir_mb_mede_e_degrada(self):
         d = Path(tempfile.mkdtemp(prefix="scriba_comp_")) / "cache"
