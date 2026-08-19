@@ -75,6 +75,23 @@ class InstallToAddonsTests(unittest.TestCase):
         self.assertIn("--no-input", seen["args"])
         self.assertIn("torch", seen["args"])
 
+    def test_remove_handlers_que_o_pip_pendura_no_root(self):
+        """O pip in-process configura o PRÓPRIO logging (rich) no root logger e não
+        desfaz — o handler órfão aponta pro pip.log já fechado e cada log do app
+        depois do download virava '--- Logging error ---: I/O operation on closed
+        file' (visto no E2E do #164)."""
+        import logging
+
+        orfao = logging.NullHandler()
+
+        def fake_pip(args):
+            logging.getLogger().addHandler(orfao)
+            return 0
+
+        ok, _ = self._run(fake_pip)
+        self.assertTrue(ok)
+        self.assertNotIn(orfao, logging.getLogger().handlers)
+
     def test_systemexit_do_pip_vira_rc(self):
         def fake_pip(args):
             raise SystemExit(1)
