@@ -976,6 +976,14 @@ class SettingsWindow(QWidget):
             threading.Thread(target=work, daemon=True, name="settings-components").start()
 
     def _components_done(self, ok: bool, notes: str) -> None:
+        # a instalação segurou a fila (#167): readota o que ficou esperando
+        # (e o que "falhou" por EACCES do addons em versões antigas)
+        try:
+            if getattr(self.app, "scan_pending", None):
+                threading.Thread(target=self.app.scan_pending, daemon=True,
+                                 name="post-install-sweep").start()
+        except Exception:
+            log.exception("varredura pós-instalação falhou")
         self._comp_btn.setEnabled(True)
         self._comp_bar.setValue(1000)
         self._comp_last_notes = notes

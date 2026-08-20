@@ -242,8 +242,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "split":
         return cmd_split(args)
     if args.cmd == "process":
+        from . import addons
         from .pipeline import process_folder, process_when_ready
 
+        if addons.is_installing():
+            # instalação de componentes reescrevendo o addons (#167): importar
+            # dali agora = EACCES no meio; melhor recusar com clareza
+            print("instalação de componentes em andamento — espere ela terminar "
+                  "e rode de novo")
+            return 3
         _timestamp_subprocess_output()  # process.log com HH:MM:SS por linha
         if args.when_ready:
             return process_when_ready(args.folder)

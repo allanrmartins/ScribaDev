@@ -12,9 +12,12 @@ congelado (lá o pip normal instala os extras `[cuda]`/`[diarization]` na venv).
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
 import sys
+import time
 from pathlib import Path
 
 log = logging.getLogger("scriba.addons")
@@ -93,6 +96,66 @@ def bootstrap() -> bool:
         return False
 
 
+# Marcador "instalação de componentes em andamento" (#167): o pip in-process com
+# --target --upgrade REESCREVE a pasta addons — um subprocesso de processamento
+# importando dali no meio ganha EACCES e a reunião "falha" sem culpa nenhuma
+# (caso real: 5 reuniões numa instalação de 71 min). Enquanto o marcador estiver
+# ATIVO, o pipeline adia o processamento; a varredura de pendentes readota tudo
+# quando a instalação termina.
+_INSTALLING_MARKER = ".installing"
+_INSTALLING_MAX_AGE_S = 12 * 3600  # trava de segurança p/ PID reciclado
+
+
+def _installing_marker() -> Path:
+    return addons_dir() / _INSTALLING_MARKER
+
+
+def set_installing(on: bool) -> None:
+    """Liga/desliga o marcador (JSON {pid, started}, espelho do .lock de reunião).
+    Nunca levanta: o marcador é proteção extra, não pode derrubar a instalação."""
+    try:
+        if on:
+            d = addons_dir()
+            d.mkdir(parents=True, exist_ok=True)
+            _installing_marker().write_text(
+                json.dumps({"pid": os.getpid(), "started": time.time()}),
+                encoding="utf-8")
+        else:
+            _installing_marker().unlink(missing_ok=True)
+    except OSError:
+        log.debug("marcador .installing falhou", exc_info=True)
+
+
+def is_installing() -> bool:
+    """True se há instalação de componentes EM ANDAMENTO (marcador com PID vivo).
+
+    PID morto = órfão de crash: o marcador é removido na hora (diferente do .lock
+    de reunião, aqui o dono é sempre um processo longo — app ou CLI — e a morte
+    dele encerra a instalação por definição). Marcador ilegível respeita a idade;
+    idade acima da trava de segurança nunca vale (PID reciclado)."""
+    m = _installing_marker()
+    try:
+        if not m.exists():
+            return False
+        data = json.loads(m.read_text(encoding="utf-8"))
+        pid = int(data.get("pid", 0))
+        age = time.time() - float(data.get("started", 0))
+    except (OSError, ValueError):
+        return True  # ilegível (ex.: sendo escrito agora): precaução
+    if age > _INSTALLING_MAX_AGE_S:
+        set_installing(False)
+        return False
+    if pid:
+        try:
+            os.kill(pid, 0)  # sinal 0: só verifica existência
+            return True
+        except (OSError, PermissionError):
+            pass
+    log.info("marcador .installing órfão (pid=%s morto) — removendo", pid)
+    set_installing(False)
+    return False
+
+
 def pip_log_path() -> Path:
     """logs/pip.log — TODA a saída do pip in-process vai aqui (ver install_to_addons)."""
     from . import util
@@ -156,9 +219,15 @@ def install_to_addons(packages: list[str], progress=print) -> tuple[bool, str]:
         # o pip configura o PRÓPRIO logging no root (rich console) e não desfaz:
         # o handler órfão fica preso ao pip.log já fechado e TODO log do app dali
         # em diante viraria "--- Logging error ---: I/O operation on closed file"
-        for h in logging.getLogger().handlers[:]:
+        root = logging.getLogger()
+        for h in root.handlers[:]:
             if h not in root_handlers:
-                logging.getLogger().removeHandler(h)
+                root.removeHandler(h)
+        # ...e também REMOVE os nossos: 71 min de blackout total do scriba.log no
+        # caso real da #167. O que o pip tirou, volta.
+        for h in root_handlers:
+            if h not in root.handlers:
+                root.addHandler(h)
     if rc != 0:
         log.warning("pip retornou %d — saída completa em %s", rc, plog)
         tail = _pip_log_tail()

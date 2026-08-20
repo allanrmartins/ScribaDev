@@ -71,7 +71,9 @@ _common = dict(
     pathex=[str(REPO)],
     binaries=_pip_binaries + _mlx_binaries + _mlxw_binaries,
     datas=_pkg_datas + _pip_datas + _mlx_datas + _mlxw_datas + _fw_datas,
-    hiddenimports=_pip_hidden + _mlx_hidden + _mlxw_hidden,
+    # typing_extensions no bundle (#167) — mesmo racional do spec Windows: core
+    # do app não pode depender do addons em estado transitório de instalação
+    hiddenimports=_pip_hidden + _mlx_hidden + _mlxw_hidden + ["typing_extensions"],
     excludes=_excludes,
     noarchive=False,
     module_collection_mode=_pip_collection_mode,

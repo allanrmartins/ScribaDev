@@ -109,6 +109,34 @@ class ScanPendingTests(unittest.TestCase):
         self.assertEqual(meta["duration_seconds"], 120.0)
         self.assertEqual(self._queued(app), ["longa"])
 
+    def test_readota_failed_por_eacces_do_addons(self):
+        """#167: reunião 'falhada' pela instalação de componentes (EACCES no
+        addons) é transitória por definição - volta na varredura; failed por
+        outra causa continua terminal."""
+        _meeting(self.root, "vitima", {"status": "failed", "error":
+                 "PermissionError: [Errno 13] Permission denied: "
+                 "'C:\\\\Users\\\\x\\\\AppData\\\\Local\\\\ScribaDev\\\\addons"
+                 "\\\\typing_extensions.py'"})
+        _meeting(self.root, "quebrada", {"status": "failed",
+                                         "error": "ValueError: boom"})
+        app = self._app()
+        app.scan_pending()
+        self.assertEqual(self._queued(app), ["vitima"])
+
+    def test_processamento_adiado_durante_instalacao(self):
+        """#167: com o marcador .installing ativo, o worker NÃO sobe o
+        subprocesso - a reunião fica como está para a varredura readotar."""
+        d = _meeting(self.root, "m1", {"status": "recorded"})
+        app = self._app()
+        app.ui = lambda f: f()
+        app._hide_pill_if_processing = lambda: None
+        with mock.patch("scriba.addons.is_installing", return_value=True), \
+                mock.patch("subprocess.Popen") as popen:
+            app._process_subprocess(d)
+        popen.assert_not_called()
+        meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["status"], "recorded")   # intacta, readotável
+
 
 @unittest.skipUnless(_HAVE_PIPELINE, "scriba.pipeline indisponível (deps de transcrição)")
 class ProcessWhenReadyTests(unittest.TestCase):

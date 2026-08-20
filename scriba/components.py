@@ -8,7 +8,11 @@ UI-free (progresso via callbacks), para o wizard E a seção "Baixar componentes
 da aba Sobre das Configurações usarem o mesmo código.
 
 Contrato: `run(plan, progress, frac)` nunca levanta — falha vira (False, notas) e
-o app segue funcionando sem o componente (re-tentável).
+o app segue funcionando sem o componente (re-tentável). Do início ao fim do
+plano, o marcador `.installing` do addons fica LIGADO (#167): o pipeline adia
+processamento enquanto ele existir (pip --upgrade reescrevendo a pasta no meio
+de um import = EACCES e reunião "falhada" sem culpa); quem chama dispara a
+varredura de pendentes ao terminar.
 """
 
 from __future__ import annotations
@@ -107,6 +111,8 @@ def run(plan: list[tuple[str, str, int]], progress, frac, poll: bool = True) -> 
     status, `frac(int 0..1000)` o avanço ponderado pelos MB de cada item. `poll`
     desligado roda sem a thread de medição do cache (testes/inline). Nunca levanta:
     devolve (ok_geral, notas-de-erro)."""
+    from . import addons
+
     ok_all, notes = True, []
     total_mb = sum(mb for _k, _l, mb in plan) or 1
     done_mb = 0.0
@@ -122,46 +128,55 @@ def run(plan: list[tuple[str, str, int]], progress, frac, poll: bool = True) -> 
     def _frac(item_done_mb: float) -> None:
         frac(min(1000, int(1000 * (done_mb + item_done_mb) / total_mb)))
 
-    for key, _label, weight in plan:
-        _frac(0)
-        # resiliência POR ITEM: uma exceção num download não pode matar os demais
-        # (a versão antiga do wizard abortava o plano inteiro — quem tropeçava no
-        # modelo ficava também sem CUDA/vozes, sem nenhuma pista do porquê)
-        try:
-            if key.startswith("model:"):
-                model = key.split(":", 1)[1]
-                _p(f"baixando o modelo {model}…")
-                cache = model_cache_dir(model)
-                base = dir_mb(cache)
-                stop = threading.Event()
+    # o plano INTEIRO segura o processamento (#167): pip --upgrade reescrevendo o
+    # addons no meio de um import de subprocesso = EACCES e reunião "falhada";
+    # baixar modelo durante uma transcrição duplicaria o mesmo download do cache.
+    # try/finally: o marcador NUNCA pode sobreviver ao plano.
+    addons.set_installing(True)
+    try:
+        for key, _label, weight in plan:
+            _frac(0)
+            # resiliência POR ITEM: uma exceção num download não pode matar os demais
+            # (a versão antiga do wizard abortava o plano inteiro — quem tropeçava no
+            # modelo ficava também sem CUDA/vozes, sem nenhuma pista do porquê)
+            try:
+                if key.startswith("model:"):
+                    model = key.split(":", 1)[1]
+                    _p(f"baixando o modelo {model}…")
+                    cache = model_cache_dir(model)
+                    base = dir_mb(cache)
+                    stop = threading.Event()
 
-                def _poll(cache=cache, base=base, weight=weight, stop=stop):
-                    while not stop.wait(0.5):
-                        _frac(min(weight, max(0.0, dir_mb(cache) - base)))
+                    def _poll(cache=cache, base=base, weight=weight, stop=stop):
+                        while not stop.wait(0.5):
+                            _frac(min(weight, max(0.0, dir_mb(cache) - base)))
 
-                if poll:
-                    threading.Thread(target=_poll, daemon=True, name="dl-poll").start()
-                try:
-                    ok, note = _download_model(model, _p)
-                finally:
-                    stop.set()
-            else:
-                extras = CUDA_PKGS if key == "cuda" else VOICES_PKGS
-                ok, note = _install_extras(extras, _p)
-                if ok:
-                    _p("componentes instalados.")
-                    note = ""
+                    if poll:
+                        threading.Thread(target=_poll, daemon=True, name="dl-poll").start()
+                    try:
+                        ok, note = _download_model(model, _p)
+                    finally:
+                        stop.set()
                 else:
-                    _p("componentes falharam - dá para tentar de novo depois.")
-                    note = f"componentes: {note}"
-        except Exception as e:  # rede caiu no meio etc.: quem chama nunca trava
-            log.exception("componente %s falhou", key)
-            _p(f"{key} falhou ({e}) - os demais itens continuam.")
-            ok, note = False, f"{key}: {e}"
-        if not ok:
-            ok_all = False
-            if note:
-                notes.append(note)
-        done_mb += weight
-        _frac(0)
+                    extras = CUDA_PKGS if key == "cuda" else VOICES_PKGS
+                    ok, note = _install_extras(extras, _p)
+                    if ok:
+                        _p("componentes instalados.")
+                        note = ""
+                    else:
+                        _p("componentes falharam - dá para tentar de novo depois.")
+                        note = f"componentes: {note}"
+            except Exception as e:  # rede caiu no meio etc.: quem chama nunca trava
+                log.exception("componente %s falhou", key)
+                _p(f"{key} falhou ({e}) - os demais itens continuam.")
+                ok, note = False, f"{key}: {e}"
+            if not ok:
+                ok_all = False
+                if note:
+                    notes.append(note)
+            done_mb += weight
+            _frac(0)
+    finally:
+        addons.set_installing(False)
+        log.info("componentes: janela de instalação encerrada")
     return ok_all, "; ".join(notes)

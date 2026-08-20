@@ -462,6 +462,14 @@ class SetupWizardWindow(QWidget):
         self._dl_log.setText((self._dl_log.text() + "\n" + line).strip())
 
     def _downloads_finished(self, ok: bool, notes: str) -> None:
+        # a instalação segurou a fila (#167): readota o que ficou esperando
+        # (e o que "falhou" por EACCES do addons em versões antigas)
+        try:
+            if self.app is not None:
+                threading.Thread(target=self.app.scan_pending, daemon=True,
+                                 name="post-install-sweep").start()
+        except Exception:
+            log.exception("varredura pós-instalação falhou")
         self._bar.setValue(1000)
         self._dl_notes = notes
         self._report_btn.setVisible(not ok)

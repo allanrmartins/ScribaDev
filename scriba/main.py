@@ -792,6 +792,16 @@ class ScribaApp:
         from pathlib import Path
 
         folder = Path(folder)
+        from . import addons
+
+        if addons.is_installing():
+            # instalação de componentes reescrevendo o addons (#167): processar
+            # agora = EACCES no import e reunião "falhada" sem culpa. Fica como
+            # está; a varredura de pendentes readota quando a instalação acabar.
+            log.info("instalação de componentes em andamento — processamento de %s adiado",
+                     folder.name)
+            self.ui(self._hide_pill_if_processing)
+            return
         log.info("processando %s (subprocesso)", folder.name)
         args = util.app_command("process", str(folder))
         meta_path = folder / "meta.json"
@@ -960,12 +970,21 @@ class ScribaApp:
             # além de recorded/transcribed, readota também quem morreu NO MEIO do
             # processamento (transcribing/diarizing/summarizing presos por crash ou
             # kill) - "failed" é terminal e não volta sozinho (retry: scriba process)
-            if status in ("recorded", "transcribed", "transcribing", "diarizing", "summarizing"):
+            # ...COM UMA exceção (#167): failed por EACCES no addons é vítima da
+            # instalação de componentes, transitório por definição - readota
+            retryable = (status == "failed" and
+                         "addons" in str(meta.get("error") or "") and
+                         "Permission denied" in str(meta.get("error") or ""))
+            if retryable or status in ("recorded", "transcribed", "transcribing",
+                                       "diarizing", "summarizing"):
                 # não readota pasta com .lock ativo (PID vivo/recente): pode haver
                 # um 'scriba process' manual em andamento sobre a mesma reunião
                 if util.is_locked(meta_path.parent):
                     log.info("pendente pulada (.lock ativo): %s", meta_path.parent.name)
                     continue
+                if retryable:
+                    log.info("reunião falhada pela instalação de componentes readotada: %s",
+                             meta_path.parent.name)
                 self.jobs.put(meta_path.parent)
                 count += 1
         log.info("pendentes enfileiradas: %d", count)

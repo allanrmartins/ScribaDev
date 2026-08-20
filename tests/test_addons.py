@@ -2,9 +2,12 @@
 (relato de campo: "pip retornou 2" sem pista nenhuma — o traceback ia p/ um stderr
 inexistente no app sem console). pip mockado — determinístico, sem rede."""
 
+import json
+import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -99,6 +102,67 @@ class InstallToAddonsTests(unittest.TestCase):
         ok, msg = self._run(fake_pip)
         self.assertFalse(ok)
         self.assertIn("pip retornou 1", msg)
+
+    def test_repoe_handlers_que_o_pip_remove_do_root(self):
+        """#167: 71 min de blackout TOTAL do scriba.log no caso real - o pip
+        tirou os handlers do app do root e nada os repunha."""
+        import logging
+
+        nosso = logging.NullHandler()
+        logging.getLogger().addHandler(nosso)
+        try:
+            def fake_pip(args):
+                logging.getLogger().removeHandler(nosso)
+                return 0
+
+            ok, _ = self._run(fake_pip)
+            self.assertTrue(ok)
+            self.assertIn(nosso, logging.getLogger().handlers)  # voltou
+        finally:
+            logging.getLogger().removeHandler(nosso)
+
+
+class InstallingMarkerTests(unittest.TestCase):
+    """Marcador .installing (#167): o pipeline adia processamento enquanto a
+    instalação de componentes reescreve o addons (pip --target --upgrade)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="scriba_mark_"))
+        self._app0 = util.APP_DIR
+        util.APP_DIR = self.tmp
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+
+    def tearDown(self):
+        util.APP_DIR = self._app0
+
+    def _write(self, payload: str) -> None:
+        d = addons.addons_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        (d / addons._INSTALLING_MARKER).write_text(payload, encoding="utf-8")
+
+    def test_liga_desliga(self):
+        self.assertFalse(addons.is_installing())
+        addons.set_installing(True)
+        self.assertTrue(addons.is_installing())     # PID desta suíte: vivo
+        addons.set_installing(False)
+        self.assertFalse(addons.is_installing())
+
+    def test_orfao_de_crash_e_removido(self):
+        # app morreu no meio da instalação: PID morto = marcador some na hora
+        # (diferente do .lock de reunião - aqui a morte do dono ENCERRA a janela)
+        self._write(json.dumps({"pid": 999999999, "started": time.time()}))
+        self.assertFalse(addons.is_installing())
+        self.assertFalse((addons.addons_dir() / addons._INSTALLING_MARKER).exists())
+
+    def test_ilegivel_vale_por_precaucao(self):
+        self._write("{quebrado")   # sendo escrito agora? melhor adiar do que quebrar
+        self.assertTrue(addons.is_installing())
+
+    def test_idade_acima_da_trava_nunca_vale(self):
+        # PID vivo mas 13 h depois: quase certamente reciclado - destrava a fila
+        self._write(json.dumps({"pid": os.getpid(),
+                                "started": time.time() - 13 * 3600}))
+        self.assertFalse(addons.is_installing())
 
 
 class AbiDosAddonsTests(unittest.TestCase):

@@ -28,6 +28,45 @@ class PlanTests(unittest.TestCase):
 
 
 class RunTests(unittest.TestCase):
+    def setUp(self):
+        # run() agora liga o marcador .installing em APP_DIR/addons (#167):
+        # isolar para não tocar o APP_DIR real da máquina
+        import shutil
+
+        from scriba import util
+
+        self.tmp = Path(tempfile.mkdtemp(prefix="scriba_comp_"))
+        self._app0 = util.APP_DIR
+        util.APP_DIR = self.tmp
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+
+    def tearDown(self):
+        from scriba import util
+
+        util.APP_DIR = self._app0
+
+    def test_marcador_installing_cobre_o_plano_inteiro(self):
+        """#167: durante o plano o marcador segura o pipeline; ao final (mesmo
+        com exceção no meio) ele SEMPRE sai."""
+        from scriba import addons
+
+        vistos = []
+
+        def fake_install(extras, progress):
+            vistos.append(addons.is_installing())
+            return True, ""
+
+        with mock.patch.object(components, "_install_extras", side_effect=fake_install):
+            components.run(components.plan_items(cuda=True, voices=True),
+                           progress=lambda _l: None, frac=lambda _f: None, poll=False)
+        self.assertEqual(vistos, [True, True])      # ligado nos DOIS itens
+        self.assertFalse(addons.is_installing())    # desligado ao final
+        with mock.patch.object(components, "_install_extras",
+                               side_effect=RuntimeError("boom")):
+            components.run(components.plan_items(voices=True),
+                           progress=lambda _l: None, frac=lambda _f: None, poll=False)
+        self.assertFalse(addons.is_installing())    # exceção não vaza o marcador
+
     def test_sucesso_agrega_e_barra_chega_a_1000(self):
         fracs, lines = [], []
         with mock.patch.object(components, "_download_model", return_value=(True, "")) as dm, \

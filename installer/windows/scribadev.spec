@@ -54,7 +54,11 @@ _common = dict(
     pathex=[str(REPO)],
     binaries=_pip_binaries,
     datas=_pkg_datas + _pip_datas + _fw_datas,
-    hiddenimports=_pip_hidden,
+    # typing_extensions NO bundle (#167): winrt/anyio importam-no e, fora do
+    # bundle, a resolução cai no addons — se o pip estiver reescrevendo a pasta,
+    # até os toasts do app morrem com EACCES. Bundlado, o FrozenImporter (meta
+    # path) vence o addons sempre.
+    hiddenimports=_pip_hidden + ["typing_extensions"],
     excludes=_excludes,
     noarchive=False,
     module_collection_mode=_pip_collection_mode,
