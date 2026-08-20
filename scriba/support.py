@@ -6,9 +6,11 @@ gerenciador (util.reveal_path) e abre a página de nova issue com título/corpo
 prontos. O GitHub NÃO aceita anexo por URL — por isso o corpo pede o arraste do
 zip, que já está selecionado a um alt-tab de distância.
 
-Privacidade: o corpo lembra o usuário de revisar o zip antes de anexar (o log
-pode citar títulos das reuniões dele). Tudo aqui é best-effort: sem zip, a issue
-abre mesmo assim (só descrever o cenário já ajuda).
+Privacidade: o zip e o "detalhe do erro" do corpo passam pelo Scrubber do
+diagnostics (nomes de cliente/pessoa/reunião viram tokens, usuário do SO vira
+[usuario]); o corpo ainda lembra o usuário de revisar antes de anexar. Tudo
+aqui é best-effort: sem zip, a issue abre mesmo assim (só descrever o cenário
+já ajuda) - mas detalhe que falhou na ofuscação é OMITIDO, nunca sai cru.
 """
 
 from __future__ import annotations
@@ -34,17 +36,24 @@ def issue_url(title: str, body: str) -> str:
 def build_report(context: str, detail: str, recordings_dir=None):
     """(zip_path | None, url da issue). O zip é best-effort — falhou, a issue sai
     sem ele; `detail` (ex.: a nota de erro do pip) entra truncado no corpo."""
+    from . import diagnostics
+
     zip_path = None
     try:
-        from . import diagnostics
-
         zip_path = diagnostics.export_zip(recordings_dir)
     except Exception:
         log.exception("reportar erro: export do diagnóstico falhou (issue sai sem zip)")
+    try:
+        # mesmo tratamento do zip: nomes ofuscados; falhou = OMITIR, nunca sair cru
+        detail = diagnostics.build_scrubber(recordings_dir).scrub(detail or "")
+    except Exception:
+        log.exception("reportar erro: ofuscação do detalhe falhou (detalhe omitido)")
+        detail = "(detalhe omitido — falha na ofuscação; o zip de diagnóstico cobre)"
     origem = "instalador" if updates.is_frozen_install() else "git/fonte"
     anexo = (f"⬇️ **Arraste aqui o arquivo `{zip_path.name}`** — deixei ele selecionado no seu "
-             "gerenciador de arquivos. Antes de anexar, vale uma olhada no conteúdo: o log "
-             "pode citar títulos das suas reuniões."
+             "gerenciador de arquivos. Nomes de clientes, pessoas e reuniões já saem "
+             "ofuscados (`[cliente-1]`, `[pessoa-2]`…), mas vale a olhada final antes "
+             "de anexar."
              if zip_path else
              "(o zip de diagnóstico não pôde ser gerado — descreva o cenário, por favor)")
     body = (f"**O que aconteceu**\n{context}\n\n"

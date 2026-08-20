@@ -46,6 +46,94 @@ class RedactTests(unittest.TestCase):
         self.assertEqual(dg.redact_config(""), "")
 
 
+class ScrubberTests(unittest.TestCase):
+    """Ofuscação de dados sensíveis no diagnóstico: tokens estáveis, vocabulário
+    das bases locais (read-only, toleradas ausentes) e regras de linha."""
+
+    def test_tokens_estaveis_e_caixa_insensivel(self):
+        s = dg.Scrubber()
+        s.add("Coruripe", "cliente")
+        s.add("Guilherme Lima", "pessoa")
+        out = s.scrub("CORURIPE ligou; Coruripe de novo; Guilherme Lima saiu")
+        self.assertNotIn("oruripe", out)
+        self.assertNotIn("Guilherme", out)
+        self.assertEqual(out.count("[cliente-1]"), 2)   # MESMO token, correlacionável
+        self.assertIn("[pessoa-1]", out)
+
+    def test_valor_longo_ganha_do_curto_e_borda_de_palavra(self):
+        s = dg.Scrubber()
+        s.add("Coruripe", "cliente")
+        s.add("Usina Coruripe", "cliente")
+        self.assertEqual(s.scrub("na Usina Coruripe hoje"), "na [cliente-2] hoje")
+        s.add("ACA", "cliente")
+        self.assertEqual(s.scrub("a vaca e a ACA"), "a vaca e a [cliente-3]")
+        s.add("PX", "cliente")                          # curto demais: ignorado
+        self.assertEqual(s.scrub("100px de PX"), "100px de PX")
+
+    def test_usuario_em_caminhos_e_regras_de_linha(self):
+        s = dg.Scrubber()
+        out = s.scrub(r"log em C:\Users\Dittrichi\AppData e /home/allan/x")
+        self.assertNotIn("Dittrichi", out)
+        self.assertNotIn("allan", out)
+        self.assertEqual(out.count("[usuario]"), 2)
+        out = s.scrub("09:12 vozes reconhecidas: Participante 1 -> Raul, 2 -> Marcão\n"
+                      "WARNING possível nova call sem ciclo de mic: Suzi — Abaco BR\n")
+        self.assertNotIn("Raul", out)
+        self.assertNotIn("Suzi", out)
+        self.assertIn("vozes reconhecidas: [pessoas]", out)
+        self.assertIn("possível nova call sem ciclo de mic: [janela]", out)
+
+    def test_vocabulario_das_bases_locais_read_only(self):
+        import sqlite3
+
+        from scriba import util
+
+        tmp = Path(tempfile.mkdtemp(prefix="scriba_scrub_"))
+        saved = util.APP_DIR
+        util.APP_DIR = tmp
+        try:
+            with sqlite3.connect(tmp / "index.db") as c:
+                c.execute("CREATE TABLE meetings (folder TEXT, title TEXT, client TEXT,"
+                          " meeting_title TEXT, export_path TEXT)")
+                c.execute("CREATE TABLE participants (name TEXT)")
+                c.execute("INSERT INTO meetings VALUES (?,?,?,?,?)",
+                          (r"C:\g\2026\08\20\08-10_Alinhamento Coruripe",
+                           "Alinhamento Coruripe", "Coruripe", "", ""))
+                c.execute("INSERT INTO participants VALUES ('Guilherme Lima')")
+            with sqlite3.connect(tmp / "timesheet.db") as c:
+                c.execute("CREATE TABLE clients (name TEXT)")
+                c.execute("CREATE TABLE client_aliases (alias TEXT)")
+                c.execute("CREATE TABLE entries (client_text TEXT)")
+                c.execute("INSERT INTO clients VALUES ('Cellera')")
+                c.execute("INSERT INTO client_aliases VALUES ('celera farma')")
+                c.execute("INSERT INTO entries VALUES ('Usina Coruripe')")
+            s = dg.build_scrubber()
+            out = s.scrub("pasta renomeada: 08-10_Alinhamento Coruripe; "
+                          "cellera e CELERA FARMA; Guilherme Lima; Usina Coruripe")
+            for name in ("Coruripe", "ellera", "Guilherme", "Alinhamento"):
+                self.assertNotIn(name, out)
+            self.assertIn("[reuniao-", out)
+            self.assertIn("[pessoa-", out)
+            self.assertIn("[cliente-", out)
+        finally:
+            util.APP_DIR = saved
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_bases_ausentes_nao_criam_arquivo(self):
+        from scriba import util
+
+        tmp = Path(tempfile.mkdtemp(prefix="scriba_scrub_"))
+        saved = util.APP_DIR
+        util.APP_DIR = tmp / "nao-existe"
+        try:
+            s = dg.build_scrubber(tmp / "sem-gravacoes")
+            self.assertEqual(s.scrub("texto qualquer"), "texto qualquer")
+            self.assertFalse((tmp / "nao-existe").exists())   # dormência preservada
+        finally:
+            util.APP_DIR = saved
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 class ErrorTailTests(unittest.TestCase):
     """error_tail: as últimas entradas de ERRO (com traceback) p/ o corpo da issue."""
 
@@ -112,6 +200,41 @@ class ExportZipTests(unittest.TestCase):
         self.assertIn("logs/scriba.log", names)
         self.assertIn("logs/pip.log", names)
         self.assertIn("ambiente.txt", names)
+        self.assertIn("OFUSCACAO.txt", names)
+
+    def test_zip_sai_ofuscado(self):
+        """Nome de cliente/pessoa/reunião e usuário do SO NÃO saem no zip - nem
+        no scriba.log, nem no meta.json/process.log da reunião com falha."""
+        from scriba import util
+
+        (util.LOGS_DIR / "scriba.log").write_text(
+            "20/08/2026 09:00:00 INFO scriba: concluído 08-10_Call Coruripe -> "
+            "C:\\Users\\Fulano\\Notas\\x.md\n"
+            "20/08/2026 09:01:00 INFO scriba: vozes reconhecidas: P1 -> Raul\n",
+            encoding="utf-8")
+        rec = self.tmp / "rec"
+        failed = rec / "2026" / "08" / "20" / "08-10_Call Coruripe"
+        failed.mkdir(parents=True)
+        (failed / "meta.json").write_text(json.dumps(
+            {"status": "failed", "title": "Call Coruripe", "client": "Coruripe"},
+            ensure_ascii=False), encoding="utf-8")
+        (failed / "process.log").write_text("transcrevendo Call Coruripe\n",
+                                            encoding="utf-8")
+        dest = dg.export_zip(rec)
+        with self.zipfile.ZipFile(dest) as z:
+            log_txt = z.read("logs/scriba.log").decode("utf-8")
+            meta_txt = z.read("reuniao_com_falha/meta.json").decode("utf-8")
+            proc_txt = z.read("reuniao_com_falha/process.log").decode("utf-8")
+        joined = log_txt + meta_txt + proc_txt
+        for name in ("Coruripe", "Fulano", "Raul"):
+            self.assertNotIn(name, joined)
+        self.assertIn("[usuario]", log_txt)
+        self.assertIn("vozes reconhecidas: [pessoas]", log_txt)
+        self.assertIn("[reuniao-", log_txt)
+        self.assertIn("[cliente-", meta_txt)
+        # o que o suporte precisa segue lá: fluxo e timing intactos
+        self.assertIn("concluído", log_txt)
+        self.assertIn("09:00:00", log_txt)
 
 
 class ReadTailTests(unittest.TestCase):

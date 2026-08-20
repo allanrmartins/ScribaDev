@@ -36,8 +36,30 @@ class BuildReportTests(unittest.TestCase):
         self.assertIn(z.name, body)                    # pede o arraste do arquivo certo
         self.assertIn("pip retornou 2", body)          # detalhe do erro no corpo
         self.assertIn(f"v{__version__}", body)         # ambiente identificado
-        self.assertIn("títulos das suas reuniões", body)   # aviso de privacidade presente
+        self.assertIn("já saem ofuscados", body)       # aviso de privacidade presente
         self.assertIn("[erro] Download falhou", self._q(url)["title"][0])
+
+    def test_detalhe_do_corpo_e_ofuscado(self):
+        from scriba import diagnostics
+
+        s = diagnostics.Scrubber()
+        s.add("Coruripe", "cliente")
+        with mock.patch("scriba.diagnostics.export_zip", side_effect=OSError("x")), \
+                mock.patch("scriba.diagnostics.build_scrubber", return_value=s):
+            _z, url = support.build_report("ctx", "erro processando Coruripe")
+        body = self._q(url)["body"][0]
+        self.assertNotIn("Coruripe", body)
+        self.assertIn("[cliente-1]", body)
+
+    def test_falha_na_ofuscacao_omite_o_detalhe(self):
+        # privacidade primeiro: detalhe que não deu para ofuscar NÃO sai cru
+        with mock.patch("scriba.diagnostics.export_zip", side_effect=OSError("x")), \
+                mock.patch("scriba.diagnostics.build_scrubber",
+                           side_effect=RuntimeError("boom")):
+            _z, url = support.build_report("ctx", "segredo com Nome Sensivel")
+        body = self._q(url)["body"][0]
+        self.assertNotIn("Nome Sensivel", body)
+        self.assertIn("detalhe omitido", body)
 
     def test_sem_zip_a_issue_sai_mesmo_assim(self):
         with mock.patch("scriba.diagnostics.export_zip", side_effect=OSError("disco")):
