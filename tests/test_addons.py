@@ -165,6 +165,82 @@ class InstallingMarkerTests(unittest.TestCase):
         self.assertFalse(addons.is_installing())
 
 
+class ComponentesDanificadosTests(unittest.TestCase):
+    """Componentes DANIFICADOS (#170): arquivo do addons que o sistema recusa ler
+    (ACL/antivírus) virava traceback cru e derrubava toda transcrição. Agora vira
+    mensagem acionável + reparo."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="scriba_dmg_"))
+        self._app0 = util.APP_DIR
+        util.APP_DIR = self.tmp
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+
+    def tearDown(self):
+        util.APP_DIR = self._app0
+
+    def _erro_no_addons(self) -> PermissionError:
+        alvo = addons.addons_dir() / "typing_extensions.py"
+        return PermissionError(13, "Permission denied", str(alvo))
+
+    def test_detecta_erro_vindo_do_addons(self):
+        self.assertTrue(addons.is_damaged_error(self._erro_no_addons()))
+        # erro de permissão FORA do addons não é dano de componente
+        fora = PermissionError(13, "Permission denied", str(self.tmp / "outro.py"))
+        self.assertFalse(addons.is_damaged_error(fora))
+        self.assertFalse(addons.is_damaged_error(ValueError("boom")))
+        self.assertFalse(addons.is_damaged_error(None))
+
+    def test_detecta_atraves_da_cadeia_de_causas(self):
+        """O import estoura lá no fundo: o erro chega embrulhado."""
+        try:
+            try:
+                raise self._erro_no_addons()
+            except PermissionError as e:
+                raise ImportError("falha ao importar anyio") from e
+        except ImportError as topo:
+            self.assertTrue(addons.is_damaged_error(topo))
+
+    def test_detecta_por_texto_do_process_log(self):
+        # o subprocesso morre e só sobra o texto (tail do process.log / meta)
+        self.assertTrue(addons.looks_damaged_text(
+            r"PermissionError: [Errno 13] Permission denied: 'C:\x\ScribaDev\addons\t.py'"))
+        self.assertFalse(addons.looks_damaged_text("ValueError: boom"))
+        self.assertFalse(addons.looks_damaged_text(
+            "PermissionError: [Errno 13] Permission denied: 'C:\\outro\\arquivo.py'"))
+        self.assertFalse(addons.looks_damaged_text(""))
+
+    def test_reparo_apaga_a_pasta(self):
+        d = addons.addons_dir()
+        (d / "pacote").mkdir(parents=True)
+        (d / "pacote" / "__init__.py").write_text("x", encoding="utf-8")
+        ok, msg = addons.reset_addons()
+        self.assertTrue(ok, msg)
+        self.assertFalse(d.exists())
+        # idempotente: reparar de novo não é erro
+        ok2, _ = addons.reset_addons()
+        self.assertTrue(ok2)
+
+    def test_reparo_recusa_durante_instalacao(self):
+        d = addons.addons_dir()
+        d.mkdir(parents=True)
+        addons.set_installing(True)
+        try:
+            ok, msg = addons.reset_addons()
+        finally:
+            addons.set_installing(False)
+        self.assertFalse(ok)
+        self.assertIn("andamento", msg)
+        self.assertTrue(d.exists())        # não apagou nada no meio da instalação
+
+    def test_reparo_falha_graciosa_e_orienta(self):
+        addons.addons_dir().mkdir(parents=True)
+        with mock.patch("shutil.rmtree", side_effect=OSError(32, "em uso")):
+            ok, msg = addons.reset_addons()
+        self.assertFalse(ok)
+        self.assertIn("feche o ScribaDev", msg)   # caminho de saída para o usuário
+
+
 class AbiDosAddonsTests(unittest.TestCase):
     """Guarda de ABI (#147): addons de `pip --target` valem só para o Python que os
     instalou. Sem esta guarda, reconstruir o app com outro minor (3.12 -> 3.14) faz o

@@ -243,7 +243,6 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_split(args)
     if args.cmd == "process":
         from . import addons
-        from .pipeline import process_folder, process_when_ready
 
         if addons.is_installing():
             # instalação de componentes reescrevendo o addons (#167): importar
@@ -252,9 +251,22 @@ def main(argv: list[str] | None = None) -> int:
                   "e rode de novo")
             return 3
         _timestamp_subprocess_output()  # process.log com HH:MM:SS por linha
-        if args.when_ready:
-            return process_when_ready(args.folder)
-        return 0 if process_folder(args.folder, force_cpu=args.cpu, num_speakers=args.speakers) else 1
+        try:
+            # o import ENTRA no try: o EACCES do addons costuma estourar já na
+            # cadeia de imports pesados (faster_whisper -> huggingface_hub -> ...)
+            from .pipeline import process_folder, process_when_ready
+
+            if args.when_ready:
+                return process_when_ready(args.folder)
+            return 0 if process_folder(args.folder, force_cpu=args.cpu,
+                                       num_speakers=args.speakers) else 1
+        except OSError as e:
+            # componentes danificados (#170): traceback cru de PermissionError
+            # não diz nada ao usuário - troca por orientação e rc próprio
+            if not addons.is_damaged_error(e):
+                raise
+            print(f"ERRO: {addons.DAMAGED_HINT}")
+            return 4
     if args.cmd == "run":
         from .main import run_app
 

@@ -933,6 +933,13 @@ class SettingsWindow(QWidget):
         self._comp_btn = widgets.ModernButton("Baixar selecionados", self._download_components,
                                               kind="primary")
         row.addWidget(self._comp_btn)
+        # reparo dos componentes danificados (#170): apagar e reinstalar do zero
+        self._comp_repair_btn = widgets.ModernButton("Reparar componentes…",
+                                                     self._repair_components)
+        widgets.add_tooltip(self._comp_repair_btn,
+                            "Apaga os componentes já baixados para reinstalar do zero — "
+                            "use quando o app disser que estão inacessíveis/danificados.")
+        row.addWidget(self._comp_repair_btn)
         # aparece SÓ quando um download falha: zip do diagnóstico + issue pré-preenchida
         self._comp_report_btn = widgets.ModernButton("Reportar erro no GitHub",
                                                      self._report_components_error)
@@ -992,6 +999,37 @@ class SettingsWindow(QWidget):
             "Pronto — componentes instalados e já disponíveis (sem reiniciar)." if ok
             else f"Alguns itens falharam — dá para tentar de novo, ou reporte o erro "
                  f"(o botão salva o log e abre a issue). Detalhe: {notes}")
+
+    def _repair_components(self) -> None:
+        """Reparo dos componentes danificados (#170): apaga APP_DIR/addons para uma
+        reinstalação limpa. Destrutivo (são GB), então confirma antes; se o Windows
+        segurar arquivos em uso, orienta e abre a pasta para o usuário resolver."""
+        from PySide6.QtWidgets import QMessageBox
+
+        from .. import addons
+
+        d = addons.addons_dir()
+        pergunta = "\n".join((
+            "Isto APAGA os componentes já baixados (bibliotecas NVIDIA e separação de vozes):",
+            str(d),
+            "",
+            "Depois é só marcar o que você usa e baixar de novo — são vários GB.",
+            "Suas reuniões e configurações NÃO são tocadas.",
+            "",
+            "Apagar agora?",
+        ))
+        if QMessageBox.question(self, "Reparar componentes", pergunta,
+                                QMessageBox.Yes | QMessageBox.No,
+                                QMessageBox.No) != QMessageBox.Yes:
+            return
+        ok, msg = addons.reset_addons()
+        self._comp_status.setText(
+            f"{msg}. Marque os itens acima e clique em Baixar selecionados." if ok else msg)
+        if not ok:   # arquivo em uso: o usuário resolve na mão, com a pasta aberta
+            try:
+                util.open_path(d.parent)
+            except Exception:
+                log.debug("não consegui abrir a pasta dos componentes", exc_info=True)
 
     def _report_components_error(self) -> None:
         """Botão do erro: zip de diagnóstico (com o pip.log) + issue pré-preenchida."""

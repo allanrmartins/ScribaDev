@@ -851,19 +851,27 @@ class ScribaApp:
         log.info("processamento de %s (rc=%s):\n%s", folder.name, proc.returncode, tail)
         self.ui(self._hide_pill_if_processing)
         if proc.returncode != 0:
+            # componentes danificados (#170): rc próprio da CLI ou o texto do erro
+            # denunciando o addons - o usuário precisa de conserto, não de retry
+            damaged = proc.returncode == 4 or addons.looks_damaged_text(tail)
             # invariante: subprocesso saiu com erro => status terminal no meta
             try:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
                 if meta.get("status") in util.IN_PROGRESS_STATUSES:
                     meta["status"] = "failed"
-                    meta["error"] = tail[-600:]
+                    meta["error"] = addons.DAMAGED_HINT if damaged else tail[-600:]
                     util.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
             except Exception:
                 log.exception("não consegui marcar %s como failed", folder.name)
-            self._toast(
-                "ScribaDev: falha ao processar",
-                f"{folder.name} — detalhes em process.log; retry: scribadev process",
-            )
+            if damaged:
+                log.error("componentes danificados: %s", addons.DAMAGED_HINT)
+                self._toast("ScribaDev: componentes danificados",
+                            "Repare em Configurações → Sobre para voltar a processar.")
+            else:
+                self._toast(
+                    "ScribaDev: falha ao processar",
+                    f"{folder.name} — detalhes em process.log; retry: scribadev process",
+                )
             return
         export_path = title = None
         try:

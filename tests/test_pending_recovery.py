@@ -137,6 +137,55 @@ class ScanPendingTests(unittest.TestCase):
         meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
         self.assertEqual(meta["status"], "recorded")   # intacta, readotável
 
+    def _run_com_rc(self, folder, rc: int, saida: str = ""):
+        """Roda _process_subprocess com o subprocesso FALSO saindo com `rc`."""
+        from scriba import util
+
+        app = self._app()
+        app.ui = lambda f: f()
+        app._hide_pill_if_processing = lambda: None
+        app._pill_processing = lambda _s: None
+        if saida:
+            (folder / "process.log").write_text(saida, encoding="utf-8")
+        proc = mock.Mock()
+        proc.poll.return_value = rc
+        proc.returncode = rc
+        with mock.patch("scriba.addons.is_installing", return_value=False), \
+                mock.patch.object(util, "app_command", return_value=["x"]), \
+                mock.patch("subprocess.Popen", return_value=proc):
+            app._process_subprocess(folder)
+        return app, json.loads((folder / "meta.json").read_text(encoding="utf-8"))
+
+    def test_rc_de_componentes_danificados_vira_mensagem_acionavel(self):
+        """#170: em vez do traceback cru de PermissionError, o usuário recebe o
+        que fazer - e o toast aponta o reparo, não um retry que vai falhar igual."""
+        from scriba import addons
+
+        d = _meeting(self.root, "m1", {"status": "transcribing"})
+        app, meta = self._run_com_rc(d, 4)
+        self.assertEqual(meta["status"], "failed")
+        self.assertEqual(meta["error"], addons.DAMAGED_HINT)
+        titulo, corpo = app._toast.call_args[0]
+        self.assertIn("componentes danificados", titulo.casefold())
+        self.assertIn("Configurações", corpo)
+
+    def test_dano_detectado_tambem_pelo_texto_do_log(self):
+        """Versão antiga da CLI (sem o rc 4) ou erro por outro caminho: o texto
+        do process.log denuncia o addons e o tratamento é o mesmo."""
+        from scriba import addons
+
+        d = _meeting(self.root, "m2", {"status": "transcribing"})
+        tail = (r"PermissionError: [Errno 13] Permission denied: "
+                r"'C:\Users\x\AppData\Local\ScribaDev\addons\typing_extensions.py'")
+        _app, meta = self._run_com_rc(d, 1, saida=tail)
+        self.assertEqual(meta["error"], addons.DAMAGED_HINT)
+
+    def test_falha_comum_mantem_o_erro_cru_e_o_toast_de_retry(self):
+        d = _meeting(self.root, "m3", {"status": "transcribing"})
+        app, meta = self._run_com_rc(d, 1, saida="ValueError: audio corrompido")
+        self.assertIn("audio corrompido", meta["error"])
+        self.assertIn("falha ao processar", app._toast.call_args[0][0].casefold())
+
 
 @unittest.skipUnless(_HAVE_PIPELINE, "scriba.pipeline indisponível (deps de transcrição)")
 class ProcessWhenReadyTests(unittest.TestCase):

@@ -156,6 +156,68 @@ def is_installing() -> bool:
     return False
 
 
+# Componentes DANIFICADOS (#170): um arquivo do addons que o sistema recusa ler
+# (ACL/antivírus barrando .py gravado em AppData) derrubava TODA transcrição com um
+# traceback cru de PermissionError, a cada tentativa, sem dizer nada ao usuário.
+# Reproduzido em bancada com `icacls /deny`; o gatilho é externo, mas a degradação
+# é nossa. Pegadinha: com o .pyc do __pycache__ legível o import PASSA mesmo com o
+# .py bloqueado - daí o problema parecer intermitente.
+DAMAGED_HINT = ("componentes baixados estão inacessíveis (o sistema recusa ler "
+                "arquivos da pasta de componentes - antivírus ou permissão). "
+                "Repare em Configurações → Sobre → Reparar componentes.")
+
+
+def is_damaged_error(exc: BaseException | None) -> bool:
+    """True se `exc` (ou alguma causa dela) é falha de ACESSO a arquivo dentro do
+    addons. Best-effort e sem levantar: serve para trocar um traceback cru por uma
+    mensagem acionável, nunca para decidir algo destrutivo."""
+    try:
+        alvo = str(addons_dir()).casefold()
+    except Exception:
+        return False
+    vistos = set()
+    while exc is not None and id(exc) not in vistos:
+        vistos.add(id(exc))
+        if isinstance(exc, OSError):
+            for cand in (getattr(exc, "filename", None), getattr(exc, "filename2", None)):
+                if cand and alvo in str(cand).casefold():
+                    return True
+            if alvo in str(exc).casefold():
+                return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
+def looks_damaged_text(text: str) -> bool:
+    """Mesma detecção sobre um TEXTO de erro já capturado (tail de process.log,
+    meta['error']): o subprocesso morre e só sobra o texto."""
+    t = (text or "").casefold()
+    return ("permission denied" in t or "errno 13" in t) and "addons" in t
+
+
+def reset_addons() -> tuple[bool, str]:
+    """Apaga a pasta de componentes para reinstalação limpa (o reparo do #170).
+
+    Devolve (ok, mensagem). NÃO apaga durante uma instalação em andamento; falha
+    graciosa se o Windows segurar arquivos em uso (.pyd já carregado por este
+    processo) - nesse caso o caminho é fechar o app e apagar a pasta."""
+    import shutil
+
+    d = addons_dir()
+    if is_installing():
+        return (False, "há uma instalação de componentes em andamento — espere terminar")
+    if not d.exists():
+        return (True, "não havia componentes baixados")
+    try:
+        shutil.rmtree(d)
+    except OSError as e:
+        log.warning("reparo do addons falhou: %s", e)
+        return (False, f"não consegui apagar {d} ({e.strerror or e}) — feche o "
+                       "ScribaDev e apague essa pasta manualmente")
+    log.info("addons apagado para reinstalação limpa: %s", d)
+    return (True, "componentes removidos — baixe de novo para reinstalar")
+
+
 def pip_log_path() -> Path:
     """logs/pip.log — TODA a saída do pip in-process vai aqui (ver install_to_addons)."""
     from . import util
