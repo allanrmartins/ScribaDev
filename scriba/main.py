@@ -29,6 +29,32 @@ log = logging.getLogger("scriba")
 # plataforma (plat._win = mutex/evento/PowerShell históricos; plat._posix =
 # flock/socket/Popen). O retry pós-update (#74) vive lá.
 
+# Watchdog do subprocesso de processamento (#176). A fila é SERIAL: um filho
+# pendurado não travava só a reunião dele, travava todas as seguintes - e a capa
+# seguia mostrando "Transcrevendo…" com a máquina a 0% (foi exatamente o relato).
+# Sinais de vida sondados: CPU acumulada do filho, mtime do meta.json e tamanho do
+# process.log. Qualquer um deles andando conta como progresso.
+_TICK_PROCESSAMENTO_S = 1.0     # passo do laço (espelha o estágio na pílula)
+_SONDA_PROGRESSO_S = 30.0       # de quanto em quanto tempo os sinais são lidos
+_PARADO_S = 20 * 60             # tudo parado por mais que isto = travado
+_CPU_DELTA_MIN = 0.5            # s de CPU que já contam como "andou"
+
+
+def _andou(antes: tuple, depois: tuple) -> bool:
+    """Houve QUALQUER sinal de progresso entre duas sondagens do filho?
+
+    A CPU é o sinal forte: transcrever/diarizar queima CPU sem parar, então CPU
+    congelada por minutos a fio é travamento, não lentidão. Onde a sondagem de CPU
+    não existe (SO sem suporte), ela vem como None e a decisão fica com o meta.json
+    e o process.log - por isso a comparação é campo a campo, e não igualdade da
+    tupla: None == None não pode ser lido como "não andou".
+    """
+    cpu_a, meta_a, log_a = antes
+    cpu_d, meta_d, log_d = depois
+    if cpu_a is not None and cpu_d is not None and cpu_d - cpu_a >= _CPU_DELTA_MIN:
+        return True
+    return meta_d != meta_a or log_d != log_a
+
 
 def _setup_logging() -> None:
     util.ensure_app_dirs()
@@ -776,6 +802,70 @@ class ScribaApp:
 
     # -------------------------------------------------------------- worker --
 
+    def _marcar_falha(self, meta_path, folder, erro: str) -> None:
+        """Invariante do worker: filho que não terminou bem => status TERMINAL no
+        meta. Sem isto a capa fica num "Transcrevendo…" que não acaba nunca."""
+        import json
+
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if meta.get("status") in util.IN_PROGRESS_STATUSES:
+                meta["status"] = "failed"
+                meta["error"] = erro
+                util.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
+        except Exception:
+            log.exception("não consegui marcar %s como failed", folder.name)
+
+    @staticmethod
+    def _sinais_do_filho(pid: int, meta_path, log_path) -> tuple:
+        """(CPU acumulada, mtime do meta.json, tamanho do process.log) - o trio que
+        diz se o subprocesso está VIVO no sentido que importa: fazendo alguma coisa.
+        Cada campo vira None quando não dá para ler; nada aqui levanta."""
+        try:
+            cpu = plat.pid_cpu_seconds(pid)
+        except Exception:
+            cpu = None
+
+        def _stat(caminho, campo):
+            try:
+                return campo(caminho.stat())
+            except OSError:
+                return None
+
+        return (cpu,
+                _stat(meta_path, lambda s: s.st_mtime_ns),
+                _stat(log_path, lambda s: s.st_size))
+
+    def _limite_sem_progresso(self) -> float:
+        """Quanto tempo sem sinal nenhum antes de declarar travado.
+
+        Piso de _PARADO_S, esticado pelo timeout do resumo: a geração do resumo é
+        uma espera legítima de rede (ollama, nuvem, CLI do Claude) que pode não
+        queimar CPU nem escrever no log enquanto acontece.
+        """
+        try:
+            timeout = float(getattr(self.cfg.summary, "timeout_seconds", 0) or 0)
+        except Exception:
+            timeout = 0.0
+        if timeout <= 0:
+            return float(_PARADO_S)
+        return max(float(_PARADO_S), timeout + 300)
+
+    def _matar_filho(self, proc, folder) -> None:
+        """Encerra o subprocesso travado e limpa o `.lock` DELE.
+
+        Só o dele: um `scribadev process` manual sobre a mesma pasta tem lock
+        próprio e não pode ser apagado por engano. O lock ficaria órfão de todo
+        jeito (o filho morre sem rodar o `finally`), mas deixar sujeira para o
+        `is_locked` limpar depois é pior do que limpar aqui, onde se sabe o dono.
+        """
+        try:
+            proc.kill()
+            proc.wait(timeout=10)
+        except Exception:
+            log.exception("não consegui encerrar o subprocesso de %s", folder.name)
+        util.clear_lock(folder, proc.pid)
+
     def _process_subprocess(self, folder) -> None:
         """Carrega o modelo, transcreve e gera a nota num subprocesso isolado.
 
@@ -829,8 +919,14 @@ class ScribaApp:
             if out is not None:
                 out.close()  # o filho herdou o handle; o nosso pode fechar já
 
-        # acompanha o estágio pelo meta.json e espelha na pílula
+        # acompanha o estágio pelo meta.json e espelha na pílula, vigiando o
+        # PROGRESSO do filho (#176): um subprocesso pendurado congelava a fila
+        # inteira para sempre - a espera aqui não tinha nem timeout nem watchdog
         last_status = None
+        limite = self._limite_sem_progresso()
+        sinais = self._sinais_do_filho(proc.pid, meta_path, log_path)
+        ultimo_sinal = ultima_sonda = time.monotonic()
+        travado = False
         while proc.poll() is None:
             try:
                 status = json.loads(meta_path.read_text(encoding="utf-8")).get("status")
@@ -839,7 +935,32 @@ class ScribaApp:
             if status and status != last_status:
                 last_status = status
                 self.ui(lambda s=status: self._pill_processing(s))
-            time.sleep(1.0)
+            agora = time.monotonic()
+            if agora - ultima_sonda >= _SONDA_PROGRESSO_S:
+                ultima_sonda = agora
+                novos = self._sinais_do_filho(proc.pid, meta_path, log_path)
+                if _andou(sinais, novos):
+                    sinais, ultimo_sinal = novos, agora
+                elif agora - ultimo_sinal >= limite:
+                    travado = True
+                    break
+            time.sleep(_TICK_PROCESSAMENTO_S)
+
+        if travado:
+            parado_min = (time.monotonic() - ultimo_sinal) / 60
+            log.error("processamento de %s TRAVADO: %.0f min sem progresso (CPU, meta.json e "
+                      "process.log parados) - encerrando o subprocesso pid=%s",
+                      folder.name, parado_min, proc.pid)
+            self._matar_filho(proc, folder)
+            self.ui(self._hide_pill_if_processing)
+            self._marcar_falha(
+                meta_path, folder,
+                f"processamento encerrado pelo ScribaDev: ficou {parado_min:.0f} min sem "
+                f"nenhum sinal de progresso (nem CPU, nem log). Detalhes em process.log; "
+                f"para tentar de novo: scribadev process")
+            self._toast("ScribaDev: processamento travado",
+                        f"{folder.name} parou de responder e foi encerrado - a fila seguiu.")
+            return
 
         tail = ""
         try:
@@ -855,14 +976,8 @@ class ScribaApp:
             # denunciando o addons - o usuário precisa de conserto, não de retry
             damaged = proc.returncode == 4 or addons.looks_damaged_text(tail)
             # invariante: subprocesso saiu com erro => status terminal no meta
-            try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                if meta.get("status") in util.IN_PROGRESS_STATUSES:
-                    meta["status"] = "failed"
-                    meta["error"] = addons.DAMAGED_HINT if damaged else tail[-600:]
-                    util.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
-            except Exception:
-                log.exception("não consegui marcar %s como failed", folder.name)
+            self._marcar_falha(meta_path, folder,
+                               addons.DAMAGED_HINT if damaged else tail[-600:])
             if damaged:
                 log.error("componentes danificados: %s", addons.DAMAGED_HINT)
                 self._toast("ScribaDev: componentes danificados",

@@ -13,6 +13,7 @@ Nada pesado roda aqui: ScribaApp via __new__ (sem __init__), repair_folder é
 real (pasta sem wavs → 0s) ou mockado, e process_folder é stubado.
 """
 
+import itertools
 import json
 import os
 import queue
@@ -26,6 +27,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scriba import main as main_mod  # noqa: E402
 from scriba.main import ScribaApp  # noqa: E402
 
 try:
@@ -185,6 +187,107 @@ class ScanPendingTests(unittest.TestCase):
         app, meta = self._run_com_rc(d, 1, saida="ValueError: audio corrompido")
         self.assertIn("audio corrompido", meta["error"])
         self.assertIn("falha ao processar", app._toast.call_args[0][0].casefold())
+
+
+class WatchdogDoSubprocessoTests(unittest.TestCase):
+    """#176: filho de processamento que PENDURA congelava a fila inteira - a espera
+    não tinha timeout nem watchdog, e a capa seguia mostrando "Transcrevendo…" com a
+    máquina a 0%. Agora CPU, meta.json e process.log parados por tempo demais = morto."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="scriba_wd_"))
+
+    def _app(self):
+        app = ScribaApp.__new__(ScribaApp)
+        app.cfg = SimpleNamespace(summary=SimpleNamespace(timeout_seconds=0))
+        app._toast = mock.Mock()
+        app.ui = lambda f: f()
+        app._hide_pill_if_processing = lambda: None
+        app._pill_processing = lambda _s: None
+        return app
+
+    def _proc(self, vivo_por: int, rc: int = 1, pid: int = 4242):
+        """Popen falso: poll() devolve None nas primeiras `vivo_por` chamadas."""
+        proc = mock.Mock()
+        proc.pid = pid
+        n = {"i": 0}
+
+        def poll():
+            n["i"] += 1
+            return None if n["i"] <= vivo_por else rc
+
+        proc.poll.side_effect = poll
+        proc.returncode = rc
+        return proc
+
+    def _rodar(self, folder, proc, cpu):
+        from scriba import main as main_mod
+        from scriba import util as util_mod
+
+        app = self._app()
+        with mock.patch.multiple(main_mod, _SONDA_PROGRESSO_S=0, _TICK_PROCESSAMENTO_S=0,
+                                 _PARADO_S=0), \
+                mock.patch("scriba.plat.pid_cpu_seconds", side_effect=cpu), \
+                mock.patch("scriba.addons.is_installing", return_value=False), \
+                mock.patch.object(util_mod, "app_command", return_value=["x"]), \
+                mock.patch("subprocess.Popen", return_value=proc):
+            app._process_subprocess(folder)
+        return app, json.loads((folder / "meta.json").read_text(encoding="utf-8"))
+
+    def test_filho_pendurado_e_encerrado_e_a_reuniao_vira_failed(self):
+        d = _meeting(self.root, "presa", {"status": "transcribing"})
+        proc = self._proc(vivo_por=50)          # nunca sairia sozinho
+        app, meta = self._rodar(d, proc, cpu=lambda _pid: 1.0)   # CPU congelada
+        proc.kill.assert_called_once()
+        self.assertEqual(meta["status"], "failed")
+        self.assertIn("sem nenhum sinal de progresso", meta["error"])
+        self.assertIn("travado", app._toast.call_args[0][0].casefold())
+
+    def test_filho_que_queima_cpu_nao_e_morto(self):
+        """Falso positivo é o risco real aqui: transcrição longa não pode virar
+        'travada' só porque demora. CPU andando = vivo, mesmo sem escrever log."""
+        d = _meeting(self.root, "viva", {"status": "transcribing"})
+        proc = self._proc(vivo_por=5)
+        relogio = itertools.count(0.0, 60.0)    # +60 s de CPU por sondagem
+        app, meta = self._rodar(d, proc, cpu=lambda _pid: next(relogio))
+        proc.kill.assert_not_called()
+        self.assertEqual(meta["status"], "failed")           # pelo rc=1, não pelo watchdog
+        self.assertNotIn("sem nenhum sinal", meta.get("error", ""))
+
+    def test_progresso_no_process_log_tambem_conta(self):
+        """Onde não há sondagem de CPU (devolve None), o log crescendo basta."""
+        d = _meeting(self.root, "baixando", {"status": "transcribing"})
+        proc = self._proc(vivo_por=5)
+        escrita = {"n": 0}
+
+        def cpu_indisponivel(_pid):
+            escrita["n"] += 1
+            with (d / "process.log").open("a", encoding="utf-8") as f:
+                f.write("baixando modelo %d\n" % escrita["n"])
+            return None
+
+        _app, meta = self._rodar(d, proc, cpu=cpu_indisponivel)
+        proc.kill.assert_not_called()
+        self.assertEqual(meta["status"], "failed")           # rc=1
+        self.assertNotIn("sem nenhum sinal", meta.get("error", ""))
+
+    def test_limite_acompanha_o_timeout_do_resumo(self):
+        """Gerar resumo é espera de rede legítima (ollama/nuvem/CLI): não queima CPU
+        nem escreve log, então o limite nunca pode ser menor que aquele timeout."""
+        app = self._app()
+        self.assertEqual(app._limite_sem_progresso(), float(main_mod._PARADO_S))
+        app.cfg.summary.timeout_seconds = 3600
+        self.assertGreaterEqual(app._limite_sem_progresso(), 3600)
+
+    def test_lock_do_filho_morto_e_limpo(self):
+        """kill não roda o finally do filho: o .lock dele ficaria para trás e a
+        reunião sairia da varredura de pendentes."""
+        d = _meeting(self.root, "presa", {"status": "transcribing"})
+        (d / ".lock").write_text(json.dumps({"pid": 4242, "started": time.time()}),
+                                 encoding="utf-8")
+        proc = self._proc(vivo_por=50, pid=4242)
+        self._rodar(d, proc, cpu=lambda _pid: 1.0)
+        self.assertFalse((d / ".lock").exists())
 
 
 @unittest.skipUnless(_HAVE_PIPELINE, "scriba.pipeline indisponível (deps de transcrição)")

@@ -41,6 +41,70 @@ class IsLockedTests(unittest.TestCase):
         (d / ".lock").write_text("{nao json", encoding="utf-8")
         self.assertTrue(util.is_locked(d))
 
+    def test_pid_morto_eh_orfao_mesmo_com_lock_recente(self):
+        """#176: lock recente era respeitado SEM olhar o PID - reunião cujo worker
+        morreu ficava "Transcrevendo…" e fora da varredura por até 2 h. Quem escreve
+        o lock é o próprio filho, então lock com PID morto nunca tem dono vivo."""
+        d = _folder(pid=4242, started=time.time())
+        with mock.patch("scriba.plat.pid_alive", return_value=False):
+            self.assertFalse(util.is_locked(d))
+
+    def test_pid_reciclado_nao_segura_o_lock(self):
+        """#176: PID vivo não basta - o Windows recicla números depressa. Processo
+        que NASCEU depois do lock é outro dono, e o lock é órfão."""
+        d = _folder(pid=4242, started=time.time() - 3600)
+        with mock.patch("scriba.plat.pid_alive", return_value=True), \
+                mock.patch("scriba.plat.pid_started_at", return_value=time.time()):
+            self.assertFalse(util.is_locked(d))
+
+    def test_pid_vivo_do_dono_original_segura_o_lock(self):
+        carimbo = time.time() - 3600
+        d = _folder(pid=4242, started=carimbo)
+        with mock.patch("scriba.plat.pid_alive", return_value=True), \
+                mock.patch("scriba.plat.pid_started_at", return_value=carimbo - 5):
+            self.assertTrue(util.is_locked(d))
+
+    def test_sem_sondagem_de_nascimento_confia_no_pid_vivo(self):
+        """SO sem a sondagem (pid_started_at devolve None): o lock continua valendo
+        pelo PID vivo - o teto absoluto é que impede virar eterno."""
+        d = _folder(pid=4242, started=time.time() - 3600)
+        with mock.patch("scriba.plat.pid_alive", return_value=True), \
+                mock.patch("scriba.plat.pid_started_at", return_value=None):
+            self.assertTrue(util.is_locked(d))
+
+    def test_teto_absoluto_vence_ate_pid_vivo(self):
+        d = _folder(pid=4242, started=time.time() - (util.LOCK_HARD_MAX_AGE_SECONDS + 60))
+        with mock.patch("scriba.plat.pid_alive", return_value=True), \
+                mock.patch("scriba.plat.pid_started_at", return_value=None):
+            self.assertFalse(util.is_locked(d))
+
+    def test_ilegivel_e_velho_nao_segura_para_sempre(self):
+        """Lock truncado por queda de energia não pode bloquear a pasta eternamente:
+        sem PID para conferir, resta a idade do arquivo."""
+        d = Path(tempfile.mkdtemp(prefix="scriba_t_"))
+        p = d / ".lock"
+        p.write_text("{nao json", encoding="utf-8")
+        velho = time.time() - (util.LOCK_MAX_AGE_SECONDS + 60)
+        os.utime(p, (velho, velho))
+        self.assertFalse(util.is_locked(d))
+
+
+class ClearLockTests(unittest.TestCase):
+    """#176: quem mata um subprocesso travado limpa o lock DELE - e só o dele."""
+
+    def test_apaga_o_lock_do_proprio_pid(self):
+        d = _folder(pid=4242, started=time.time())
+        self.assertTrue(util.clear_lock(d, 4242))
+        self.assertFalse((d / ".lock").exists())
+
+    def test_nao_apaga_lock_de_outro_processo(self):
+        d = _folder(pid=4242, started=time.time())
+        self.assertFalse(util.clear_lock(d, 9999))
+        self.assertTrue((d / ".lock").exists())
+
+    def test_sem_lock_nao_e_erro(self):
+        self.assertFalse(util.clear_lock(_folder(), 4242))
+
 
 class AtomicWriteTests(unittest.TestCase):
     def setUp(self):

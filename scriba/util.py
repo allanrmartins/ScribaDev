@@ -516,17 +516,51 @@ def update_state(**values) -> None:
         pass
 
 
-# lock criado há mais de 2 h sem PID vivo é considerado órfão de crash
+# lock sem PID utilizável (formato antigo) vale só por 2 h
 LOCK_MAX_AGE_SECONDS = 7200
+# teto absoluto: nenhum lock vale mais que isto, nem com PID aparentemente vivo.
+# Rede de segurança para o caso em que não dá para ler o nascimento do processo
+# (SO sem a sondagem) e o PID reciclado passaria por vivo para sempre.
+LOCK_HARD_MAX_AGE_SECONDS = 24 * 3600
+# folga entre o nascimento do processo e o carimbo do lock: o filho escreve o
+# lock logo depois de subir, então nascer DEPOIS do carimbo denuncia outro dono
+_LOCK_PID_SLACK_S = 60
+
+
+def clear_lock(folder: Path, pid: int) -> bool:
+    """Apaga o `.lock` da pasta SE ele for do processo `pid`. Devolve se apagou.
+
+    Usado quando o app mata um subprocesso travado (#176): quem morre por kill não
+    roda o `finally` que remove o lock. A conferência do dono evita apagar o lock
+    de um `scribadev process` manual que esteja trabalhando na mesma pasta.
+    """
+    lock_path = folder / ".lock"
+    try:
+        data = json.loads(lock_path.read_text(encoding="utf-8"))
+        if int(data.get("pid", 0)) != int(pid):
+            return False
+        lock_path.unlink(missing_ok=True)
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
 
 
 def is_locked(folder: Path) -> bool:
     """True se a pasta tem um `.lock` ATIVO (worker em andamento).
 
-    Ativo = o arquivo `.lock` existe E (o PID gravado ainda está vivo no sistema
-    OU o lock tem menos de LOCK_MAX_AGE_SECONDS). Lock sem PID vivo E mais antigo
-    que o limite é tratado como órfão de crash (ignorado). Lock ilegível: assume
-    ativo por precaução (melhor pular do que reprocessar/apagar em cima).
+    Ativo = o `.lock` existe E o PID gravado é o dono ORIGINAL e ainda está vivo.
+    "Dono original" importa por causa do PID RECICLADO (#176): o Windows reaproveita
+    números depressa, então um lock deixado por um filho morto acabava adotado por
+    um processo qualquer que herdou o número - a reunião ficava eternamente "sendo
+    processada" por ninguém, invisível para a varredura de pendentes. Comparar o
+    nascimento do processo com o carimbo do lock desfaz isso sem heurística.
+
+    PID morto = órfão de crash, independentemente da idade do lock: quem escreve o
+    lock é o próprio filho, então lock existente com PID morto nunca tem dono vivo.
+    Lock ilegível ou sem PID (formato antigo) cai na idade, e nada passa do teto
+    absoluto. A sondagem passa pela camada de plataforma porque no Windows
+    `os.kill(pid, 0)` NÃO consulta: sinal 0 é CTRL_C_EVENT e dispara Ctrl+C no
+    grupo de console.
 
     Fonte única usada pela retenção (não apagar pasta em uso) e pelo pipeline
     (não reprocessar pasta já em andamento por outro processo — ex.: worker da GUI
@@ -540,18 +574,31 @@ def is_locked(folder: Path) -> bool:
         pid = int(data.get("pid", 0))
         started = float(data.get("started", 0))
     except Exception:
-        return True
+        # ilegível (ex.: sendo escrito agora, ou truncado por queda de energia):
+        # precaução pela idade do ARQUIVO, que é o único carimbo que sobrou
+        try:
+            idade = time.time() - lock_path.stat().st_mtime
+        except OSError:
+            return True
+        return idade <= LOCK_MAX_AGE_SECONDS
 
     age = time.time() - started
-    if age > LOCK_MAX_AGE_SECONDS:
-        # lock muito antigo: só é genuíno se o PID ainda existir. A sondagem passa
-        # pela camada de plataforma porque no Windows `os.kill(pid, 0)` NÃO consulta:
-        # sinal 0 é CTRL_C_EVENT, e o Python dispara Ctrl+C no grupo de console.
-        if pid and plat.pid_alive(pid):
-            return True
-        log.debug("ignorando lock órfão em %s (pid=%s, %.0f min)", folder.name, pid, age / 60)
+    if age > LOCK_HARD_MAX_AGE_SECONDS:
+        log.info("lock órfão ignorado em %s (pid=%s, %.0f h - acima do teto)",
+                 folder.name, pid, age / 3600)
         return False
-    return True  # lock recente — respeitar mesmo sem verificar o PID
+    if not pid:
+        return age <= LOCK_MAX_AGE_SECONDS      # formato antigo: só a idade resta
+    if not plat.pid_alive(pid):
+        log.info("lock órfão ignorado em %s (pid=%s morto, %.0f min)",
+                 folder.name, pid, age / 60)
+        return False
+    nascido = plat.pid_started_at(pid)
+    if nascido is not None and nascido > started + _LOCK_PID_SLACK_S:
+        log.info("lock órfão ignorado em %s (pid=%s reciclado: nasceu %.0f min depois "
+                 "do lock)", folder.name, pid, (nascido - started) / 60)
+        return False
+    return True
 
 
 def virtual_screen_rect() -> tuple[int, int, int, int] | None:
