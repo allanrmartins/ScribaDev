@@ -56,6 +56,67 @@ def pid_alive(pid: int) -> bool:
         k32.CloseHandle(handle)
 
 
+class _FILETIME(ctypes.Structure):
+    _fields_ = [("low", ctypes.c_ulong), ("high", ctypes.c_ulong)]
+
+    def ticks(self) -> int:
+        """Os 64 bits em unidades de 100 ns (a granularidade do Win32)."""
+        return (self.high << 32) | self.low
+
+
+# FILETIME conta 100 ns desde 1601-01-01; o epoch Unix fica 11.644.473.600 s depois
+_EPOCH_DELTA_TICKS = 116444736000000000
+_TICKS_POR_SEGUNDO = 10_000_000
+
+
+def _process_times(pid: int) -> tuple[float, float] | None:
+    """(criação em epoch Unix, CPU acumulada em s) do processo, ou None.
+
+    Uma única chamada a GetProcessTimes serve às duas sondagens - abrir handle é
+    o caro aqui. None cobre processo inexistente, sem permissão de consulta ou
+    falha da API: quem chama trata "não sei" como ausência de evidência.
+    """
+    if pid <= 0:
+        return None
+    k32 = ctypes.windll.kernel32
+    handle = k32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not handle:
+        return None
+    try:
+        criacao, saida, kernel, usuario = (_FILETIME() for _ in range(4))
+        if not k32.GetProcessTimes(handle, ctypes.byref(criacao), ctypes.byref(saida),
+                                   ctypes.byref(kernel), ctypes.byref(usuario)):
+            return None
+        nascido = (criacao.ticks() - _EPOCH_DELTA_TICKS) / _TICKS_POR_SEGUNDO
+        cpu = (kernel.ticks() + usuario.ticks()) / _TICKS_POR_SEGUNDO
+        return (nascido, cpu)
+    finally:
+        k32.CloseHandle(handle)
+
+
+def pid_started_at(pid: int) -> float | None:
+    """Instante (epoch Unix) em que o processo NASCEU, ou None se não dá para saber.
+
+    Existe para desmascarar PID RECICLADO: o Windows reaproveita números de PID
+    depressa, então "o PID do .lock está vivo" não prova que o dono do lock está
+    vivo - pode ser outro processo qualquer que herdou o número. Comparar com o
+    carimbo de quando o lock foi criado resolve sem heurística de idade.
+    """
+    t = _process_times(pid)
+    return None if t is None else t[0]
+
+
+def pid_cpu_seconds(pid: int) -> float | None:
+    """CPU acumulada (kernel + usuário, em s) do processo, ou None.
+
+    É o sinal de PROGRESSO do subprocesso de processamento: transcrever queima
+    CPU o tempo todo, então CPU parada por minutos a fio significa travado, não
+    lento (#176 - o usuário via a reunião "Transcrevendo…" com 0% em tudo).
+    """
+    t = _process_times(pid)
+    return None if t is None else t[1]
+
+
 def has_nvidia_gpu() -> bool:
     """Driver NVIDIA presente? (nvcuda.dll carrega — sonda histórica do diagnóstico)."""
     import ctypes

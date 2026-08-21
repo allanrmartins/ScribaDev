@@ -64,6 +64,57 @@ class TestBackendPosix(unittest.TestCase):
             )
 
 
+class TestSondagensDeProcesso(unittest.TestCase):
+    """#176: nascimento e CPU do processo. O watchdog do processamento decide pela
+    CPU (transcrever queima CPU sem parar) e o `.lock` usa o nascimento para
+    desmascarar PID reciclado. Roda contra um processo REAL: é uma sondagem de SO,
+    mock aqui não provaria nada."""
+
+    def setUp(self):
+        self.proc = subprocess.Popen([sys.executable, "-c",
+                                      "import time\nfor _ in range(200): time.sleep(0.05)"])
+        self.addCleanup(self.proc.wait)
+        self.addCleanup(self.proc.kill)
+
+    def test_nascimento_e_recente_e_anterior_a_agora(self):
+        import time as _t
+
+        nascido = plat.pid_started_at(self.proc.pid)
+        self.assertIsNotNone(nascido)
+        self.assertLessEqual(nascido, _t.time() + 1)
+        self.assertGreater(nascido, _t.time() - 300)
+
+    def test_cpu_e_um_numero_nao_negativo(self):
+        cpu = plat.pid_cpu_seconds(self.proc.pid)
+        self.assertIsNotNone(cpu)
+        self.assertGreaterEqual(cpu, 0.0)
+
+    def test_pid_inexistente_devolve_none(self):
+        # PID improvável e fora da faixa usual; nunca pode levantar
+        self.assertIsNone(plat.pid_started_at(9_999_991))
+        self.assertIsNone(plat.pid_cpu_seconds(9_999_991))
+
+    def test_pid_invalido_devolve_none(self):
+        for pid in (0, -1):
+            self.assertIsNone(plat.pid_started_at(pid))
+            self.assertIsNone(plat.pid_cpu_seconds(pid))
+
+
+class TestDhmsDoPs(unittest.TestCase):
+    """Parser do `ps` (caminho do macOS): formatos de etime/time."""
+
+    def test_formatos(self):
+        self.assertAlmostEqual(_posix._dhms("00:30"), 30)
+        self.assertAlmostEqual(_posix._dhms("01:30"), 90)
+        self.assertAlmostEqual(_posix._dhms("02:01:30"), 7290)
+        self.assertAlmostEqual(_posix._dhms("1-02:01:30"), 93690)
+        self.assertAlmostEqual(_posix._dhms("00:00.50"), 0.5)
+
+    def test_lixo_vira_none(self):
+        for t in ("", "   ", "abc", "1:2:x"):
+            self.assertIsNone(_posix._dhms(t))
+
+
 class TestHasNvidiaGpu(unittest.TestCase):
     @unittest.skipUnless(sys.platform == "win32", "sonda o nvcuda.dll real (WinDLL)")
     def test_win_devolve_bool(self):

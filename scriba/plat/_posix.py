@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 log = logging.getLogger("scriba.plat")
@@ -47,6 +48,86 @@ def pid_alive(pid: int) -> bool:
         return True    # existe, só não é nosso
     except OSError:
         return False
+
+
+def _dhms(texto: str) -> float | None:
+    """Converte "[D-]HH:MM:SS[.ss]" / "MM:SS" (formato do `ps`) em segundos."""
+    texto = (texto or "").strip()
+    if not texto:
+        return None
+    dias, _, resto = texto.rpartition("-")
+    try:
+        partes = [float(p) for p in resto.split(":")]
+    except ValueError:
+        return None
+    segundos = 0.0
+    for p in partes:                       # MM:SS ou HH:MM:SS, da esquerda p/ direita
+        segundos = segundos * 60 + p
+    if dias:
+        try:
+            segundos += float(dias) * 86400
+        except ValueError:
+            return None
+    return segundos
+
+
+def _ps_tempos(pid: int) -> tuple[float, float] | None:
+    """(criação em epoch, CPU em s) via `ps` - o caminho do macOS, que não tem /proc."""
+    import subprocess
+
+    try:
+        r = subprocess.run(["ps", "-p", str(int(pid)), "-o", "etime=,time="],
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    campos = (r.stdout or "").split()
+    if r.returncode != 0 or len(campos) < 2:
+        return None
+    decorrido, cpu = _dhms(campos[0]), _dhms(campos[1])
+    if decorrido is None or cpu is None:
+        return None
+    return (time.time() - decorrido, cpu)
+
+
+def _proc_tempos(pid: int) -> tuple[float, float] | None:
+    """(criação em epoch, CPU em s) via /proc/<pid>/stat - o caminho do Linux."""
+    try:
+        campos = Path(f"/proc/{int(pid)}/stat").read_text(encoding="utf-8", errors="replace")
+        # o comm vem entre parênteses e pode conter espaços: cortar por ') ' é o
+        # único jeito seguro de indexar os campos que vêm depois
+        campos = campos[campos.rindex(") ") + 2:].split()
+        ticks = os.sysconf("SC_CLK_TCK") or 100
+        cpu = (float(campos[11]) + float(campos[12])) / ticks   # utime + stime
+        desde_o_boot = float(campos[19]) / ticks                # starttime
+    except (OSError, ValueError, IndexError, AttributeError):
+        return None
+    try:
+        for linha in Path("/proc/stat").read_text(encoding="utf-8").splitlines():
+            if linha.startswith("btime "):
+                return (float(linha.split()[1]) + desde_o_boot, cpu)
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def _tempos(pid: int) -> tuple[float, float] | None:
+    if pid <= 0:
+        return None
+    return _ps_tempos(pid) if sys.platform == "darwin" else _proc_tempos(pid)
+
+
+def pid_started_at(pid: int) -> float | None:
+    """Instante (epoch) em que o processo nasceu, ou None. Ver `plat._win` para o
+    porquê: desmascarar PID reciclado sem depender de heurística de idade."""
+    t = _tempos(pid)
+    return None if t is None else t[0]
+
+
+def pid_cpu_seconds(pid: int) -> float | None:
+    """CPU acumulada (utime + stime, em s) do processo, ou None. Sinal de progresso
+    do subprocesso de processamento (#176)."""
+    t = _tempos(pid)
+    return None if t is None else t[1]
 
 
 def has_nvidia_gpu() -> bool:
