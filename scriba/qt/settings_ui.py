@@ -933,12 +933,12 @@ class SettingsWindow(QWidget):
         self._comp_btn = widgets.ModernButton("Baixar selecionados", self._download_components,
                                               kind="primary")
         row.addWidget(self._comp_btn)
-        # reparo dos componentes danificados (#170): apagar e reinstalar do zero
-        self._comp_repair_btn = widgets.ModernButton("Reparar componentes…",
+        # reinstalação limpa (#170/#176): apagar tudo e baixar de novo
+        self._comp_repair_btn = widgets.ModernButton("Reinstalar componentes…",
                                                      self._repair_components)
         widgets.add_tooltip(self._comp_repair_btn,
-                            "Apaga os componentes já baixados para reinstalar do zero — "
-                            "use quando o app disser que estão inacessíveis/danificados.")
+                            "Apaga os componentes já baixados e baixa de novo — use quando "
+                            "o app disser que estão inacessíveis/danificados.")
         row.addWidget(self._comp_repair_btn)
         # aparece SÓ quando um download falha: zip do diagnóstico + issue pré-preenchida
         self._comp_report_btn = widgets.ModernButton("Reportar erro no GitHub",
@@ -1000,36 +1000,107 @@ class SettingsWindow(QWidget):
             else f"Alguns itens falharam — dá para tentar de novo, ou reporte o erro "
                  f"(o botão salva o log e abre a issue). Detalhe: {notes}")
 
+    def _reuniao_em_processamento(self) -> str | None:
+        """Nome da reunião com processamento ATIVO, ou None. Apagar o addons no meio
+        de uma transcrição mata a transcrição (foi o que aconteceu na #176)."""
+        try:
+            for meta_path in Path(self.app.cfg.output.resolved_recordings_dir()).rglob("meta.json"):
+                if util.is_locked(meta_path.parent):
+                    return meta_path.parent.name
+        except Exception:
+            log.debug("não consegui checar reuniões em processamento", exc_info=True)
+        return None
+
     def _repair_components(self) -> None:
-        """Reparo dos componentes danificados (#170): apaga APP_DIR/addons para uma
-        reinstalação limpa. Destrutivo (são GB), então confirma antes; se o Windows
-        segurar arquivos em uso, orienta e abre a pasta para o usuário resolver."""
+        """Reinstalação limpa dos componentes (#170/#176): apaga APP_DIR/addons e já
+        baixa de novo o que estava instalado.
+
+        Destrutivo (são GB), então confirma antes. Duas recusas próprias: instalação
+        em andamento e reunião sendo processada. Quando o SO segura arquivos em uso
+        (.pyd carregado, subprocesso órfão), o apagamento é AGENDADO para o próximo
+        início - antes era um beco sem saída com a pasta aberta no Explorer.
+        """
         from PySide6.QtWidgets import QMessageBox
 
         from .. import addons
 
         d = addons.addons_dir()
+        if addons.is_installing():
+            self._comp_status.setText(
+                "Há uma instalação de componentes em andamento - espere ela terminar.")
+            return
+        ocupada = self._reuniao_em_processamento()
+        if ocupada:
+            self._comp_status.setText(
+                f"A reunião {ocupada} está sendo processada agora - os componentes estão "
+                f"em uso. Espere terminar e tente de novo.")
+            return
         pergunta = "\n".join((
             "Isto APAGA os componentes já baixados (bibliotecas NVIDIA e separação de vozes):",
             str(d),
             "",
-            "Depois é só marcar o que você usa e baixar de novo — são vários GB.",
+            "Em seguida eu baixo de novo o que você já usava — são vários GB.",
             "Suas reuniões e configurações NÃO são tocadas.",
             "",
-            "Apagar agora?",
+            "Reinstalar agora?",
         ))
-        if QMessageBox.question(self, "Reparar componentes", pergunta,
+        if QMessageBox.question(self, "Reinstalar componentes", pergunta,
                                 QMessageBox.Yes | QMessageBox.No,
                                 QMessageBox.No) != QMessageBox.Yes:
             return
+        # o que reinstalar depois: medir ANTES de apagar (o cache do modelo fica
+        # fora do addons e não é tocado, então ele não entra no replano)
+        try:
+            tinha_cuda = any(d.glob("nvidia*"))
+        except OSError:
+            tinha_cuda = False
+        try:
+            import importlib.util as ilu
+
+            tinha_voices = ilu.find_spec("pyannote") is not None
+        except Exception:
+            tinha_voices = False
+
         ok, msg = addons.reset_addons()
-        self._comp_status.setText(
-            f"{msg}. Marque os itens acima e clique em Baixar selecionados." if ok else msg)
-        if not ok:   # arquivo em uso: o usuário resolve na mão, com a pasta aberta
-            try:
-                util.open_path(d.parent)
-            except Exception:
-                log.debug("não consegui abrir a pasta dos componentes", exc_info=True)
+        if not ok:
+            self._agendar_reinstalacao(msg)
+            return
+        self._comp_model.setChecked(False)
+        self._comp_cuda.setChecked(tinha_cuda)
+        self._comp_voices.setChecked(tinha_voices)
+        if tinha_cuda or tinha_voices:
+            self._comp_status.setText(f"{msg}. Baixando de novo…")
+            self._download_components()
+        else:
+            self._comp_status.setText(
+                f"{msg}. Marque os itens acima e clique em Baixar selecionados.")
+
+    def _agendar_reinstalacao(self, motivo: str) -> None:
+        """Arquivo em uso: oferece apagar no próximo início (e não deixa o usuário
+        sem saída, como antes)."""
+        from PySide6.QtWidgets import QMessageBox
+
+        from .. import addons
+
+        pergunta = "\n".join((
+            motivo + ".",
+            "",
+            "Posso apagar os componentes no PRÓXIMO INÍCIO do ScribaDev, antes de "
+            "qualquer coisa usá-los. Depois é só marcar o que você usa e baixar de novo.",
+            "",
+            "Agendar para o próximo início?",
+        ))
+        if QMessageBox.question(self, "Reinstalar componentes", pergunta,
+                                QMessageBox.Yes | QMessageBox.No,
+                                QMessageBox.Yes) != QMessageBox.Yes:
+            self._comp_status.setText(motivo + ".")
+            return
+        if addons.schedule_reset():
+            self._comp_status.setText(
+                "Agendado: os componentes serão apagados no próximo início do ScribaDev. "
+                "Feche e abra o app, depois baixe os componentes de novo.")
+        else:
+            self._comp_status.setText(motivo + " - e não consegui agendar o apagamento.")
 
     def _report_components_error(self) -> None:
         """Botão do erro: zip de diagnóstico (com o pip.log) + issue pré-preenchida."""

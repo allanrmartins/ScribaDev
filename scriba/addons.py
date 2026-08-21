@@ -75,6 +75,11 @@ def bootstrap() -> bool:
     try:
         if not getattr(sys, "frozen", False):
             return False
+        # reinstalação agendada (#176) ANTES de qualquer coisa: é a única janela em
+        # que a pasta não está em uso por este processo. Qualquer processo do app
+        # serve como "próximo início"; se um filho de processamento chegar primeiro,
+        # ele simplesmente segue sem os componentes (degradação já tratada no #170).
+        apply_pending_reset()
         d = addons_dir()
         if not d.is_dir():
             return False
@@ -169,7 +174,7 @@ def is_installing() -> bool:
 # .py bloqueado - daí o problema parecer intermitente.
 DAMAGED_HINT = ("componentes baixados estão inacessíveis (o sistema recusa ler "
                 "arquivos da pasta de componentes - antivírus ou permissão). "
-                "Repare em Configurações → Sobre → Reparar componentes.")
+                "Reinstale em Configurações → Sobre → Reinstalar componentes.")
 
 
 def is_damaged_error(exc: BaseException | None) -> bool:
@@ -205,22 +210,95 @@ def reset_addons() -> tuple[bool, str]:
 
     Devolve (ok, mensagem). NÃO apaga durante uma instalação em andamento; falha
     graciosa se o Windows segurar arquivos em uso (.pyd já carregado por este
-    processo) - nesse caso o caminho é fechar o app e apagar a pasta."""
+    processo ou por um subprocesso de processamento órfão) - nesse caso quem chama
+    agenda com `schedule_reset()`, que resolve no próximo início."""
     import shutil
 
     d = addons_dir()
     if is_installing():
         return (False, "há uma instalação de componentes em andamento — espere terminar")
     if not d.exists():
+        clear_reset()
         return (True, "não havia componentes baixados")
     try:
         shutil.rmtree(d)
     except OSError as e:
         log.warning("reparo do addons falhou: %s", e)
-        return (False, f"não consegui apagar {d} ({e.strerror or e}) — feche o "
-                       "ScribaDev e apague essa pasta manualmente")
+        return (False, f"não consegui apagar {d} ({e.strerror or e}) — algum processo "
+                       "ainda está usando esses arquivos")
+    clear_reset()
     log.info("addons apagado para reinstalação limpa: %s", d)
     return (True, "componentes removidos — baixe de novo para reinstalar")
+
+
+# Reinstalação AGENDADA (#176): quando o Windows segura arquivos do addons (um
+# .pyd já carregado, um subprocesso de processamento órfão), apagar na hora é
+# impossível - e mandar o usuário caçar a pasta no Explorer nunca foi resposta.
+# O marcador mora FORA do addons (a pasta some) e é consumido no boot seguinte,
+# por `bootstrap()`, antes de qualquer coisa de lá entrar no sys.path.
+_RESET_MARKER = ".reset-addons"
+
+
+def _reset_marker() -> Path:
+    from . import util
+
+    return util.APP_DIR / _RESET_MARKER
+
+
+def schedule_reset() -> bool:
+    """Agenda o apagamento dos componentes para o próximo início. Nunca levanta."""
+    try:
+        m = _reset_marker()
+        m.parent.mkdir(parents=True, exist_ok=True)
+        m.write_text(json.dumps({"pedido_em": time.time()}), encoding="utf-8")
+        log.info("reinstalação de componentes agendada para o próximo início")
+        return True
+    except OSError:
+        log.warning("não consegui agendar a reinstalação dos componentes", exc_info=True)
+        return False
+
+
+def reset_pendente() -> bool:
+    """Há um apagamento agendado esperando o próximo início?"""
+    try:
+        return _reset_marker().exists()
+    except OSError:
+        return False
+
+
+def clear_reset() -> None:
+    try:
+        _reset_marker().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def apply_pending_reset() -> bool:
+    """Consome o agendamento: apaga a pasta de componentes. Devolve se apagou algo.
+
+    Roda no `bootstrap()`, isto é, ANTES de o addons entrar no sys.path e antes de
+    qualquer import pesado - é a janela em que os arquivos não estão em uso por
+    ESTE processo. Se ainda assim outro processo segurar a pasta, o marcador fica
+    para a próxima tentativa. Nunca levanta: falhar aqui não pode impedir o app
+    de subir.
+    """
+    import shutil
+
+    if not reset_pendente():
+        return False
+    d = addons_dir()
+    if not d.exists():
+        clear_reset()
+        return False
+    try:
+        shutil.rmtree(d)
+    except OSError as e:
+        log.warning("reinstalação agendada: ainda não consegui apagar %s (%s) - "
+                    "fica para o próximo início", d, e)
+        return False
+    clear_reset()
+    log.info("reinstalação agendada: componentes apagados (%s)", d)
+    return True
 
 
 def pip_log_path() -> Path:

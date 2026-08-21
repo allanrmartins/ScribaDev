@@ -254,7 +254,54 @@ class ComponentesDanificadosTests(unittest.TestCase):
         with mock.patch("shutil.rmtree", side_effect=OSError(32, "em uso")):
             ok, msg = addons.reset_addons()
         self.assertFalse(ok)
-        self.assertIn("feche o ScribaDev", msg)   # caminho de saída para o usuário
+        self.assertIn("usando esses arquivos", msg)   # a causa, não um beco sem saída
+
+    def test_reinstalacao_agendada_apaga_no_proximo_inicio(self):
+        """#176: arquivo em uso não deixa apagar AGORA - o apagamento é agendado e
+        acontece no boot seguinte, antes de qualquer import tocar a pasta."""
+        d = addons.addons_dir()
+        (d / "pacote").mkdir(parents=True)
+        with mock.patch("shutil.rmtree", side_effect=OSError(32, "em uso")):
+            ok, _ = addons.reset_addons()
+        self.assertFalse(ok)
+        self.assertFalse(addons.reset_pendente())      # agendar é decisão de quem chama
+        self.assertTrue(addons.schedule_reset())
+        self.assertTrue(addons.reset_pendente())
+        self.assertTrue(addons.apply_pending_reset())
+        self.assertFalse(d.exists())
+        self.assertFalse(addons.reset_pendente())      # marcador consumido
+
+    def test_agendamento_sobrevive_a_uma_tentativa_que_falha(self):
+        """Se o arquivo continuar preso no próximo início, o agendamento FICA -
+        senão o usuário mandava reinstalar e o pedido evaporava em silêncio."""
+        addons.addons_dir().mkdir(parents=True)
+        addons.schedule_reset()
+        with mock.patch("shutil.rmtree", side_effect=OSError(32, "em uso")):
+            self.assertFalse(addons.apply_pending_reset())
+        self.assertTrue(addons.reset_pendente())
+
+    def test_bootstrap_consome_o_agendamento_antes_do_sys_path(self):
+        """A janela do apagamento é o bootstrap: nada do addons entrou no sys.path
+        ainda, então nada deste processo segura a pasta."""
+        d = addons.addons_dir()
+        (d / "pacote").mkdir(parents=True)
+        addons.schedule_reset()
+        path0 = list(sys.path)
+        try:
+            with mock.patch.object(sys, "frozen", True, create=True):
+                addons.bootstrap()
+        finally:
+            sys.path[:] = path0
+        self.assertFalse(d.exists())
+        self.assertNotIn(str(d), path0)
+
+    def test_reparo_sem_pasta_limpa_agendamento_pendente(self):
+        """Pasta já apagada por outro caminho: o pedido pendente não pode ficar
+        armado para uma reinstalação futura que ninguém pediu."""
+        addons.schedule_reset()
+        ok, _ = addons.reset_addons()
+        self.assertTrue(ok)
+        self.assertFalse(addons.reset_pendente())
 
 
 class AbiDosAddonsTests(unittest.TestCase):

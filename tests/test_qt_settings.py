@@ -389,6 +389,65 @@ class SettingsTests(unittest.TestCase):
         win._download_components()
         self.assertIn("Nada selecionado", win._comp_status.text())
 
+    def _win_componentes(self):
+        from unittest import mock
+
+        from scriba.qt.settings_ui import SettingsWindow
+
+        with mock.patch("scriba.updates.is_frozen_install", return_value=True):
+            return SettingsWindow(self._app())
+
+    def test_reinstalar_recusa_com_reuniao_em_processamento(self):
+        """#176: apagar o addons no meio de uma transcrição mata a transcrição -
+        foi assim que a pasta do usuário sumiu debaixo do subprocesso."""
+        from unittest import mock
+
+        win = self._win_componentes()
+        with mock.patch.object(win, "_reuniao_em_processamento", return_value="10-00_Call"), \
+                mock.patch("scriba.addons.reset_addons") as reset:
+            win._repair_components()
+        reset.assert_not_called()
+        self.assertIn("10-00_Call", win._comp_status.text())
+
+    def test_reinstalar_apaga_e_ja_baixa_de_novo(self):
+        """O pedido do 'desinstalar e baixar de novo': o que estava instalado é
+        medido ANTES de apagar e volta a ser baixado sem o usuário remarcar nada."""
+        from unittest import mock
+
+        from PySide6.QtWidgets import QMessageBox
+
+        addons_dir = Path(tempfile.mkdtemp(prefix="scriba_add_"))
+        (addons_dir / "nvidia_cublas_cu12").mkdir()
+        win = self._win_componentes()
+        with mock.patch.object(win, "_reuniao_em_processamento", return_value=None), \
+                mock.patch("scriba.addons.is_installing", return_value=False), \
+                mock.patch("scriba.addons.addons_dir", return_value=addons_dir), \
+                mock.patch("scriba.addons.reset_addons", return_value=(True, "componentes removidos")), \
+                mock.patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.Yes), \
+                mock.patch.object(win, "_download_components") as baixar:
+            win._repair_components()
+        baixar.assert_called_once()
+        self.assertTrue(win._comp_cuda.isChecked())      # tinha CUDA -> volta a baixar
+        self.assertFalse(win._comp_model.isChecked())    # cache do modelo não é apagado
+
+    def test_arquivo_em_uso_oferece_agendar_para_o_proximo_inicio(self):
+        """#176: quando o SO segura os arquivos, o caminho deixa de ser 'vire-se no
+        Explorer' e passa a ser um agendamento que o boot seguinte cumpre."""
+        from unittest import mock
+
+        from PySide6.QtWidgets import QMessageBox
+
+        win = self._win_componentes()
+        with mock.patch.object(win, "_reuniao_em_processamento", return_value=None), \
+                mock.patch("scriba.addons.is_installing", return_value=False), \
+                mock.patch("scriba.addons.reset_addons",
+                           return_value=(False, "algum processo ainda está usando esses arquivos")), \
+                mock.patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.Yes), \
+                mock.patch("scriba.addons.schedule_reset", return_value=True) as agendar:
+            win._repair_components()
+        agendar.assert_called_once()
+        self.assertIn("próximo início", win._comp_status.text())
+
     def test_show_about_update(self):
         from scriba.qt.settings_ui import SettingsWindow
 
