@@ -47,6 +47,57 @@ class CleanMeetingTitleTests(unittest.TestCase):
         self.assertEqual(_clean_meeting_title("   "), "")
         self.assertEqual(_clean_meeting_title("Zoom"), "")
 
+    def test_janela_auxiliar_do_teams_nao_e_reuniao(self):
+        """#177: a barra de compartilhamento e a vista compacta são janelas do
+        Teams com título próprio. Entravam como nome da reunião - e, pior, mudavam
+        o título no meio da call, armando o split. Devolvem "" para que a varredura
+        siga para a janela da reunião de verdade."""
+        for raw in ("Sharing control bar | Contoso | fulano@contoso.com",
+                    "Meeting compact view | Daily do projeto | Contoso | fulano@contoso.com",
+                    "(3) Sharing control bar | Contoso",
+                    "MEETING COMPACT VIEW | Contoso"):
+            self.assertEqual(_clean_meeting_title(raw), "", raw)
+
+    def test_janela_normal_segue_valendo(self):
+        # a guarda de janela auxiliar não pode engolir título legítimo
+        self.assertEqual(
+            _clean_meeting_title("Daily do projeto | Contoso | fulano@contoso.com"),
+            "Daily do projeto — Contoso — fulano@contoso.com")
+
+
+class MesmaReuniaoPeloTituloTests(unittest.TestCase):
+    """#177: em call ad hoc o título do Teams É a lista de participantes, então
+    "mudou o título" não significa "outra reunião"."""
+
+    def _t(self, nucleo: str) -> str:
+        return f"{nucleo} — Contoso — fulano@contoso.com"
+
+    def test_entrou_alguem_e_a_mesma_reuniao(self):
+        self.assertTrue(detector.mesma_reuniao_pelo_titulo(
+            self._t("Pessoa A"), self._t("Pessoa A, Pessoa B")))
+
+    def test_saiu_alguem_e_a_mesma_reuniao(self):
+        self.assertTrue(detector.mesma_reuniao_pelo_titulo(
+            self._t("Pessoa A, Pessoa B"), self._t("Pessoa B")))
+
+    def test_titulo_identico(self):
+        self.assertTrue(detector.mesma_reuniao_pelo_titulo(
+            self._t("Daily do projeto"), self._t("Daily do projeto")))
+
+    def test_reuniao_de_outra_gente_continua_dividindo(self):
+        self.assertFalse(detector.mesma_reuniao_pelo_titulo(
+            self._t("Pessoa A"), self._t("Pessoa C")))
+
+    def test_organizacao_igual_nao_aproxima_reunioes(self):
+        """O sufixo de organização e conta é o mesmo em toda janela do Teams: se
+        entrasse na comparação, nenhuma call seria dividida nunca."""
+        self.assertFalse(detector.mesma_reuniao_pelo_titulo(
+            self._t("Alinhamento interno"), self._t("Daily do projeto")))
+
+    def test_sem_titulo_nao_e_evidencia(self):
+        self.assertFalse(detector.mesma_reuniao_pelo_titulo("", self._t("Pessoa A")))
+        self.assertFalse(detector.mesma_reuniao_pelo_titulo(self._t("Pessoa A"), ""))
+
 
 class _Clock:
     """Relógio monotônico controlado (substitui time.monotonic nos testes)."""
@@ -309,7 +360,7 @@ class DetectorStateMachineTests(unittest.TestCase):
         self.assertIn(("title", "Daily Vetra"), self.events)  # bônus: on_title disparado
 
     def test_uso_a_titulo_igual_suprime_split_por_gap(self):
-        # gap >= limiar, mas a reunião é a mesma (título inalterado) -> NÃO divide
+        # gap >= limiar, mas a reunião é a mesma (título aparentado) -> NÃO divide
         self._make()
         self._poll({TEAMS: (_BASE, 0)})
         self.det._title_stable = "Daily Vetra"       # título já estabilizado
@@ -318,7 +369,7 @@ class DetectorStateMachineTests(unittest.TestCase):
         with self.assertLogs("scriba.detector", "INFO") as cm:
             self._poll({TEAMS: (_BASE + 105 * _FT, 0)}, advance=5.0)  # gap de 5 s (>= 3)
         self.assertIs(self.det.state, CallState.RECORDING)
-        self.assertIn("título inalterado", "\n".join(cm.output))
+        self.assertIn("é a mesma reunião pelo título", "\n".join(cm.output))
         self.assertEqual(len(self._starts()), 1)          # emendou: uma call só
 
     def test_uso_a_titulo_diferente_permite_split_por_gap(self):
@@ -342,7 +393,7 @@ class DetectorStateMachineTests(unittest.TestCase):
         with self.assertLogs("scriba.detector", "INFO") as cm:
             self._poll({TEAMS: (_BASE + 50 * _FT, 0)})   # ciclo invisível (start mudou)
         out = "\n".join(cm.output)
-        self.assertIn("ciclo invisível + título mudou", out)
+        self.assertIn("ciclo invisível + reunião outra", out)
         self.assertIn("dividindo a gravação", out)
         self.assertIn(("started", False), self.events)
 
@@ -357,6 +408,46 @@ class DetectorStateMachineTests(unittest.TestCase):
         self.assertIs(self.det.state, CallState.RECORDING)
         self.assertIn("ciclo de sessão invisível", "\n".join(cm.output))
         self.assertEqual(len(self._starts()), 1)
+
+    def test_adicionar_pessoa_no_ciclo_invisivel_nao_divide(self):
+        """#177, o caso relatado: numa call 1:1, adicionar uma terceira pessoa muda
+        o título do Teams (vira a lista de participantes) e o Teams reabre a sessão
+        de mic. As duas coisas juntas partiam a gravação em duas reuniões."""
+        self._make()
+        self._poll({TEAMS: (_BASE, 0)})
+        self.det._title_stable = "Pessoa A — Contoso — fulano@contoso.com"
+        self.title = "Pessoa A, Pessoa B — Contoso — fulano@contoso.com"
+        with self.assertLogs("scriba.detector", "WARNING") as cm:
+            self._poll({TEAMS: (_BASE + 50 * _FT, 0)})   # ciclo invisível
+        self.assertIs(self.det.state, CallState.RECORDING)
+        self.assertNotIn("dividindo", "\n".join(cm.output))
+        self.assertEqual(len(self._starts()), 1)          # uma gravação só
+
+    def test_adicionar_pessoa_no_gap_nao_divide(self):
+        """Mesma entrada de participante, agora coincidindo com um gap de mic maior
+        que split_gap_seconds: o outro caminho de split tinha o mesmo defeito."""
+        self._make()
+        self._poll({TEAMS: (_BASE, 0)})
+        self.det._title_stable = "Pessoa A — Contoso — fulano@contoso.com"
+        self._poll({TEAMS: (_BASE, _BASE + 100 * _FT)})   # GRACE
+        self.title = "Pessoa A, Pessoa B — Contoso — fulano@contoso.com"
+        with self.assertLogs("scriba.detector", "INFO") as cm:
+            self._poll({TEAMS: (_BASE + 105 * _FT, 0)}, advance=5.0)
+        self.assertIs(self.det.state, CallState.RECORDING)
+        self.assertIn("mesma reunião pelo título", "\n".join(cm.output))
+        self.assertEqual(len(self._starts()), 1)
+
+    def test_call_de_outra_pessoa_ainda_divide(self):
+        """Guarda do #35: duas calls seguidas com pessoas diferentes e o mic
+        ciclando mais rápido que o poll continuam virando duas reuniões."""
+        self._make()
+        self._poll({TEAMS: (_BASE, 0)})
+        self.det._title_stable = "Pessoa A — Contoso — fulano@contoso.com"
+        self.title = "Pessoa C — Contoso — fulano@contoso.com"
+        with self.assertLogs("scriba.detector", "INFO") as cm:
+            self._poll({TEAMS: (_BASE + 50 * _FT, 0)})
+        self.assertIn("dividindo a gravação", "\n".join(cm.output))
+        self.assertIn(("started", False), self.events)
 
     def test_uso_c_titulo_muda_sem_ciclo_so_avisa(self):
         # título estável muda sem NENHUM evento de sessão de mic -> v1 só alerta

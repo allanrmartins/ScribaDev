@@ -266,10 +266,35 @@ _TITLE_GENERIC = {
     "google meet", "microsoft edge", "google chrome", "mozilla firefox", "brave",
     "opera", "vivaldi", "reunião", "meeting", "",
 }
+# Janelas AUXILIARES do Teams: existem durante a call (barra de compartilhamento,
+# vista compacta) e têm título próprio, que não é o nome da reunião (#177). Elas
+# entravam como se fossem a reunião, e daí saíam duas consequências: meeting_title
+# virando "Sharing control bar" no meta, e o desempate do split (que compara
+# títulos) achando que a call mudou porque o usuário começou a compartilhar a tela.
+# Aparecem em inglês mesmo com o Teams em português - os equivalentes traduzidos
+# estão aqui por precaução, não por observação.
+_TITLE_AUX_WINDOWS = (
+    "sharing control bar", "meeting compact view", "meeting controls",
+    "barra de controle de compartilhamento", "modo de exibição compacto",
+)
+
+
+def _is_aux_window(raw: str) -> bool:
+    """A janela é auxiliar do Teams (barra de compartilhamento, vista compacta)?"""
+    t = re.sub(r"^\(\d+\)\s*", "", (raw or "").strip()).casefold()
+    primeira = t.split("|")[0].strip()
+    return any(primeira.startswith(aux) for aux in _TITLE_AUX_WINDOWS)
 
 
 def _clean_meeting_title(raw: str) -> str:
-    """Reduz um título de janela ao nome da reunião; "" se sobrar só app genérico."""
+    """Reduz um título de janela ao nome da reunião; "" se sobrar só app genérico.
+
+    Janela auxiliar do Teams devolve "" para que quem varre as janelas siga para a
+    próxima: é melhor ficar sem título (ninguém divide sem título) do que adotar o
+    nome de uma barra de ferramentas como nome da reunião.
+    """
+    if _is_aux_window(raw):
+        return ""
     t = re.sub(r"^\(\d+\)\s*", "", (raw or "").strip())  # contador de não-lidas
     t = re.sub(r"\s+(?:and|e)\s+\d+\s+more\s+pages?\.*$", "", t, flags=re.IGNORECASE)
     for suf in _TITLE_APP_SUFFIXES:
@@ -283,6 +308,41 @@ def _clean_meeting_title(raw: str) -> str:
     t = re.sub(r"^(?:Meet|Reunião)\s*[–-]\s+", "", t)  # "Meet - xyz" -> "xyz"
     t = re.sub(r"\s+", " ", t).strip(" -–—|·\t")
     return "" if t.lower() in _TITLE_GENERIC else t
+
+
+def _titulo_nucleo(t: str) -> str:
+    """Primeiro segmento do título: o nome da reunião ou a lista de participantes.
+
+    O que vem depois (" — <organização> — <conta>") é igual em toda janela do Teams
+    e não identifica reunião nenhuma - comparar o título inteiro faria qualquer par
+    de títulos parecer aparentado.
+    """
+    return (t or "").split(" — ")[0].strip()
+
+
+def _nomes_do_nucleo(nucleo: str) -> set[str]:
+    return {p.strip().casefold() for p in nucleo.split(",") if p.strip()}
+
+
+def mesma_reuniao_pelo_titulo(antes: str, depois: str) -> bool:
+    """Os dois títulos foram capturados na MESMA call?
+
+    Em call ad hoc o título do Teams É a lista de participantes: entrou alguém, o
+    título passa de "Fulano" para "Fulano, Beltrano". Como o título é o desempate
+    do split, comparar texto exato fazia adicionar uma pessoa virar reunião nova, e
+    a gravação era partida em duas (#177).
+
+    Mesma call = os núcleos têm ao menos um nome em comum, o que cobre entrada e
+    saída de participante nos dois sentidos. Sem nome em comum, é outra reunião e o
+    split continua valendo. Título vazio de um dos lados não é evidência de nada:
+    devolve False e quem chama decide (hoje, ninguém divide sem os dois títulos).
+    """
+    a, d = _titulo_nucleo(antes), _titulo_nucleo(depois)
+    if not a or not d:
+        return False
+    if a.casefold() == d.casefold():
+        return True
+    return bool(_nomes_do_nucleo(a) & _nomes_do_nucleo(d))
 
 
 def capture_meeting_title(cfg: Detection) -> str:
@@ -483,9 +543,9 @@ class Detector:
             # o título de desempate: mudou => call nova; igual/vazio => não divide.
             now_title = capture_meeting_title(self.cfg)
             if (self.cfg.split_gap_seconds > 0 and self._title_stable and now_title
-                    and now_title != self._title_stable):
+                    and not mesma_reuniao_pelo_titulo(self._title_stable, now_title)):
                 log.info(
-                    "ciclo invisível + título mudou (%s -> %s) - dividindo a gravação",
+                    "ciclo invisível + reunião outra (%s -> %s) - dividindo a gravação",
                     self._title_stable, now_title,
                 )
                 self._split(now, sessions)
@@ -529,10 +589,11 @@ class Detector:
                 # #35: título igual ao de antes do gap => mesma reunião (troca de fone
                 # lenta) => suprime o split. Em dúvida NÃO divide (fusão é recuperável).
                 now_title = capture_meeting_title(self.cfg)
-                if self._title_at_grace and now_title and now_title == self._title_at_grace:
+                if (self._title_at_grace and now_title
+                        and mesma_reuniao_pelo_titulo(self._title_at_grace, now_title)):
                     log.info(
-                        "gap de %.1fs, mas título inalterado (%s) - NÃO divido (mesma reunião)",
-                        gap, now_title,
+                        "gap de %.1fs, mas é a mesma reunião pelo título (%s -> %s) - NÃO divido",
+                        gap, self._title_at_grace, now_title,
                     )
                 else:
                     log.info(
