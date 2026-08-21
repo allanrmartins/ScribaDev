@@ -160,8 +160,13 @@ class InstallingMarkerTests(unittest.TestCase):
         suíte no CI com KeyboardInterrupt) e, num app sem console, falha sempre -
         todo PID vivo virava 'morto' e o adiamento do #167 nunca acontecia."""
         self._write(json.dumps({"pid": os.getpid(), "started": time.time()}))
-        with mock.patch("os.kill", side_effect=AssertionError("os.kill é proibido aqui")):
-            self.assertTrue(addons.is_installing())        # PID desta suíte: vivo
+        if sys.platform == "win32":
+            # só no Windows o sinal 0 é CTRL_C_EVENT; no POSIX ele É a sondagem
+            # correta e o plat._posix.pid_alive usa os.kill de propósito
+            with mock.patch("os.kill", side_effect=AssertionError("os.kill no Windows")):
+                self.assertTrue(addons.is_installing())    # PID desta suíte: vivo
+        else:
+            self.assertTrue(addons.is_installing())
         # e o marcador sobrevive: dono vivo não é órfão
         self.assertTrue((addons.addons_dir() / addons._INSTALLING_MARKER).exists())
 
