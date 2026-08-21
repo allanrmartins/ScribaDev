@@ -544,13 +544,11 @@ def is_locked(folder: Path) -> bool:
 
     age = time.time() - started
     if age > LOCK_MAX_AGE_SECONDS:
-        # lock muito antigo: só é genuíno se o PID ainda existir
-        if pid:
-            try:
-                os.kill(pid, 0)  # sinal 0: só verifica existência do processo
-                return True
-            except (OSError, PermissionError):
-                pass  # processo morreu: lock órfão
+        # lock muito antigo: só é genuíno se o PID ainda existir. A sondagem passa
+        # pela camada de plataforma porque no Windows `os.kill(pid, 0)` NÃO consulta:
+        # sinal 0 é CTRL_C_EVENT, e o Python dispara Ctrl+C no grupo de console.
+        if pid and plat.pid_alive(pid):
+            return True
         log.debug("ignorando lock órfão em %s (pid=%s, %.0f min)", folder.name, pid, age / 60)
         return False
     return True  # lock recente — respeitar mesmo sem verificar o PID

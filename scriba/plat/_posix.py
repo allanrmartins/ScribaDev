@@ -32,6 +32,23 @@ def default_recordings_dir() -> Path:
     return app_data_dir() / "gravacoes"
 
 
+def pid_alive(pid: int) -> bool:
+    """O processo `pid` ainda existe? Aqui o sinal 0 é a sondagem de sempre —
+    no Windows NÃO é, por isso a função existe na camada de plataforma (ver
+    `plat._win.pid_alive`)."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True    # existe, só não é nosso
+    except OSError:
+        return False
+
+
 def has_nvidia_gpu() -> bool:
     """Driver NVIDIA presente? Linux: libcuda.so.1 carrega; macOS: não existe CUDA."""
     if sys.platform == "darwin":

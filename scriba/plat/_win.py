@@ -6,6 +6,7 @@ aqui é mudança de comportamento no Windows e precisa de justificativa própria
 
 from __future__ import annotations
 
+import ctypes
 import logging
 import os
 import sys
@@ -23,6 +24,36 @@ def app_data_dir() -> Path:
 def default_recordings_dir() -> Path:
     """Default histórico das gravações (config [output] recordings_dir vazio)."""
     return Path(r"C:\temp\scribadev\gravacoes")
+
+
+# STILL_ACTIVE do Win32: GetExitCodeProcess devolve isto enquanto o processo vive
+_STILL_ACTIVE = 259
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+
+def pid_alive(pid: int) -> bool:
+    """O processo `pid` ainda existe? (dono dos .lock e do marcador .installing)
+
+    NÃO usar `os.kill(pid, 0)` aqui: no Windows `signal.CTRL_C_EVENT == 0`, então
+    aquilo NÃO é uma sondagem — o Python chama `GenerateConsoleCtrlEvent`, que
+    dispara Ctrl+C no grupo de console (derrubou a suíte no CI com KeyboardInterrupt)
+    e, num app sem console, falha sempre, fazendo todo PID vivo parecer morto.
+    Qualquer outro sinal seria pior: o Python cai no `TerminateProcess` e MATA o
+    processo. A sondagem correta é abrir um handle só de consulta.
+    """
+    if pid <= 0:
+        return False
+    k32 = ctypes.windll.kernel32
+    handle = k32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not handle:
+        return False        # não existe (ou não temos permissão nem de consultar)
+    try:
+        code = ctypes.c_ulong()
+        if not k32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return True     # existe, mas não deu para ler o estado: assume vivo
+        return code.value == _STILL_ACTIVE
+    finally:
+        k32.CloseHandle(handle)
 
 
 def has_nvidia_gpu() -> bool:

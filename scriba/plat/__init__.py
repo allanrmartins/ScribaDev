@@ -23,6 +23,7 @@ default_recordings_dir = _backend.default_recordings_dir
 ensure_user_path = _backend.ensure_user_path
 has_nvidia_gpu = _backend.has_nvidia_gpu
 open_path = _backend.open_path
+pid_alive = _backend.pid_alive       # sondagem de PID (no Windows, NUNCA os.kill)
 
 # instância única + relaunch pós-update (#100)
 single_instance = _backend.single_instance

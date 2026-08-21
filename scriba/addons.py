@@ -152,11 +152,10 @@ def is_installing() -> bool:
         set_installing(False)
         return False
     if pid:
-        try:
-            os.kill(pid, 0)  # sinal 0: só verifica existência
+        from . import plat  # sondagem por SO: no Windows os.kill(pid, 0) NÃO consulta
+
+        if plat.pid_alive(pid):
             return True
-        except (OSError, PermissionError):
-            pass
     log.info("marcador .installing órfão (pid=%s morto) — removendo", pid)
     set_installing(False)
     return False

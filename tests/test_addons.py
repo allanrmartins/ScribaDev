@@ -154,6 +154,17 @@ class InstallingMarkerTests(unittest.TestCase):
         self.assertFalse(addons.is_installing())
         self.assertFalse((addons.addons_dir() / addons._INSTALLING_MARKER).exists())
 
+    def test_pid_vivo_e_sondado_sem_sinal(self):
+        """#175: a sondagem NÃO pode passar por `os.kill(pid, 0)`. No Windows o
+        sinal 0 é CTRL_C_EVENT: aquilo dispara Ctrl+C no grupo de console (matou a
+        suíte no CI com KeyboardInterrupt) e, num app sem console, falha sempre -
+        todo PID vivo virava 'morto' e o adiamento do #167 nunca acontecia."""
+        self._write(json.dumps({"pid": os.getpid(), "started": time.time()}))
+        with mock.patch("os.kill", side_effect=AssertionError("os.kill é proibido aqui")):
+            self.assertTrue(addons.is_installing())        # PID desta suíte: vivo
+        # e o marcador sobrevive: dono vivo não é órfão
+        self.assertTrue((addons.addons_dir() / addons._INSTALLING_MARKER).exists())
+
     def test_ilegivel_vale_por_precaucao(self):
         self._write("{quebrado")   # sendo escrito agora? melhor adiar do que quebrar
         self.assertTrue(addons.is_installing())

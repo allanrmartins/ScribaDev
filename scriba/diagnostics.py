@@ -132,6 +132,15 @@ erros, tracebacks, timing, versões) está intacto.
 """
 
 
+def _basename(caminho) -> str:
+    """Último trecho de um caminho, cortando por `\\` OU `/`.
+
+    `Path(...).name` só entende o separador do SO em execução: um caminho
+    Windows lido no Linux (banco copiado, teste na CI) voltaria inteiro e o
+    nome da reunião escaparia da ofuscação."""
+    return re.split(r"[\\/]", str(caminho or "").rstrip("\\/"))[-1]
+
+
 class Scrubber:
     """Ofusca nomes em textos de diagnóstico com tokens ESTÁVEIS por valor
     ([cliente-1], [pessoa-2]...) - o log continua correlacionável pelo suporte.
@@ -216,7 +225,7 @@ class Scrubber:
             for sql, kind, basename in queries:
                 try:
                     for (v,) in conn.execute(sql):
-                        self.add(Path(str(v)).name if basename and v else v, kind)
+                        self.add(_basename(v) if basename and v else v, kind)
                 except sqlite3.Error:
                     continue
         finally:
