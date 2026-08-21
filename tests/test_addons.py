@@ -300,6 +300,20 @@ class AbiDosAddonsTests(unittest.TestCase):
             self.assertTrue(addons.bootstrap())
             self.assertIn(str(self.d), sys.path)
 
+    def test_addons_entra_DEPOIS_do_bundle_no_sys_path(self):
+        """#174 (contrato que quebrou em campo): o PyInstaller 6 resolve o bundle
+        PELO sys.path (PyiFrozenFinder em sys.path_hooks), não pelo meta_path - com
+        o addons antes do _MEIPASS, o numpy de lá shadowava o do app e a transcrição
+        morria ('partially initialized module numpy.fft'). Os addons só COMPLETAM."""
+        meipass = r"C:\Program Files\ScribaDev\_internal"
+        bundle = [meipass + r"\base_library.zip", meipass]
+        with mock.patch.object(sys, "frozen", True, create=True), \
+                mock.patch.object(sys, "path", list(bundle)):
+            self.assertTrue(addons.bootstrap())
+            self.assertEqual(sys.path[-1], str(self.d))       # último da fila
+            for entrada in bundle:                            # atrás de TODO o bundle
+                self.assertLess(sys.path.index(entrada), sys.path.index(str(self.d)))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

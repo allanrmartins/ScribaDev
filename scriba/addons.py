@@ -85,10 +85,16 @@ def bootstrap() -> bool:
             return False
         s = str(d)
         if s not in sys.path:
-            # depois do _internal do bundle (índice 1, não 0): o código do APP vem
-            # do bundle; os addons só COMPLETAM com o que o bundle não tem
-            sys.path.insert(1, s)
-            log.info("addons no sys.path: %s", s)
+            # SEMPRE no FIM (#174) — o insert(1) daqui punha o addons ANTES do
+            # bundle: o PyInstaller 6 resolve o bundle pelo sys.path (PyiFrozenFinder
+            # em sys.path_hooks), NÃO pelo meta_path, e o sys.path do congelado
+            # começa em [<_MEIPASS>/base_library.zip, <_MEIPASS>]. Resultado de campo:
+            # o numpy do addons shadowava o do app e a transcrição morria com
+            # "partially initialized module numpy.fft"; e o typing_extensions de lá
+            # (com leitura bloqueada na máquina do usuário) derrubava até os toasts.
+            # O contrato sempre foi este: os addons só COMPLETAM o que o bundle não tem.
+            sys.path.append(s)
+            log.info("addons no fim do sys.path: %s", s)
             return True
         return False
     except Exception:
