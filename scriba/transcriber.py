@@ -28,26 +28,44 @@ class Transcriber:
         self.batched = None
         self.device_used: str | None = None
 
+    def _abrir_modelo(self, device: str, compute_type: str, **kw):
+        """Abre o WhisperModel preferindo o CACHE LOCAL, com a rede só como plano B.
+
+        faster-whisper resolve o nome do modelo pelo Hugging Face Hub a CADA carga -
+        mesmo com o modelo inteiro em cache, isso é uma ida à rede antes de qualquer
+        transcrição. Numa rede que engasga (proxy corporativo, portal cativo, DNS
+        preso) essa chamada fica pendurada sem timeout: a transcrição nunca começa,
+        o processo não consome CPU nem GPU e o process.log para na última linha
+        (#176). Com o modelo já baixado, nada disso precisa acontecer.
+        """
+        from faster_whisper import WhisperModel
+
+        try:
+            return WhisperModel(self.cfg.model, device=device, compute_type=compute_type,
+                                local_files_only=True, **kw)
+        except Exception as e:
+            log.info("modelo %s não resolvido no cache local (%s) - buscando no Hugging Face",
+                     self.cfg.model, e)
+            return WhisperModel(self.cfg.model, device=device, compute_type=compute_type, **kw)
+
     def ensure_loaded(self) -> str:
         """Carrega o modelo (uma vez) e retorna o device usado ('cuda' ou 'cpu')."""
         if self.model is not None:
             return self.device_used or "cpu"
         util.bootstrap_cuda_dlls()
-        from faster_whisper import WhisperModel
-
         if not self.force_cpu and self.cfg.device in ("auto", "cuda"):
             try:
                 import ctranslate2
 
                 if ctranslate2.get_cuda_device_count() > 0:
-                    self.model = WhisperModel(self.cfg.model, device="cuda", compute_type="float16")
+                    self.model = self._abrir_modelo("cuda", "float16")
                     self.device_used = "cuda"
                     self._warmup()  # paga o JIT/autotune do CUDA fora do relógio percebido (#6)
                     return self.device_used
             except Exception:
                 pass  # qualquer falha de CUDA cai para CPU
-        self.model = WhisperModel(self.cfg.model, device="cpu", compute_type="int8",
-                                  cpu_threads=int(self.cfg.cpu_threads or 0))
+        self.model = self._abrir_modelo("cpu", "int8",
+                                        cpu_threads=int(self.cfg.cpu_threads or 0))
         self.device_used = "cpu"
         return self.device_used
 
@@ -61,10 +79,8 @@ class Transcriber:
             # GPU falhou em runtime — refaz em CPU, mas deixa o motivo visível
             log.warning("GPU falhou em runtime (%s); refazendo em CPU int8", e)
             print(f"AVISO: GPU falhou ({e}); usando CPU")
-            from faster_whisper import WhisperModel
-
-            self.model = WhisperModel(self.cfg.model, device="cpu", compute_type="int8",
-                                      cpu_threads=int(self.cfg.cpu_threads or 0))
+            self.model = self._abrir_modelo("cpu", "int8",
+                                            cpu_threads=int(self.cfg.cpu_threads or 0))
             self.batched = None
             self.device_used = "cpu"
             return self._run(wav, on_progress)

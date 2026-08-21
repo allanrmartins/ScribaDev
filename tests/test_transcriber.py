@@ -79,5 +79,49 @@ class RunKwargsTests(unittest.TestCase):
         self.assertEqual(tr.model.calls[0]["vad_parameters"], {"min_silence_duration_ms": 300})
 
 
+class CargaLocalPrimeiroTests(unittest.TestCase):
+    """#176: faster-whisper resolve o NOME do modelo pelo Hugging Face a cada carga,
+    mesmo com tudo em cache. Numa rede que engasga isso pendura a transcrição sem
+    timeout - 0% de CPU, nenhuma linha nova no log. Cache primeiro; rede só se faltar."""
+
+    def setUp(self):
+        import types
+
+        self.tentativas: list[dict] = []
+        fake = types.ModuleType("faster_whisper")
+
+        class _FakeWhisperModel:
+            def __init__(_s, model, **kw):
+                self.tentativas.append({"model": model, **kw})
+                if kw.get("local_files_only") and getattr(self, "sem_cache", False):
+                    raise OSError("modelo não está no cache")
+
+        fake.WhisperModel = _FakeWhisperModel
+        self._salvo = sys.modules.get("faster_whisper")
+        sys.modules["faster_whisper"] = fake
+        self.addCleanup(self._restaurar)
+
+    def _restaurar(self):
+        if self._salvo is None:
+            sys.modules.pop("faster_whisper", None)
+        else:
+            sys.modules["faster_whisper"] = self._salvo
+
+    def test_com_cache_nao_toca_a_rede(self):
+        tr = Transcriber(Whisper(device="cpu"))
+        tr._abrir_modelo("cpu", "int8")
+        self.assertEqual(len(self.tentativas), 1)
+        self.assertTrue(self.tentativas[0]["local_files_only"])
+
+    def test_sem_cache_cai_para_a_rede(self):
+        self.sem_cache = True
+        tr = Transcriber(Whisper(device="cpu"))
+        tr._abrir_modelo("cpu", "int8", cpu_threads=2)
+        self.assertEqual(len(self.tentativas), 2)
+        self.assertTrue(self.tentativas[0]["local_files_only"])
+        self.assertNotIn("local_files_only", self.tentativas[1])   # 2ª tentativa: com rede
+        self.assertEqual(self.tentativas[1]["cpu_threads"], 2)     # kwargs preservados
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
