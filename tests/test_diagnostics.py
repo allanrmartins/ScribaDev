@@ -7,9 +7,11 @@ import json
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 import urllib.parse
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -278,6 +280,89 @@ class LatestFailedTests(unittest.TestCase):
     def test_nenhuma_falha(self):
         self._mk("a", "done", 1000)
         self.assertIsNone(dg.latest_failed(self.tmp))
+
+
+class LatestStuckTests(unittest.TestCase):
+    """#176: o zip só embarcava reunião `failed`. Com o subprocesso pendurado a
+    reunião fica em `transcribing` para sempre - status NÃO terminal - e o
+    diagnóstico chegava sem o process.log dela, ou seja, sem prova nenhuma."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="scriba_stuck_"))
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+
+    def _mk(self, name, status, mtime, lock=None):
+        import os
+
+        d = self.tmp / name
+        d.mkdir(parents=True)
+        (d / "meta.json").write_text(json.dumps({"status": status}), encoding="utf-8")
+        os.utime(d / "meta.json", (mtime, mtime))
+        if lock is not None:
+            (d / ".lock").write_text(json.dumps({"pid": lock, "started": mtime}),
+                                     encoding="utf-8")
+        return d
+
+    def test_pega_a_presa_ha_mais_tempo(self):
+        agora = time.time()
+        parada = self._mk("parada", "transcribing", agora - 7200)
+        self._mk("recente", "diarizing", agora - 60)
+        self._mk("pronta", "done", agora - 99999)
+        self.assertEqual(dg.latest_stuck(self.tmp), parada)
+
+    def test_gravando_agora_nao_conta(self):
+        self._mk("gravando", "recording", time.time() - 99999)
+        self.assertIsNone(dg.latest_stuck(self.tmp))
+
+    def test_relatorio_mostra_status_idade_e_lock(self):
+        agora = time.time()
+        self._mk("parada", "transcribing", agora - 3600, lock=9_999_991)
+        self._mk("pronta", "done", agora - 60)
+        texto = dg.meetings_report(self.tmp)
+        self.assertIn("parada", texto)
+        self.assertIn("transcribing", texto)
+        self.assertIn("60min", texto)
+        self.assertIn("orfao", texto)          # o lock que a estava escondendo
+        self.assertNotIn("pronta", texto)      # terminada não é pendência
+
+    def test_zip_leva_a_reuniao_travada_e_o_mapa(self):
+        """O caso da #176 ponta a ponta: reunião presa em andamento entra no zip
+        com process.log e .lock, além do mapa da fila."""
+        import zipfile
+
+        from scriba import util
+
+        saved = (util.APP_DIR, util.LOGS_DIR, util.CONFIG_PATH)
+        util.APP_DIR = self.tmp / "app"
+        util.LOGS_DIR = util.APP_DIR / "logs"
+        util.CONFIG_PATH = self.tmp / "config.toml"
+        util.LOGS_DIR.mkdir(parents=True)
+        util.CONFIG_PATH.write_text("[audio]\n", encoding="utf-8")
+        home = self.tmp / "home"
+        home.mkdir()
+        self.addCleanup(lambda: setattr_many(util, saved))
+        rec = self.tmp / "rec"
+        rec.mkdir()
+        presa = rec / "10-00_Call presa"
+        presa.mkdir()
+        (presa / "meta.json").write_text(json.dumps({"status": "transcribing"}),
+                                         encoding="utf-8")
+        (presa / "process.log").write_text("carregando modelo\n", encoding="utf-8")
+        (presa / ".lock").write_text(json.dumps({"pid": 9_999_991, "started": time.time()}),
+                                     encoding="utf-8")
+        with mock.patch("pathlib.Path.home", return_value=home):
+            dest = dg.export_zip(rec)
+        with zipfile.ZipFile(dest) as z:
+            names = z.namelist()
+            mapa = z.read("reunioes.txt").decode("utf-8")
+        self.assertIn("reuniao_travada/process.log", names)
+        self.assertIn("reuniao_travada/meta.json", names)
+        self.assertIn("reuniao_travada/.lock", names)
+        self.assertIn("transcribing", mapa)
+
+
+def setattr_many(util, saved):
+    util.APP_DIR, util.LOGS_DIR, util.CONFIG_PATH = saved
 
 
 class ParseEntriesTests(unittest.TestCase):

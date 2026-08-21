@@ -17,6 +17,7 @@ import platform
 import re
 import sqlite3
 import sys
+import time
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -338,8 +339,106 @@ def latest_failed(rec_dir) -> Path | None:
     return best
 
 
+# em andamento MENOS "recording": a que está gravando agora não é sintoma de nada
+_PRESA_STATUSES = tuple(s for s in util.IN_PROGRESS_STATUSES if s != "recording")
+
+
+def latest_stuck(rec_dir) -> Path | None:
+    """Pasta da reunião presa EM ANDAMENTO há mais tempo, ou None.
+
+    Existe porque o diagnóstico só embarcava reunião `failed` (#176): quando o
+    subprocesso PENDURA, a reunião fica eternamente "Transcrevendo…" - status não
+    terminal - e o zip chegava sem o `process.log` dela, isto é, sem a única prova
+    do que travou. "Há mais tempo" = meta.json sem escrita há mais tempo, que é a
+    definição operacional de parada: cada estágio reescreve o meta ao começar.
+    """
+    pior, pior_mtime = None, float("inf")
+    try:
+        for meta_path in Path(rec_dir).rglob("meta.json"):
+            try:
+                m = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if m.get("status") in _PRESA_STATUSES:
+                mt = meta_path.stat().st_mtime
+                if mt < pior_mtime:
+                    pior, pior_mtime = meta_path.parent, mt
+    except OSError:
+        pass
+    return pior
+
+
+def meetings_report(rec_dir) -> str:
+    """Tabela de TODAS as reuniões que ainda não terminaram: status, há quanto tempo
+    o meta.json não é escrito e se há `.lock` (e de quem).
+
+    É o mapa que faltava para enxergar fila parada de relance: sem ele, descobrir
+    que 7 reuniões estavam presas atrás de um subprocesso pendurado exigia ler o
+    scriba.log linha a linha. Nome de pasta passa pelo scrubber depois, como todo
+    o resto do zip.
+    """
+    linhas = ["status         parada_ha  lock                pasta"]
+    agora = time.time()
+    achadas = []
+    try:
+        for meta_path in Path(rec_dir).rglob("meta.json"):
+            try:
+                m = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            status = m.get("status") or "?"
+            if status == "done":
+                continue
+            folder = meta_path.parent
+            try:
+                idade = (agora - meta_path.stat().st_mtime) / 60
+            except OSError:
+                idade = -1
+            achadas.append((idade, status, folder))
+    except OSError:
+        pass
+    for idade, status, folder in sorted(achadas, reverse=True):
+        linhas.append(f"{status:<14} {idade:>7.0f}min  {_lock_info(folder):<19} {folder.name}")
+    if not achadas:
+        linhas.append("(nenhuma reuniao pendente)")
+    return "\n".join(linhas)
+
+
+def _lock_info(folder: Path) -> str:
+    """Resumo do `.lock` da pasta: dono e se ainda vale. Nunca levanta."""
+    try:
+        data = json.loads((folder / ".lock").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "-"
+    pid = data.get("pid", "?")
+    try:
+        vivo = "ativo" if util.is_locked(folder) else "orfao"
+    except Exception:
+        vivo = "?"
+    return f"pid {pid} ({vivo})"
+
+
+def _arquivos_da_reuniao(folder: Path, scrubber) -> list[tuple[str, str]]:
+    """(nome, conteúdo) dos arquivos de suporte da pasta, alimentando o vocabulário
+    de ofuscação com o que for encontrado no caminho."""
+    out: list[tuple[str, str]] = []
+    scrubber.add(folder.name, "reuniao")
+    for fn in ("meta.json", "process.log", ".lock"):
+        try:
+            text = (folder / fn).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if fn == "meta.json":
+            try:
+                scrubber.add_meta(json.loads(text))
+            except ValueError:
+                pass
+        out.append((fn, text))
+    return out
+
+
 def export_zip(recordings_dir=None) -> Path:
-    """Empacota log(s) + ambiente + config (sem segredos) + a última reunião com falha
+    """Empacota log(s) + ambiente + config (sem segredos) + as reuniões problemáticas
     num .zip no Desktop. Devolve o caminho do .zip.
 
     Tudo passa pelo Scrubber antes de entrar no zip: nome de cliente, pessoa e
@@ -351,24 +450,21 @@ def export_zip(recordings_dir=None) -> Path:
     desktop = Path.home() / "Desktop"
     dest = (desktop if desktop.is_dir() else Path.home()) / f"scribadev-diagnostico-{stamp}.zip"
 
-    # a reunião com falha vem ANTES dos logs: o meta.json dela alimenta o
-    # vocabulário (nomes que talvez nem estejam indexados ainda e que também
-    # aparecem no scriba.log)
+    # as reuniões vêm ANTES dos logs: o meta.json delas alimenta o vocabulário
+    # (nomes que talvez nem estejam indexados ainda e que também aparecem no
+    # scriba.log). Duas pastas, dois sintomas diferentes: a que FALHOU e a que
+    # ficou PRESA - a segunda é a única evidência quando o subprocesso pendura.
     failed: list[tuple[str, str]] = []
-    folder = latest_failed(recordings_dir) if recordings_dir else None
-    if folder:
-        scrubber.add(folder.name, "reuniao")
-        for fn in ("meta.json", "process.log"):
-            try:
-                text = (folder / fn).read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
-            if fn == "meta.json":
-                try:
-                    scrubber.add_meta(json.loads(text))
-                except ValueError:
-                    pass
-            failed.append((fn, text))
+    stuck: list[tuple[str, str]] = []
+    mapa = ""
+    if recordings_dir:
+        folder = latest_failed(recordings_dir)
+        if folder:
+            failed = _arquivos_da_reuniao(folder, scrubber)
+        presa = latest_stuck(recordings_dir)
+        if presa is not None and presa != folder:
+            stuck = _arquivos_da_reuniao(presa, scrubber)
+        mapa = meetings_report(recordings_dir)
 
     with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z:
         # 1) TODOS os logs do app: scriba.log (+ rotacionados), pip.log (downloads de
@@ -388,8 +484,15 @@ def export_zip(recordings_dir=None) -> Path:
                        scrubber.scrub(redact_config(util.CONFIG_PATH.read_text(encoding="utf-8"))))
         except OSError:
             pass
-        # 4) a reunião que falhou mais recente (meta.json + process.log) — o caso de suporte
+        # 4) a reunião que falhou mais recente (meta.json + process.log + .lock)
         for fn, text in failed:
             z.writestr(f"reuniao_com_falha/{fn}", scrubber.scrub(text))
+        # 5) a reunião presa em andamento há mais tempo: o caso do subprocesso
+        # pendurado (#176), invisível no zip enquanto só a `failed` era embarcada
+        for fn, text in stuck:
+            z.writestr(f"reuniao_travada/{fn}", scrubber.scrub(text))
+        # 6) mapa da fila: tudo que não terminou, com idade e lock
+        if mapa:
+            z.writestr("reunioes.txt", scrubber.scrub(mapa))
         z.writestr("OFUSCACAO.txt", _OFUSCACAO_NOTE)
     return dest
