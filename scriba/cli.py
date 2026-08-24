@@ -22,7 +22,16 @@ class _VersionAction(argparse.Action):
 
 class _StampWriter:
     """Prefixa cada LINHA com HH:MM:SS — dá timestamp ao process.log do subprocesso de
-    `process` (antes os prints de transcrição/diarização/resumo saíam sem hora)."""
+    `process` (antes os prints de transcrição/diarização/resumo saíam sem hora).
+
+    Também FORÇA O FLUSH a cada quebra de linha (#179): o process.log é um arquivo,
+    e stdout ligado a arquivo é block-buffered em 8 KB. Sem isto, o progresso do
+    filho só chegava ao disco quando ele MORRIA: filho pendurado deixava o
+    process.log vazio, que é exatamente onde a causa do travamento estaria escrita.
+    Era um log que só registrava quem crashava. O tamanho do process.log também é
+    um dos sinais de vida do watchdog do pai (main._sinais_do_filho), e só se movia
+    de 8 KB em 8 KB.
+    """
 
     def __init__(self, stream):
         self._s = stream
@@ -32,16 +41,20 @@ class _StampWriter:
         import time
 
         s, bol = self._s, self._bol
+        quebrou = False
         for i, part in enumerate(str(text).split("\n")):
             if i > 0:
                 s.write("\n")
                 bol = True
+                quebrou = True
             if part and bol:
                 s.write(time.strftime("%H:%M:%S "))
                 bol = False
             if part:
                 s.write(part)
         self._bol = bol
+        if quebrou:
+            self.flush()
         return len(text)
 
     def flush(self) -> None:
