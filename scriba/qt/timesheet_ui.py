@@ -132,8 +132,7 @@ class TimesheetWindow(QWidget):
 
     def show(self):
         super().show()
-        self.raise_()
-        self.activateWindow()
+        widgets.bring_to_front(self)   # macOS: ativa o app explicitamente (ver qt/__init__)
         if not self._titlebar_done:
             self._titlebar_done = True
             widgets.enable_dark_titlebar(self)

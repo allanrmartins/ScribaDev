@@ -99,5 +99,98 @@ class SplitterPersistTests(unittest.TestCase):
         self.assertLessEqual(s.sizes()[0], 360)
 
 
+@unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")
+class FocoNoMacTests(unittest.TestCase):
+    """No QPA cocoa, `QCocoaWindow::raise()` termina em
+    `[NSApp activateIgnoringOtherApps:YES]` — traz o processo INTEIRO para a frente.
+    Como a pílula re-assere o topo a cada pulso (600 ms) e o `QWidget::show()` de
+    janelas Qt.Tool/Qt.ToolTip dispara um raise implícito, gravar uma reunião roubava
+    o foco do navegador o tempo todo. Aqui: a env que desliga o efeito colateral e os
+    dois helpers que dividem "subir" de "ativar"."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_env_desliga_a_ativacao_implicita_do_qt_no_mac(self):
+        """`import scriba.qt` precisa setar a env ANTES de qualquer QApplication —
+        o Qt lê o valor uma única vez, num `static` dentro do raise()."""
+        import subprocess
+
+        code = (
+            "import sys, os;"
+            "sys.platform = 'darwin';"
+            "os.environ.pop('QT_MAC_SET_RAISE_PROCESS', None);"
+            "import scriba.qt;"
+            "print(os.environ.get('QT_MAC_SET_RAISE_PROCESS'))"
+        )
+        raiz = str(Path(__file__).resolve().parent.parent)
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=raiz)
+        self.assertEqual(out.stdout.strip(), "0", out.stderr)
+
+    def test_raise_sem_ativacao_no_darwin_nunca_cai_no_raise_do_qt(self):
+        """Se a ponte Cocoa falhar (aqui: QPA offscreen), o helper devolve False e NÃO
+        chama `raise_()`. Ficar um degrau abaixo no empilhamento é cosmético — a pílula
+        já é WindowStaysOnTopHint; roubar o foco não é."""
+        from scriba.qt import widgets
+
+        chamou = []
+
+        class FakeWidget:
+            def raise_(self):
+                chamou.append(True)
+
+            def winId(self):
+                return 0
+
+        plat = sys.platform
+        try:
+            sys.platform = "darwin"
+            self.assertFalse(widgets.raise_without_activation(FakeWidget()))
+        finally:
+            sys.platform = plat
+        self.assertEqual(chamou, [])
+
+    def test_raise_sem_ativacao_fora_do_darwin_usa_o_raise_normal(self):
+        """No Windows/Linux o `raise_()` não ativa o processo — segue valendo."""
+        from scriba.qt import widgets
+
+        chamou = []
+
+        class FakeWidget:
+            def raise_(self):
+                chamou.append(True)
+
+        plat = sys.platform
+        try:
+            sys.platform = "win32"
+            self.assertFalse(widgets.raise_without_activation(FakeWidget()))
+        finally:
+            sys.platform = plat
+        self.assertEqual(chamou, [True])
+
+    def test_bring_to_front_continua_levantando_e_focando(self):
+        """A contrapartida: janela aberta pela bandeja AINDA vem para a frente com
+        foco (no mac, com ativação explícita do processo)."""
+        from scriba.qt import widgets
+
+        chamou = []
+
+        class FakeWidget:
+            def raise_(self):
+                chamou.append("raise")
+
+            def activateWindow(self):
+                chamou.append("activate")
+
+            def winId(self):
+                return 0
+
+        widgets.bring_to_front(FakeWidget())
+        self.assertEqual(chamou, ["raise", "activate"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -298,8 +298,7 @@ class LogWindow(QWidget):
 
     def show(self) -> None:  # noqa: A003
         super().show()
-        self.raise_()
-        self.activateWindow()
+        widgets.bring_to_front(self)   # macOS: ativa o app explicitamente (ver qt/__init__)
         widgets.enable_dark_titlebar(self)
         # abre no fim se seguindo ao vivo, MAS não se há busca ativa (o campo persiste
         # entre aberturas - closeEvent só esconde): grudar no fim jogaria o 1º hit p/

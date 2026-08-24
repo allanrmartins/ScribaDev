@@ -149,6 +149,71 @@ def exclude_from_capture(widget) -> bool:
         return False
 
 
+# == topo sem roubar o foco ===================================================
+
+def raise_without_activation(widget) -> bool:
+    """Sobe a janela na ordem-Z SEM trazer o app para a frente. True se usou o
+    caminho nativo do macOS.
+
+    O `raise_()` do Qt não serve para uma janela que se re-assere sozinha: no QPA
+    cocoa, `QCocoaWindow::raise()` termina em `[NSApp activateIgnoringOtherApps:YES]`.
+    Como a pílula re-assere o topo a cada pulso (600 ms), o ScribaDev roubava o foco
+    de volta durante a gravação inteira: dava para clicar no navegador/Meet só na
+    fresta entre dois pulsos.
+
+    É a segunda camada da defesa: `qt/__init__.py` já desliga a ativação embutida no
+    raise (QT_MAC_SET_RAISE_PROCESS=0, a única saída para o raise IMPLÍCITO do
+    `show()` de janelas Tool/ToolTip); aqui, nas chamadas que são nossas, mandamos
+    `[NSWindow orderFront:]` direto — não dependemos daquela env. Se a ponte falhar,
+    NÃO caímos no `raise_()`: ficar um degrau abaixo no empilhamento é cosmético (a
+    janela já é WindowStaysOnTopHint), roubar o foco não é. Fora do macOS o
+    `raise_()` não ativa o processo e segue valendo.
+    """
+    import sys
+
+    if sys.platform != "darwin":
+        widget.raise_()
+        return False
+    try:
+        from PySide6.QtGui import QGuiApplication
+
+        if QGuiApplication.platformName() != "cocoa":
+            return False   # offscreen (CI): winId() não é NSView — chamar o objc derruba
+        from .mac import order_front_no_activate
+
+        return order_front_no_activate(int(widget.winId()))
+    except Exception:
+        return False
+
+
+def bring_to_front(widget) -> None:
+    """Traz a janela para a frente E dá foco a ela — o que o usuário espera ao abrir
+    uma janela pela bandeja/atalho.
+
+    No macOS isso exige ativar o processo explicitamente: o `raise_()` do Qt fazia
+    isso sozinho, mas `qt/__init__.py` desligou esse efeito colateral
+    (QT_MAC_SET_RAISE_PROCESS=0) justamente porque ele também disparava a reboque
+    do `show()` da pílula e roubava o foco durante a gravação. Aqui a ativação é
+    intencional, então é explícita.
+    """
+    import sys
+
+    widget.raise_()
+    widget.activateWindow()
+    if sys.platform != "darwin":
+        return
+    try:
+        from PySide6.QtGui import QGuiApplication
+
+        if QGuiApplication.platformName() != "cocoa":
+            return
+        from .mac import activate_app
+
+        activate_app()
+    except Exception:
+        pass
+
+
 # == botão ====================================================================
 
 class ModernButton(QPushButton):
