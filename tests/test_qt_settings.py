@@ -28,15 +28,21 @@ class SettingsTests(unittest.TestCase):
         d = Path(tempfile.mkdtemp(prefix="scriba_cfg_"))
         self._orig = util.CONFIG_PATH
         self._orig_prompt = util.PROMPT_PATH
+        self._orig_context = util.CONTEXT_PATH
+        self._orig_state = util.STATE_PATH
         util.CONFIG_PATH = d / "config.toml"
         util.CONFIG_PATH.write_text(config_mod.DEFAULT_CONFIG, encoding="utf-8")
-        util.PROMPT_PATH = d / "prompt.md"   # não tocar o prompt.md real
+        util.PROMPT_PATH = d / "prompt.md"     # não tocar o prompt.md real
+        util.CONTEXT_PATH = d / "context.md"   # nem o context.md, que o editor grava
+        util.STATE_PATH = d / "state.json"
 
     def tearDown(self):
         from scriba import util
 
         util.CONFIG_PATH = self._orig
         util.PROMPT_PATH = self._orig_prompt
+        util.CONTEXT_PATH = self._orig_context
+        util.STATE_PATH = self._orig_state
 
     def _app(self):
         from scriba import config as config_mod
@@ -272,14 +278,51 @@ class SettingsTests(unittest.TestCase):
         win._save()
         self.assertIn("bullets curtos", util.PROMPT_PATH.read_text(encoding="utf-8"))
 
+    def test_context_editor_carrega_e_salva(self):
+        """O cabeçalho "Contexto para IA" era o único texto sem edição na interface
+        (#181): só o assistente de perfil escrevia o context.md."""
+        from scriba import notes, util
+        from scriba.qt.settings_ui import SettingsWindow
+
+        win = SettingsWindow(self._app())
+        self.assertEqual(win._context_editor.toPlainText(), "")   # opt-in: nasce vazio
+        self.assertFalse(util.CONTEXT_PATH.exists(), "abrir a janela não pode criar arquivo")
+        win._context_editor.setPlainText("> **Contexto para IA:** ata de reuniao juridica.")
+        win._save()
+        self.assertIn("juridica", util.CONTEXT_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(notes.load_context_note(),
+                         "> **Contexto para IA:** ata de reuniao juridica.")
+
+    def test_botao_preenche_com_o_texto_sugerido(self):
+        from scriba import notes
+        from scriba.qt.settings_ui import SettingsWindow
+
+        win = SettingsWindow(self._app())
+        win._restore_context()
+        self.assertEqual(win._context_editor.toPlainText(), notes.suggested_context_note())
+        self.assertNotIn("SAP", win._context_editor.toPlainText())
+
+    def test_context_editor_vazio_tira_o_cabecalho_da_nota(self):
+        from scriba import notes
+        from scriba.qt.settings_ui import SettingsWindow
+
+        win = SettingsWindow(self._app())
+        win._context_editor.setPlainText("")
+        win._save()
+        self.assertEqual(notes.load_context_note(), "")
+
     def test_restaurar_padrao(self):
+        """"Padrão" é o que uma instalação nova recebe: o genérico, não o SAP/ABAP
+        (#181). Quem quer o texto de uma área volta por "Assistente de perfil…",
+        que fica no mesmo grupo, ao lado deste botão."""
         from scriba import notes
         from scriba.qt.settings_ui import SettingsWindow
 
         win = SettingsWindow(self._app())
         win._prompt_editor.setPlainText("qualquer coisa")
         win._restore_prompt()
-        self.assertEqual(win._prompt_editor.toPlainText(), notes.DEFAULT_SUMMARY_PROMPT)
+        self.assertEqual(win._prompt_editor.toPlainText(), notes.default_summary_prompt())
+        self.assertNotIn("SAP/ABAP", win._prompt_editor.toPlainText())
 
     def test_aba_sobre_e_componentes(self):
         from scriba.qt.settings_ui import SettingsWindow

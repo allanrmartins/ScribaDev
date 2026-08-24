@@ -128,6 +128,11 @@ SAP, nunca o sentido do que foi dito;
 
 # Enquadramento determinístico (gerado pelo código, não pela IA) inserido no topo da nota,
 # logo após o título: diz à IA consumidora o que é o documento e como usá-lo.
+#
+# Este é o texto do PERFIL SAP/ABAP, não mais o padrão do app (#181): quem instala
+# hoje nasce com o genérico de `default_context_note()`. Continua sendo o que o
+# assistente aplica em quem escolhe o perfil abap (promptgen.context_note_for) e o
+# que a migração congela em quem já usava o app antes da troca.
 AI_CONTEXT_NOTE = (
     "> **Contexto para IA:** registro técnico de uma reunião SAP/ABAP, derivado de "
     "transcrição. **Objetivo** declara o tipo de atividade (desenvolvimento, análise/debug, "
@@ -138,11 +143,51 @@ AI_CONTEXT_NOTE = (
 )
 
 
+def default_summary_prompt() -> str:
+    """Instruções padrão de uma instalação NOVA: o template genérico, sem jargão de
+    área (#181). O app nasceu ABAP e passou a ser usado por gente de outras áreas,
+    que recebia a ata moldada para desenvolvimento SAP sem ter pedido.
+
+    Import tardio porque o promptgen importa este módulo.
+    """
+    from .promptgen import Profile, template_prompt
+
+    return template_prompt(Profile())[0]
+
+
+def default_context_note() -> str:
+    """Instalação NOVA sai SEM cabeçalho na nota (#181): ele é opt-in.
+
+    O callout nasceu como o único jeito de dizer a uma IA o que era aquele
+    documento. Quem faz isso hoje é a moldura do `context_prompt`, usada pelo
+    botão "Prompt de Contexto" e pelo backend da nuvem, e ela DESCARTA o callout.
+    Sobrou o caso do arquivo cru (arrastar o notas.md para um chat, um agente
+    lendo a pasta), que é real mas é escolha de quem usa - daí opt-in, com o
+    texto pronto a um clique no editor das Configurações.
+
+    Há ainda o risco de o texto fixo mentir: o cabeçalho SAP/ABAP cita "Regras de
+    negócio", seção que só existe no prompt daquele perfil (no genérico ela é
+    "Definições e acordos").
+    """
+    return ""
+
+
+def suggested_context_note() -> str:
+    """O texto que o botão do editor oferece a quem QUER um cabeçalho.
+
+    Sai no sabor da ÁREA de quem escolheu perfil no assistente (o SAP/ABAP para o
+    perfil abap); sem perfil escolhido, o genérico sem jargão.
+    """
+    from .promptgen import Profile, context_note_for, load_profile
+
+    return context_note_for(load_profile() or Profile())
+
+
 def ensure_prompt_file() -> Path:
     """Garante o prompt.md editável (criado com o padrão na primeira vez)."""
     util.ensure_app_dirs()
     if not util.PROMPT_PATH.exists():
-        util.atomic_write_text(util.PROMPT_PATH, DEFAULT_SUMMARY_PROMPT)
+        util.atomic_write_text(util.PROMPT_PATH, default_summary_prompt())
     return util.PROMPT_PATH
 
 
@@ -154,24 +199,57 @@ def load_summary_prompt() -> str:
             return text
     except OSError:
         pass
-    return DEFAULT_SUMMARY_PROMPT
-
-
-def ensure_context_file() -> Path:
-    """Garante o context.md editável (criado com o padrão na primeira vez)."""
-    util.ensure_app_dirs()
-    if not util.CONTEXT_PATH.exists():
-        util.atomic_write_text(util.CONTEXT_PATH, AI_CONTEXT_NOTE)
-    return util.CONTEXT_PATH
+    return default_summary_prompt()
 
 
 def load_context_note() -> str:
-    """Cabeçalho 'Contexto para IA' editável (context.md). Arquivo AUSENTE → padrão
-    (AI_CONTEXT_NOTE); arquivo VAZIO → '' (o usuário removeu o cabeçalho de propósito)."""
+    """Cabeçalho 'Contexto para IA' da nota, do context.md editável. Arquivo AUSENTE
+    ou VAZIO → '' (sem cabeçalho): o padrão é não ter, e apagar o campo tira.
+
+    Não cria o arquivo de propósito (o prompt.md tem um `ensure_`, este não): com
+    o padrão vazio, gravar só para guardar nada é escrever em disco à toa, e abrir
+    as Configurações passa a não mexer no APP_DIR.
+    """
     try:
         return util.CONTEXT_PATH.read_text(encoding="utf-8").strip()
     except OSError:
-        return AI_CONTEXT_NOTE
+        return default_context_note()
+
+
+def freeze_area_defaults() -> None:
+    """Congela os textos SAP/ABAP na instalação que JÁ existia quando o padrão
+    embutido virou neutro (#181).
+
+    Até a 1.4.10 o padrão era o do perfil SAP/ABAP e ninguém precisava de
+    prompt.md nem context.md em disco para recebê-lo. Trocar o padrão por um
+    genérico mudaria a ata de quem já usa o app sem pedir, então na primeira
+    subida da versão nova os textos antigos passam a ser escolha explícita, em
+    arquivo. Instalação NOVA (sem config.toml, que o `config.load` cria no
+    primeiro start) não é tocada: ela nasce genérica.
+
+    A oferta do assistente de perfil não depende mais de o prompt.md faltar
+    (promptgen.should_offer_on_boot), justamente porque isto aqui o cria.
+    """
+    if not util.CONFIG_PATH.exists():
+        return  # instalação nova: nasce com os padrões neutros
+    # quem JÁ tinha prompt.md nunca receberia a oferta pela regra antiga; o flag
+    # preserva isso agora que a regra mudou. Quem não tinha continua na fila da
+    # oferta, que é a única chance dessa pessoa escolher a área dela.
+    ja_escolhera = util.PROMPT_PATH.exists()
+    for path, texto in ((util.PROMPT_PATH, DEFAULT_SUMMARY_PROMPT),
+                        (util.CONTEXT_PATH, AI_CONTEXT_NOTE)):
+        if path.exists():
+            continue
+        try:
+            util.ensure_app_dirs()
+            util.atomic_write_text(path, texto.strip() + "\n")
+            log.info("%s congelado com o texto SAP/ABAP (instalação anterior ao #181)", path.name)
+        except OSError:
+            log.exception("não consegui congelar o %s", path.name)
+    if ja_escolhera:
+        from .promptgen import mark_profile_offered
+
+        mark_profile_offered()
 
 
 # Pedida pelo código (fora do prompt.md editável) para garantir título e cliente

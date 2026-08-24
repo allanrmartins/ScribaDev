@@ -264,6 +264,13 @@ def main(argv: list[str] | None = None) -> int:
                   "e rode de novo")
             return 3
         _timestamp_subprocess_output()  # process.log com HH:MM:SS por linha
+        from . import notes
+
+        # antes de a nota ser gerada: instalação que já existia quando o padrão
+        # embutido virou neutro guarda os textos SAP/ABAP em arquivo, para a ata
+        # não mudar sozinha (#181). O `run` faz o mesmo no boot da bandeja; aqui
+        # cobre o `scribadev process` rodado na mão e o subprocesso do app.
+        notes.freeze_area_defaults()
         try:
             # o import ENTRA no try: o EACCES do addons costuma estourar já na
             # cadeia de imports pesados (faster_whisper -> huggingface_hub -> ...)

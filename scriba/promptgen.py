@@ -467,28 +467,79 @@ def apply_prompt(prompt_text: str, hotwords: str | None, context_note: str | Non
 
 # ----------------------------------------------------------- estado do wizard --
 
-def wizard_done() -> bool:
+def _state_flag(key: str) -> bool:
     try:
-        return bool(json.loads(util.STATE_PATH.read_text(encoding="utf-8")).get("wizard_done"))
+        return bool(json.loads(util.STATE_PATH.read_text(encoding="utf-8")).get(key))
     except Exception:
         return False
 
 
-def mark_wizard_done() -> None:
+def _mark_state_flag(key: str) -> None:
     try:
         data = {}
         if util.STATE_PATH.exists():
             data = json.loads(util.STATE_PATH.read_text(encoding="utf-8"))
-        data["wizard_done"] = True
+        data[key] = True
         util.atomic_write_text(util.STATE_PATH, json.dumps(data))
     except Exception:
         pass
 
 
-def should_offer_on_boot() -> bool:
-    """Primeiro uso de verdade: sem prompt.md ainda e wizard nunca concluído.
+def wizard_done() -> bool:
+    return _state_flag("wizard_done")
 
-    Instalações existentes (prompt.md já criado) nunca são interrompidas —
-    o wizard fica acessível pelo botão nas Configurações.
+
+def mark_wizard_done() -> None:
+    _mark_state_flag("wizard_done")
+
+
+def save_profile(profile: Profile) -> None:
+    """Guarda o perfil escolhido no assistente (#181).
+
+    Ele só existia enquanto a janela do assistente estava aberta: o prompt e o
+    cabeçalho eram gerados e o perfil se perdia. Guardado, o botão "Usar o texto
+    sugerido" das Configurações oferece o cabeçalho DA ÁREA da pessoa, e não o
+    genérico.
     """
-    return not util.PROMPT_PATH.exists() and not wizard_done()
+    try:
+        data = {}
+        if util.STATE_PATH.exists():
+            data = json.loads(util.STATE_PATH.read_text(encoding="utf-8"))
+        data["profile"] = dataclasses.asdict(profile)
+        util.atomic_write_text(util.STATE_PATH, json.dumps(data))
+    except Exception:
+        pass
+
+
+def load_profile() -> Profile | None:
+    """O perfil guardado pelo assistente, ou None se ninguém escolheu ainda."""
+    try:
+        bruto = json.loads(util.STATE_PATH.read_text(encoding="utf-8")).get("profile")
+        if not isinstance(bruto, dict):
+            return None
+        campos = {f.name for f in dataclasses.fields(Profile)}
+        return Profile(**{k: v for k, v in bruto.items() if k in campos})
+    except Exception:
+        return None
+
+
+def profile_offered() -> bool:
+    """O assistente de perfil já foi oferecido no boot alguma vez?"""
+    return _state_flag("profile_offered")
+
+
+def mark_profile_offered() -> None:
+    _mark_state_flag("profile_offered")
+
+
+def should_offer_on_boot() -> bool:
+    """Oferece o assistente uma única vez, a quem nunca escolheu um perfil.
+
+    A condição era "prompt.md não existe", proxy para "nunca foi oferecido": o
+    arquivo nasce quando o usuário abre as Configurações ou conclui o assistente.
+    O proxy caiu quando os padrões embutidos viraram neutros (#181), porque a
+    migração que congela os textos SAP/ABAP da instalação antiga também cria o
+    prompt.md, e isso calaria a oferta justamente para quem ainda não escolheu
+    área. O flag é explícito: quem já viu a oferta não vê de novo.
+    """
+    return not wizard_done() and not profile_offered()

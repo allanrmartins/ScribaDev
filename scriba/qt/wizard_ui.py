@@ -287,6 +287,7 @@ class WizardWindow(QWidget):
         prompt, hotwords = self._result
         context_note = promptgen.context_note_for(profile)
         backup = promptgen.apply_prompt(prompt, hotwords or None, context_note)
+        promptgen.save_profile(profile)   # o botão do context.md gera pela área (#181)
         promptgen.mark_wizard_done()
         if self.app is not None:
             try:

@@ -157,8 +157,24 @@ class NoClippedButtonsTests(unittest.TestCase):
     def test_configuracoes_sem_botao_cortado(self):
         from PySide6.QtWidgets import QTabWidget
 
-        from scriba import config as config_mod
+        from scriba import config as config_mod, util
         from scriba.qt.settings_ui import SettingsWindow
+
+        # APP_DIR de mentira: a janela LÊ o prompt.md/context.md e CRIA o que faltar
+        # (ensure_*). Sem isto o teste enxergava a config da máquina de quem roda e
+        # escrevia no %LOCALAPPDATA%\ScribaDev de verdade.
+        d = Path(tempfile.mkdtemp(prefix="scriba_clip_"))
+        orig = (util.CONFIG_PATH, util.PROMPT_PATH, util.CONTEXT_PATH, util.STATE_PATH)
+        util.CONFIG_PATH = d / "config.toml"
+        util.CONFIG_PATH.write_text(config_mod.DEFAULT_CONFIG, encoding="utf-8")
+        util.PROMPT_PATH = d / "prompt.md"
+        util.CONTEXT_PATH = d / "context.md"
+        util.STATE_PATH = d / "state.json"
+        def _restaura():
+            (util.CONFIG_PATH, util.PROMPT_PATH,
+             util.CONTEXT_PATH, util.STATE_PATH) = orig
+
+        self.addCleanup(_restaura)
 
         class _App:
             cfg = config_mod.load()

@@ -663,12 +663,13 @@ class ScribaApp:
         self._maybe_offer_profile_wizard()
 
     def _maybe_offer_profile_wizard(self) -> None:
-        """Sem prompt.md: oferece o assistente de perfil uma única vez."""
+        """Quem nunca escolheu um perfil recebe o assistente uma única vez."""
         try:
-            from .promptgen import should_offer_on_boot
+            from .promptgen import mark_profile_offered, should_offer_on_boot
 
             if should_offer_on_boot():
-                log.info("primeiro uso sem prompt.md — abrindo o assistente de perfil")
+                log.info("perfil nunca escolhido — abrindo o assistente de perfil")
+                mark_profile_offered()  # antes de abrir: fechar no X não repete a oferta
                 self._open_wizard_ui()
         except Exception:
             log.exception("não consegui oferecer o assistente de perfil")
@@ -1314,6 +1315,12 @@ def run_app(minimized: bool = False) -> int:
     # do atalho do IDLE; precisa vir antes de qualquer janela
     util.set_explicit_app_id()
     _setup_logging()
+    # ANTES do config.load() do ScribaApp, que cria o config.toml e apagaria a
+    # única pista de que esta instalação já existia antes de os padrões de área
+    # virarem neutros (#181).
+    from . import notes
+
+    notes.freeze_area_defaults()
     # Reinício pós-update (#74): a instância antiga pode ainda estar no teardown segurando
     # o mutex; damos alguns retries p/ ela liberar (o 2º-launch normal, do atalho, segue
     # instantâneo — sem retry). Marcado pela env var setada no PS do relaunch.

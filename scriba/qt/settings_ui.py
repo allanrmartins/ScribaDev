@@ -498,6 +498,29 @@ class SettingsWindow(QWidget):
             f"font-family:'{theme.active().font_mono}','Consolas',monospace; font-size:{theme.zpt(9)}pt;")
         pr.addRow(self._prompt_editor)
 
+        # o cabeçalho da nota era o único texto sem edição pela interface (#181):
+        # quem não é da área SAP levava "reunião SAP/ABAP" em toda ata e não tinha
+        # onde mexer, porque só o assistente de perfil escrevia o context.md.
+        cx = self._group(f, "Contexto para IA da nota (context.md)")
+        cx_actions = QWidget(); cr = QHBoxLayout(cx_actions); cr.setContentsMargins(0, 0, 0, 0)
+        cx_note = QLabel("Opcional: abre a nota e orienta a IA que for ler a ata. "
+                         "Vazio, a nota sai sem cabeçalho.")
+        cx_note.setProperty("role", "muted")
+        cx_note.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
+        cr.addWidget(cx_note); cr.addStretch(1)
+        cr.addWidget(widgets.ModernButton("Usar o texto sugerido", self._restore_context))
+        cx.addRow(cx_actions)
+        self._context_editor = QPlainTextEdit()
+        # sem teto de altura de propósito: com um, a QFormLayout do QGroupBox
+        # espalha as linhas do grupo e abre vãos entre o rótulo e a caixa. Deixar
+        # o editor absorver a sobra é o que o grupo do prompt já faz aqui em cima.
+        self._context_editor.setMinimumHeight(90)
+        self._context_editor.setPlaceholderText(
+            "Sem cabeçalho. O botão acima preenche com um texto pronto, que dá para editar.")
+        self._context_editor.setStyleSheet(
+            f"font-family:'{theme.active().font_mono}','Consolas',monospace; font-size:{theme.zpt(9)}pt;")
+        cx.addRow(self._context_editor)
+
     def _open_wizard(self) -> None:
         from .wizard_ui import WizardWindow
 
@@ -515,7 +538,12 @@ class SettingsWindow(QWidget):
     def _restore_prompt(self) -> None:
         from .. import notes
 
-        self._prompt_editor.setPlainText(notes.DEFAULT_SUMMARY_PROMPT)
+        self._prompt_editor.setPlainText(notes.default_summary_prompt())
+
+    def _restore_context(self) -> None:
+        from .. import notes
+
+        self._context_editor.setPlainText(notes.suggested_context_note())
 
     def _build_detection_tab(self) -> None:
         f = self._tab("Detecção")
@@ -1352,6 +1380,15 @@ class SettingsWindow(QWidget):
                 self._prompt_editor.setPlainText(notes.ensure_prompt_file().read_text(encoding="utf-8"))
             except Exception:
                 log.exception("settings: falha ao carregar o prompt.md")
+        if hasattr(self, "_context_editor"):  # context.md (não-crítico p/ o guard)
+            try:
+                from .. import notes
+
+                # load_ e não ensure_: abrir a janela não cria arquivo (o padrão é
+                # não ter cabeçalho, e gravar vazio em disco não guarda nada)
+                self._context_editor.setPlainText(notes.load_context_note())
+            except Exception:
+                log.exception("settings: falha ao carregar o context.md")
 
     def _save(self) -> None:
         if not self._loaded:
@@ -1370,6 +1407,14 @@ class SettingsWindow(QWidget):
                 util.atomic_write_text(util.PROMPT_PATH, self._prompt_editor.toPlainText().strip() + "\n")
             except Exception:
                 log.exception("settings: falha ao salvar o prompt.md")
+        if hasattr(self, "_context_editor"):
+            # editor VAZIO grava vazio de propósito: é como se tira o cabeçalho da
+            # nota (load_context_note trata arquivo vazio como "sem cabeçalho").
+            try:
+                util.atomic_write_text(util.CONTEXT_PATH,
+                                       self._context_editor.toPlainText().strip() + "\n")
+            except Exception:
+                log.exception("settings: falha ao salvar o context.md")
         if self.app is not None:
             try:
                 self.app.reload_config()
