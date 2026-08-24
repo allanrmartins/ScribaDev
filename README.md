@@ -69,7 +69,15 @@ notas.md ──► exportado para %LOCALAPPDATA%\ScribaDev\Notas\
 Baixe na [página de Releases](https://github.com/allanrmartins/ScribaDev/releases) e instale — **sem Python, sem terminal**:
 
 - **Windows**: `ScribaDev-X.Y.Z-setup.exe`. O instalador não é assinado digitalmente (projeto open source sem certificado pago), então o SmartScreen avisa na primeira execução: clique em **"Mais informações" → "Executar mesmo assim"**. A instalação é por usuário (sem pedir administrador).
-- **macOS** (14.2+, Apple Silicon): `ScribaDev-X.Y.Z.dmg`. Arraste o app para **Applications** e, na primeira abertura, use **clique-direito → Abrir** (mesmo motivo: app não assinado). Conceda as permissões de **Microfone**, **Gravação de Tela e Áudio do Sistema** e **Acessibilidade** quando pedidas.
+- **macOS** (14.2+, Apple Silicon): `ScribaDev-X.Y.Z.dmg`. Arraste o app para **Applications** e, **antes da primeira abertura**, tire a marca de quarentena que o navegador põe no download (mesmo motivo do Windows: app não assinado nem notarizado):
+
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/ScribaDev.app
+  ```
+
+  Só então abra o app, e conceda as permissões de **Microfone**, **Gravação de Tela e Áudio do Sistema** e **Acessibilidade** quando pedidas.
+
+  > ⚠️ **Não use mais o clique-direito → Abrir.** O macOS 15+ tirou esse atalho e, dependendo da versão do XProtect, abrir o app ainda em quarentena o deixa **travado na inicialização**: não aparece janela nenhuma e, um tempo depois, o sistema avisa que o app não está respondendo. Se isso já aconteceu, remover a quarentena *depois* não resolve — o macOS guarda o bloqueio: **apague o `/Applications/ScribaDev.app`, copie de novo do DMG, rode o comando acima e só aí abra.**
 
 Na primeira abertura, o **wizard de primeiro uso** analisa sua máquina (GPU, memória, disco) e recomenda a melhor configuração:
 
