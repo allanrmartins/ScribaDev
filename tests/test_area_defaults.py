@@ -90,6 +90,32 @@ class PadraoNeutroTest(_AppDirIsolado):
         self.assertIn("SAP/ABAP", abap)
 
 
+class HotwordsPorAreaTest(_AppDirIsolado):
+    """O vocabulário que guia o Whisper também nascia SAP (#181): quem nunca falou
+    de BAPI recebia essas palavras empurradas para dentro da transcrição."""
+
+    def test_config_nova_nasce_sem_vocabulario(self):
+        from scriba import config as config_mod
+
+        util.CONFIG_PATH.write_text(config_mod.DEFAULT_CONFIG, encoding="utf-8")
+        self.assertEqual(config_mod.load().whisper.hotwords, "")
+
+    def test_perfil_abap_traz_o_vocabulario_sap(self):
+        _prompt, hotwords = promptgen.template_prompt(promptgen.Profile(base="abap"))
+        self.assertEqual(hotwords, promptgen.ABAP_HOTWORDS)
+        self.assertIn("BAPI", hotwords)
+
+    def test_perfil_sem_stack_nao_inventa_vocabulario(self):
+        _prompt, hotwords = promptgen.template_prompt(promptgen.Profile())
+        self.assertEqual(hotwords, "")
+
+    def test_perfil_de_outra_area_usa_o_jargao_informado(self):
+        perfil = promptgen.Profile(base="dev", stack="Django, Postgres")
+        _prompt, hotwords = promptgen.template_prompt(perfil)
+        self.assertIn("Django", hotwords)
+        self.assertNotIn("BAPI", hotwords)
+
+
 class CongelamentoTest(_AppDirIsolado):
     def test_instalacao_nova_nao_e_tocada(self):
         notes.freeze_area_defaults()   # sem config.toml

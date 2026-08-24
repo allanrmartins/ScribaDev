@@ -211,12 +211,23 @@ _PROFILE_SLOTS: dict[str, dict[str, str]] = {
 }
 
 
+# Vocabulário do perfil SAP/ABAP. Morou no DEFAULT_CONFIG até a #181, quando o app
+# deixou de nascer ABAP: enviesar a transcrição de quem nunca falou de BAPI atrapalha
+# mais do que ajuda. Quem escolhe o perfil abap recebe esta lista no config.
+ABAP_HOTWORDS = (
+    "SAP ABAP BAPI BAdI CDS RAP Fiori OData ALV IDoc SE80 SE11 SE16N SE37 SE38 SM30 "
+    "SM37 ST22 VA01 ME21N MIGO MARA MATNR VBAK VBAP EKKO BSEG KNA1 SmartForms HANA "
+    "user exit enhancement request transporte mandante tabela Z campo Z SU01 SU53 "
+    "PFCG ST01 SAP_ALL"
+)
+
+
 def template_prompt(profile: Profile) -> tuple[str, str]:
     """(prompt, hotwords) do template local do perfil — o fallback offline."""
     if profile.base == "abap":
         from .notes import DEFAULT_SUMMARY_PROMPT
 
-        return DEFAULT_SUMMARY_PROMPT, config_mod.Whisper().hotwords
+        return DEFAULT_SUMMARY_PROMPT, ABAP_HOTWORDS
     slots = dict(_PROFILE_SLOTS.get(profile.base) or _PROFILE_SLOTS["generic"])
     parts = [p for p in (profile.role, profile.area) if p.strip()]
     slots["context_line"] = f" de {' — '.join(parts)}" if parts else ""

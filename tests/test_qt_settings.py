@@ -293,6 +293,32 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(notes.load_context_note(),
                          "> **Contexto para IA:** ata de reuniao juridica.")
 
+    def test_caso_do_relato_trocar_o_cabecalho_sem_refazer_o_perfil(self):
+        """#181 nasceu de quem não é da área SAP e levava "reunião SAP/ABAP" em toda
+        ata. Essa pessoa JÁ tem o app instalado, então a migração preserva o texto
+        antigo - e ela precisa conseguir trocar ou tirar só esse trecho aqui, sem
+        refazer o perfil inteiro no assistente."""
+        from scriba import notes, util
+        from scriba.qt.settings_ui import SettingsWindow
+
+        notes.freeze_area_defaults()   # instalação que já existia: chega com o texto SAP
+        self.assertIn("SAP/ABAP", notes.load_context_note())
+
+        win = SettingsWindow(self._app())
+        self.assertIn("SAP/ABAP", win._context_editor.toPlainText())
+
+        win._restore_context()         # um clique: texto sugerido, sem jargão de área
+        win._save()
+        self.assertNotIn("SAP", notes.load_context_note())
+        self.assertIn("Contexto para IA", notes.load_context_note())
+
+        win._context_editor.setPlainText("")   # ou simplesmente tirar o cabeçalho
+        win._save()
+        self.assertEqual(notes.load_context_note(), "")
+        # e nada disso mexeu no prompt do resumo: o perfil dela segue como estava
+        self.assertEqual(util.PROMPT_PATH.read_text(encoding="utf-8").strip(),
+                         notes.DEFAULT_SUMMARY_PROMPT.strip())
+
     def test_botao_preenche_com_o_texto_sugerido(self):
         from scriba import notes
         from scriba.qt.settings_ui import SettingsWindow

@@ -111,8 +111,10 @@ cpu_threads = 0          # threads quando cai para CPU (0 = automático)
 # após testar com áudio real — pode recuperar voz baixa, mas arrisca alucinar em silêncio.
 vad_min_silence_ms = 0   # silêncio mínimo para cortar um trecho (ms); 0 = padrão
 vad_threshold = 0        # limiar de detecção de voz (0..1); 0 = padrão
-# Vocabulário para guiar a transcrição (troque pelo jargão da sua área):
-hotwords = "SAP ABAP BAPI BAdI CDS RAP Fiori OData ALV IDoc SE80 SE11 SE16N SE37 SE38 SM30 SM37 ST22 VA01 ME21N MIGO MARA MATNR VBAK VBAP EKKO BSEG KNA1 SmartForms HANA user exit enhancement request transporte mandante tabela Z campo Z SU01 SU53 PFCG ST01 SAP_ALL"
+# Vocabulário para guiar a transcrição. Vazio = sem viés: instalação nova não sabe
+# a sua área e chutar o jargão errado atrapalha mais que ajuda. Preencha com o seu,
+# ou deixe o "Assistente de perfil…" (Configurações → IA) montar a lista.
+hotwords = ""
 {_H["engine"]}
 engine = "local"
 cloud_base_url = ""                # vazio = Groq (https://api.groq.com/openai/v1)
@@ -420,7 +422,7 @@ beam_size = {_n(w.beam_size)}            # feixes da decodificação; menor = ma
 cpu_threads = {_n(w.cpu_threads)}          # threads quando cai para CPU (0 = automático)
 vad_min_silence_ms = {_n(w.vad_min_silence_ms)}   # silêncio mínimo para cortar (ms); 0 = padrão
 vad_threshold = {_n(w.vad_threshold)}        # limiar de detecção de voz (0..1); 0 = padrão
-# Vocabulário para guiar a transcrição (troque pelo jargão da sua área):
+# Vocabulário para guiar a transcrição (o jargão da sua área; vazio = sem viés):
 hotwords = {_s(w.hotwords)}
 engine = {_s(w.engine)}          # {_H["engine_save"]}
 cloud_base_url = {_s(w.cloud_base_url)}   # vazio = Groq (.../openai/v1)
