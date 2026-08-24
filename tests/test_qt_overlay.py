@@ -257,5 +257,6 @@ class NaoRoubaFocoTests(unittest.TestCase):
             sys.platform = orig_plat
             util.STATE_PATH = orig_state
 
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
