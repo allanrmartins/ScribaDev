@@ -217,7 +217,11 @@ class NaoRoubaFocoTests(unittest.TestCase):
     Qt termina em `[NSApp activateIgnoringOtherApps:YES]`, ou seja, traz o app
     inteiro para a frente. Isso puxava o foco de volta para o ScribaDev durante a
     gravação inteira: dava para clicar no navegador/Meet só na fresta entre dois
-    pulsos. NENHUM caminho automático da pílula pode chamar `raise_()`."""
+    pulsos. NENHUM caminho automático da pílula pode chamar `raise_()` no macOS.
+
+    O contrato é do macOS, então o teste finge `sys.platform = "darwin"` — assim
+    ele vale nos três runners. Fora do mac o `raise_()` não ativa o processo e
+    segue sendo o caminho certo (coberto em test_qt_widgets.FocoNoMacTests)."""
 
     @classmethod
     def setUpClass(cls):
@@ -239,9 +243,10 @@ class NaoRoubaFocoTests(unittest.TestCase):
     def test_pulso_e_show_nao_chamam_raise(self):
         from scriba import util
 
-        orig = util.STATE_PATH
+        orig_state, orig_plat = util.STATE_PATH, sys.platform
         util.STATE_PATH = Path(tempfile.mkdtemp(prefix="scriba_qt_foco_")) / "state.json"
         try:
+            sys.platform = "darwin"   # o contrato que se testa aqui é o do mac
             pill = self._pill_sem_raise()
             pill.show()              # show() re-assere o topo
             pill._tick_pulse()       # o pulso de 600 ms, que é o que batia sem parar
@@ -249,7 +254,8 @@ class NaoRoubaFocoTests(unittest.TestCase):
             pill.hide()
             pill.destroy()
         finally:
-            util.STATE_PATH = orig
+            sys.platform = orig_plat
+            util.STATE_PATH = orig_state
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
