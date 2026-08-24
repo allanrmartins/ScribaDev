@@ -132,8 +132,7 @@ class ChatWindow(QWidget):
 
     def show(self) -> None:  # noqa: A003
         super().show()
-        self.raise_()
-        self.activateWindow()
+        widgets.bring_to_front(self)   # macOS: ativa o app explicitamente (ver qt/__init__)
         widgets.enable_dark_titlebar(self)
         self._entry.setFocus()
         QTimer.singleShot(0, self._refit_all)   # re-ajusta as bolhas com o viewport já dimensionado

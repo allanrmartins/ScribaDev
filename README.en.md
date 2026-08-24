@@ -69,7 +69,15 @@ audio archived as Opus (~20 MB/h) ──► folder renamed with the note's title
 Download from the [Releases page](https://github.com/allanrmartins/ScribaDev/releases) and install — **no Python, no terminal**:
 
 - **Windows**: `ScribaDev-X.Y.Z-setup.exe`. The installer is not code-signed (open source project without a paid certificate), so SmartScreen warns on first run: click **"More info" → "Run anyway"**. Per-user install (no admin prompt).
-- **macOS** (14.2+, Apple Silicon): `ScribaDev-X.Y.Z.dmg`. Drag the app to **Applications** and, on first launch, use **right-click → Open** (same reason: unsigned app). Grant the **Microphone**, **Screen & System Audio Recording** and **Accessibility** permissions when prompted.
+- **macOS** (14.2+, Apple Silicon): `ScribaDev-X.Y.Z.dmg`. Drag the app to **Applications** and, **before the first launch**, clear the quarantine flag your browser puts on the download (same reason as Windows: the app is neither signed nor notarized):
+
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/ScribaDev.app
+  ```
+
+  Only then open the app, and grant the **Microphone**, **Screen & System Audio Recording** and **Accessibility** permissions when prompted.
+
+  > ⚠️ **Do not use right-click → Open any more.** macOS 15+ removed that shortcut and, depending on the XProtect version, launching the app while it is still quarantined leaves it **stuck at startup**: no window appears and, a while later, the system reports the app is not responding. If that already happened, clearing the quarantine flag *afterwards* does not help — macOS caches the block: **delete `/Applications/ScribaDev.app`, copy it from the DMG again, run the command above, and only then open it.**
 
 On first launch, the **first-run wizard** analyzes your machine (GPU, memory, disk) and recommends the best setup:
 

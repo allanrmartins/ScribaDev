@@ -138,8 +138,10 @@ class SpikePill(QWidget):
     def _tick_pulse(self) -> None:
         if not self._paused:
             self._pulse_on = not self._pulse_on
-        # re-assere o topmost (um app fullscreen/compartilhando pode roubá-lo)
-        self.raise_()
+        # re-assere o topmost (um app fullscreen/compartilhando pode roubá-lo) SEM
+        # ativar o app — no macOS o raise_() do Qt rouba o foco (ver
+        # widgets.raise_without_activation)
+        widgets.raise_without_activation(self)
         self.update()
 
     # -- clique + arraste coexistindo (o de-risk real p/ a fase B) -----------

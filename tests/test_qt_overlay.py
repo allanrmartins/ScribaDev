@@ -211,5 +211,51 @@ class PillSmokeTests(unittest.TestCase):
             util.STATE_PATH = orig
 
 
+@unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")
+class NaoRoubaFocoTests(unittest.TestCase):
+    """A pílula re-assere o topo a cada pulso (600 ms) — e no macOS o `raise_()` do
+    Qt termina em `[NSApp activateIgnoringOtherApps:YES]`, ou seja, traz o app
+    inteiro para a frente. Isso puxava o foco de volta para o ScribaDev durante a
+    gravação inteira: dava para clicar no navegador/Meet só na fresta entre dois
+    pulsos. NENHUM caminho automático da pílula pode chamar `raise_()` no macOS.
+
+    O contrato é do macOS, então o teste finge `sys.platform = "darwin"` — assim
+    ele vale nos três runners. Fora do mac o `raise_()` não ativa o processo e
+    segue sendo o caminho certo (coberto em test_qt_widgets.FocoNoMacTests)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def _pill_sem_raise(self):
+        """Pílula cujo `raise_()` explode: qualquer uso reprova o teste."""
+        from scriba.qt.overlay import RecordingPill
+
+        pill = RecordingPill(
+            on_stop=lambda: None, on_discard=lambda: None, on_record=lambda: None,
+            on_speakers=lambda n: None, on_split=lambda: None,
+        )
+        pill.raise_ = lambda: self.fail("raise_() do Qt ativa o app no macOS e rouba o foco")
+        return pill
+
+    def test_pulso_e_show_nao_chamam_raise(self):
+        from scriba import util
+
+        orig_state, orig_plat = util.STATE_PATH, sys.platform
+        util.STATE_PATH = Path(tempfile.mkdtemp(prefix="scriba_qt_foco_")) / "state.json"
+        try:
+            sys.platform = "darwin"   # o contrato que se testa aqui é o do mac
+            pill = self._pill_sem_raise()
+            pill.show()              # show() re-assere o topo
+            pill._tick_pulse()       # o pulso de 600 ms, que é o que batia sem parar
+            pill._ensure_visible()   # e o caminho defensivo do show/estágios
+            pill.hide()
+            pill.destroy()
+        finally:
+            sys.platform = orig_plat
+            util.STATE_PATH = orig_state
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

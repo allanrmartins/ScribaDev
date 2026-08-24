@@ -178,8 +178,7 @@ class AskNumSpeakers(QWidget):
     def show(self) -> None:  # noqa: A003
         super().show()
         _center_on_screen(self)
-        self.raise_()
-        self.activateWindow()
+        widgets.bring_to_front(self)   # macOS: ativa o app explicitamente (ver qt/__init__)
         widgets.enable_dark_titlebar(self)
         self._entry.setFocus()
         self._entry.selectAll()
@@ -348,8 +347,7 @@ class LabelSpeakersDialog(QWidget):
     def show(self) -> None:  # noqa: A003
         super().show()
         _center_on_screen(self)
-        self.raise_()
-        self.activateWindow()
+        widgets.bring_to_front(self)   # macOS: ativa o app explicitamente (ver qt/__init__)
         widgets.enable_dark_titlebar(self)
 
 

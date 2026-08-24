@@ -928,10 +928,10 @@ class NotesWindow(QWidget):
         # SÓ UMA conversa por vez (#48) — não confundir perguntas de reuniões diferentes.
         if self._chat_alive():
             if self._chat_key == note_path:
-                self._chat.raise_(); self._chat.activateWindow()   # mesma reunião: traz à frente
+                widgets.bring_to_front(self._chat)   # mesma reunião: traz à frente
                 return
             if not self._confirm_close_chat(self._chat_title or "outra reunião"):
-                self._chat.raise_(); self._chat.activateWindow()   # cancelou: mantém a atual
+                widgets.bring_to_front(self._chat)   # cancelou: mantém a atual
                 return
             self._chat.close()   # confirmou: fecha a anterior antes de abrir a nova
         from .chat_ui import ChatWindow
@@ -1253,8 +1253,7 @@ class NotesWindow(QWidget):
 
     def show(self) -> None:  # noqa: A003
         super().show()
-        self.raise_()
-        self.activateWindow()
+        widgets.bring_to_front(self)   # macOS: ativa o app explicitamente (ver qt/__init__)
         if not self._titlebar_done:
             self._titlebar_done = True
             widgets.enable_dark_titlebar(self)
@@ -1603,8 +1602,7 @@ class _ActionItemsWindow(QWidget):
 
     def show(self) -> None:  # noqa: A003
         super().show()
-        self.raise_()
-        self.activateWindow()
+        widgets.bring_to_front(self)   # macOS: ativa o app explicitamente (ver qt/__init__)
         widgets.enable_dark_titlebar(self)
 
     def closeEvent(self, event) -> None:

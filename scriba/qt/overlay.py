@@ -412,9 +412,13 @@ class RecordingPill(QWidget):
 
     def _ensure_visible(self) -> None:
         """Mantém no topo e visível durante a call (um fullscreen/compartilhamento pode
-        roubar o topmost). NÃO mexe na captura (segue oculta no compartilhamento)."""
+        roubar o topmost). NÃO mexe na captura (segue oculta no compartilhamento).
+
+        Sobe SEM ativar o app: isto roda a cada pulso (600 ms) e o `raise_()` do Qt
+        no macOS ativa o processo (ver widgets.raise_without_activation) — era o que
+        roubava o foco do navegador durante a gravação inteira."""
         try:
-            self.raise_()
+            widgets.raise_without_activation(self)
             if not self.isVisible():
                 self.show()
         except RuntimeError:
@@ -433,7 +437,7 @@ class RecordingPill(QWidget):
         self.move(x, y)
         self._shown = True
         super().show()
-        self.raise_()
+        widgets.raise_without_activation(self)   # nunca rouba o foco (ver _ensure_visible)
         widgets.exclude_from_capture(self)  # reaplica (defensivo)
         self._ensure_visible()
 
