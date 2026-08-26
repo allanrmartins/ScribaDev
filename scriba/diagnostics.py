@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import platform
 import re
+import shutil
 import sqlite3
 import sys
 import time
@@ -263,17 +265,27 @@ def build_scrubber(recordings_dir=None) -> Scrubber:
 
 def environment_report() -> str:
     """Resumo do ambiente (versão, Python, SO, GPU, diarização) — o que o suporte precisa."""
-    from . import __version__, updates
+    from . import __version__, sysprobe, updates
 
     # via camada de plataforma: ctypes.WinDLL nem existe fora do Windows e o
     # except OSError antigo não pegaria o AttributeError no Linux/macOS (#98)
     from . import plat
 
-    gpu = "sim (NVIDIA)" if plat.has_nvidia_gpu() else "nao"
+    # modelo + driver, não só "sim": nos #182/#183 duas máquinas travavam a
+    # transcrição CUDA e o zip não dizia nem QUAL GPU nem qual driver
+    gs = sysprobe.gpu_snapshot()
+    if gs:
+        gpu = f"{gs['name']} · driver {gs['driver']} · {gs['vram_total_mb']} MB VRAM"
+    else:
+        gpu = "sim (NVIDIA; nvidia-smi indisponivel)" if plat.has_nvidia_gpu() else "nao"
+    ram = sysprobe.ram_snapshot() or {}
+    cpu = f"{platform.processor() or platform.machine()} · {os.cpu_count()} nucleos"
     try:
         import importlib.util as ilu
 
         diar = "instalada" if ilu.find_spec("pyannote.audio") else "ausente"
+    except ModuleNotFoundError:
+        diar = "ausente"   # find_spec de submódulo LEVANTA quando nem o pai existe
     except Exception:
         diar = "erro ao checar"
     return "\n".join([
@@ -282,11 +294,167 @@ def environment_report() -> str:
         f"Instalador (exe) : {updates.is_frozen_install()}",
         f"Python           : {sys.version.split()[0]}",
         f"SO               : {platform.platform()}",
+        f"CPU              : {cpu}",
+        f"RAM              : {ram.get('total_gb', '?')} GB",
         f"GPU NVIDIA       : {gpu}",
         f"pyannote.audio   : {diar}",
         f"APP_DIR          : {util.APP_DIR}",
         f"Gerado em        : {datetime.now().isoformat(timespec='seconds')}",
     ]) + "\n"
+
+
+def _fmt_mb(nbytes: float) -> str:
+    mb = nbytes / 1024**2
+    if mb >= 1024:
+        return f"{mb / 1024:.1f} GB"
+    if mb >= 1:
+        return f"{mb:.1f} MB"
+    return f"{nbytes / 1024:.1f} KB"
+
+
+def _dir_size(path: Path) -> tuple[int, int]:
+    """(bytes, arquivos) de uma árvore; erro por arquivo não derruba a soma."""
+    total = count = 0
+    try:
+        for p in path.rglob("*"):
+            try:
+                if p.is_file():
+                    total += p.stat().st_size
+                    count += 1
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return total, count
+
+
+def machine_report(recordings_dir=None) -> str:
+    """Foto da máquina NO MOMENTO do diagnóstico: carga e memória da GPU (e quem a
+    está usando), RAM/pagefile, disco livre, o que mora no APP_DIR, as versões dos
+    componentes instalados e o estado do cache de modelos.
+
+    Nasceu dos #182/#183: transcrição CUDA travada a 0% e o zip sem nenhum dado
+    para distinguir "GPU sem carga" de "VRAM esgotada transbordando para a RAM" de
+    "órfão segurando a placa". Tudo best-effort: seção indisponível diz isso e o
+    relatório sai assim mesmo.
+    """
+    from . import sysprobe
+
+    linhas: list[str] = []
+
+    linhas.append("== GPU (nvidia-smi) ==")
+    gs = sysprobe.gpu_snapshot()
+    if gs:
+        linhas += [
+            f"nome         : {gs['name']}",
+            f"driver       : {gs['driver']}",
+            f"VRAM         : {gs['vram_total_mb']} MB total · {gs['vram_used_mb']} MB em uso "
+            f"· {gs['vram_free_mb']} MB livre",
+            f"utilizacao   : {gs['util_pct']}%",
+            f"temperatura  : {gs['temp_c']} C",
+            "processos com contexto CUDA aberto:",
+        ]
+        if gs["procs"]:
+            linhas += [f"  pid {p['pid']:<7} {p['mem_mb'] or '?':>6} MB  {p['name']}"
+                       for p in gs["procs"]]
+        else:
+            linhas.append("  (nenhum)")
+    else:
+        linhas.append("(sem GPU NVIDIA ou nvidia-smi indisponivel)")
+
+    linhas.append("")
+    linhas.append("== RAM ==")
+    ram = sysprobe.ram_snapshot()
+    if ram and "avail_gb" in ram:
+        linhas += [
+            f"fisica       : {ram['total_gb']} GB total · {ram['avail_gb']} GB disponivel "
+            f"({ram['load_pct']}% em uso)",
+            f"pagefile     : {ram['pagefile_total_gb']} GB total · "
+            f"{ram['pagefile_avail_gb']} GB disponivel",
+        ]
+    elif ram:
+        linhas.append(f"fisica       : {ram['total_gb']} GB total")
+    else:
+        linhas.append("(indisponivel)")
+
+    linhas.append("")
+    linhas.append("== Disco ==")
+    vistos = set()
+    for rotulo, path in (("APP_DIR", util.APP_DIR), ("gravacoes", recordings_dir)):
+        if not path:
+            continue
+        try:
+            anchor = Path(path).resolve().anchor or str(path)
+            if anchor in vistos:
+                continue
+            vistos.add(anchor)
+            du = shutil.disk_usage(anchor)
+            linhas.append(f"{anchor} ({rotulo}): {du.free / 1024**3:.1f} GB livres "
+                          f"de {du.total / 1024**3:.1f} GB")
+        except OSError:
+            linhas.append(f"({rotulo}: indisponivel)")
+
+    linhas.append("")
+    linhas.append(f"== APP_DIR ({util.APP_DIR}) ==")
+    try:
+        for item in sorted(util.APP_DIR.iterdir()):
+            try:
+                if item.is_dir():
+                    tam, n = _dir_size(item)
+                    linhas.append(f"{item.name + '/':<24} {_fmt_mb(tam):>10}  ({n} arquivos)")
+                else:
+                    linhas.append(f"{item.name:<24} {_fmt_mb(item.stat().st_size):>10}")
+            except OSError:
+                linhas.append(f"{item.name:<24} (ilegivel)")
+    except OSError:
+        linhas.append("(indisponivel)")
+
+    # versões direto do dist-info: na análise do #182 elas tiveram que ser
+    # garimpadas do pip.log, e a diferença de UMA versão era a pista central
+    linhas.append("")
+    linhas.append("== Componentes instalados (addons) ==")
+    addons = util.APP_DIR / "addons"
+    if addons.is_dir():
+        pacotes = []
+        try:
+            for di in sorted(addons.glob("*.dist-info")):
+                nome_ver = di.name[:-len(".dist-info")]
+                nome, _, ver = nome_ver.rpartition("-")
+                pacotes.append(f"{nome:<28} {ver}")
+        except OSError:
+            pass
+        linhas += pacotes or ["(nenhum dist-info encontrado)"]
+    else:
+        linhas.append("(sem pasta addons - instalacao por fonte usa o venv)")
+
+    linhas.append("")
+    linhas.append("== Modelos (cache Hugging Face) ==")
+    try:
+        from huggingface_hub.constants import HF_HUB_CACHE
+
+        hub = Path(HF_HUB_CACHE)
+    except Exception:
+        hub = Path.home() / ".cache" / "huggingface" / "hub"
+    if hub.is_dir():
+        achou = False
+        try:
+            for m in sorted(hub.glob("models--*")):
+                achou = True
+                tam, _n = _dir_size(m)
+                # blob .incomplete = download interrompido: o modelo carrega pela
+                # metade ou volta a rede; invisivel em qualquer log
+                parciais = len(list(m.rglob("*.incomplete")))
+                nota = f"  [DOWNLOAD INCOMPLETO: {parciais} blob(s)]" if parciais else ""
+                linhas.append(f"{m.name:<58} {_fmt_mb(tam):>10}{nota}")
+        except OSError:
+            pass
+        if not achou:
+            linhas.append("(cache vazio)")
+        linhas.append(f"(em {hub})")
+    else:
+        linhas.append(f"(sem cache em {hub})")
+
+    return "\n".join(linhas) + "\n"
 
 
 GH_NEW_ISSUE = "https://github.com/allanrmartins/ScribaDev/issues/new"
@@ -377,7 +545,7 @@ def meetings_report(rec_dir) -> str:
     scriba.log linha a linha. Nome de pasta passa pelo scrubber depois, como todo
     o resto do zip.
     """
-    linhas = ["status         parada_ha  lock                pasta"]
+    linhas = ["status         parada_ha    tamanho  lock                pasta"]
     agora = time.time()
     achadas = []
     try:
@@ -398,7 +566,11 @@ def meetings_report(rec_dir) -> str:
     except OSError:
         pass
     for idade, status, folder in sorted(achadas, reverse=True):
-        linhas.append(f"{status:<14} {idade:>7.0f}min  {_lock_info(folder):<19} {folder.name}")
+        # tamanho da pasta: wav de 0 bytes (gravação que nem chegou a escrever)
+        # e transcript ausente ficam visíveis sem pedir outro zip
+        tam, _n = _dir_size(folder)
+        linhas.append(f"{status:<14} {idade:>7.0f}min {_fmt_mb(tam):>9}  "
+                      f"{_lock_info(folder):<19} {folder.name}")
     if not achadas:
         linhas.append("(nenhuma reuniao pendente)")
     return "\n".join(linhas)
@@ -478,6 +650,12 @@ def export_zip(recordings_dir=None) -> Path:
                 pass
         # 2) ambiente (APP_DIR carrega o usuário do SO)
         z.writestr("ambiente.txt", scrubber.scrub(environment_report()))
+        # 2b) foto da máquina AGORA: GPU (carga, VRAM, processos), RAM/pagefile,
+        # disco, APP_DIR, versões dos addons e cache de modelos (#182/#183)
+        try:
+            z.writestr("maquina.txt", scrubber.scrub(machine_report(recordings_dir)))
+        except Exception:
+            log.exception("diagnóstico: machine_report falhou (zip segue sem ele)")
         # 3) config sem segredos (e sem default_client/caminhos com nomes)
         try:
             z.writestr("config.redacted.toml",

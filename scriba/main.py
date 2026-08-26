@@ -949,9 +949,18 @@ class ScribaApp:
 
         if travado:
             parado_min = (time.monotonic() - ultimo_sinal) / 60
+            # foto da máquina ANTES de matar: é o único registro do instante real
+            # do travamento - o Diagnóstico roda depois, com a carga já outra
+            # (#182/#183: travas em CUDA chegavam sem GPU, driver nem VRAM)
+            try:
+                from . import sysprobe
+
+                foto = sysprobe.snapshot_line()
+            except Exception:
+                foto = "(snapshot indisponivel)"
             log.error("processamento de %s TRAVADO: %.0f min sem progresso (CPU, meta.json e "
-                      "process.log parados) - encerrando o subprocesso pid=%s",
-                      folder.name, parado_min, proc.pid)
+                      "process.log parados) - encerrando o subprocesso pid=%s · maquina no "
+                      "momento: %s", folder.name, parado_min, proc.pid, foto)
             self._matar_filho(proc, folder)
             self.ui(self._hide_pill_if_processing)
             self._marcar_falha(
