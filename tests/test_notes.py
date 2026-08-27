@@ -877,5 +877,51 @@ class ArchiveOldActionItemsTests(unittest.TestCase):
         self.assertEqual(before, after)  # estado vive só no sidecar; .md intacto
 
 
+class BuildNotesBakTests(unittest.TestCase):
+    """#186: reprocessar sobrescreve a nota exportada, que pode ter edição manual -
+    a versão anterior fica preservada ao lado como .bak (padrão do promptgen)."""
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp(prefix="scriba_bak_"))
+        self.rec = self.d / "rec" / "09-30"
+        self.rec.mkdir(parents=True)
+        self.export = self.d / "notas"
+        (self.rec / "meta.json").write_text(json.dumps({
+            "status": "transcribed", "started_at": "2026-08-27T09:30:00",
+            "duration_seconds": 120.0}), encoding="utf-8")
+        (self.rec / "transcript.json").write_text(json.dumps(
+            [{"start": 0.0, "end": 2.0, "speaker": "Eu", "text": "olá"}]),
+            encoding="utf-8")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def _build(self):
+        cfg = _FakeCfg(_FakeOutput(self.export, self.d / "rec"))
+        with mock.patch("scriba.notes.load", return_value=cfg), \
+                mock.patch("scriba.notes.generate_summary",
+                           return_value=("## Resumo\nok", "Titulo X", "")), \
+                mock.patch("scriba.notes.load_context_note", return_value=""), \
+                mock.patch("scriba.meetings_index.index_meeting"):
+            return notes.build_notes(self.rec)
+
+    def test_primeira_exportacao_nao_cria_bak(self):
+        export = self._build()
+        self.assertTrue(export.exists())
+        self.assertEqual(list(self.export.glob("*.bak")), [])
+
+    def test_reprocesso_preserva_a_nota_anterior_como_bak(self):
+        export = self._build()
+        export.write_text("nota editada à mão", encoding="utf-8")
+        # reprocesso (o meta já saiu de done/transcribed na vida real; aqui basta
+        # o transcript existir): a edição manual sobrevive no .bak
+        export2 = self._build()
+        self.assertEqual(export2, export)
+        bak = export.with_suffix(".md.bak")
+        self.assertEqual(bak.read_text(encoding="utf-8"), "nota editada à mão")
+        self.assertIn("Titulo X", export.read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

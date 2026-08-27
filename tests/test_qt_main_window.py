@@ -81,6 +81,29 @@ class MainWindowTests(unittest.TestCase):
         self.assertNotIn("Abrir pasta da gravação", texts)
         self.assertTrue(any("Excluir" in t for t in texts), texts)
 
+    def test_menu_da_reuniao_recente_tem_reprocessar(self):
+        """#186: reunião recente com gravação viva ganha o submenu Reprocessar
+        (mesmo builder da janela de Notas; a habilitação fina é testada lá)."""
+        import json
+        import tempfile
+
+        d = Path(tempfile.mkdtemp(prefix="scriba_qtmw_rp_"))
+        (d / "meta.json").write_text(json.dumps(
+            {"status": "done", "streams": {"mic": {"file": "mic.wav"}}}),
+            encoding="utf-8")
+        (d / "mic.wav").write_bytes(b"\0" * 100)
+        (d / "transcript.json").write_text("[]", encoding="utf-8")
+        win = self._win()
+        m = {"export_path": "C:/x/nota.md", "folder": str(d),
+             "title": "Reunião de teste", "started_at": "2026-08-27T10:00:00"}
+        subs = [a.menu() for a in win._recent_menu_actions(m).actions()
+                if a.menu() is not None]
+        self.assertEqual([s.title() for s in subs], ["Reprocessar"])
+        acoes = subs[0].actions()
+        self.assertEqual([a.text() for a in acoes],
+                         ["Refazer o resumo", "Refazer tudo"])
+        self.assertTrue(all(a.isEnabled() for a in acoes))
+
     def test_render_status_cria_uma_linha_por_item(self):
         win = self._win()
         win._render_status([

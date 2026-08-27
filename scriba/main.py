@@ -39,6 +39,11 @@ _SONDA_PROGRESSO_S = 30.0       # de quanto em quanto tempo os sinais são lidos
 _PARADO_S = 20 * 60             # tudo parado por mais que isto = travado
 _CPU_DELTA_MIN = 0.5            # s de CPU que já contam como "andou"
 
+# Marca estável da falha gravada pelo watchdog acima: o scan_pending readota por
+# ela (#186). NÃO mudar o texto - reuniões já falhadas nas máquinas dos usuários
+# carregam a frase em meta["error"], e é por ela que a readoção as reconhece.
+_ERRO_WATCHDOG = "sem nenhum sinal de progresso"
+
 
 def _andou(antes: tuple, depois: tuple) -> bool:
     """Houve QUALQUER sinal de progresso entre duas sondagens do filho?
@@ -87,6 +92,10 @@ class ScribaApp:
         self.stop_event = threading.Event()
         self.ui_queue: queue.Queue = queue.Queue()
         self.jobs: queue.Queue = queue.Queue()
+        # pastas com reprocesso MANUAL (#186) esperando na fila: o menu desabilita
+        # e o enqueue recusa duplicata (dois cliques = duas passadas de GPU à toa).
+        # add na thread da GUI, discard no worker: operações atômicas de set.
+        self._reprocess_queued: set[str] = set()
         self.rec: Recording | None = None
         self.rec_source = "auto"
         self.rec_lock = threading.Lock()
@@ -867,8 +876,13 @@ class ScribaApp:
             log.exception("não consegui encerrar o subprocesso de %s", folder.name)
         util.clear_lock(folder, proc.pid)
 
-    def _process_subprocess(self, folder) -> None:
+    def _process_subprocess(self, folder, verb: str = "process") -> None:
         """Carrega o modelo, transcreve e gera a nota num subprocesso isolado.
+
+        `verb` é o subcomando da CLI a rodar na pasta: "process" (fluxo completo,
+        o padrão de sempre) ou "summarize" (reprocesso barato pedido pela UI,
+        #186 - reusa o transcript.json e não toca a GPU). O acompanhamento é o
+        mesmo nos dois: watchdog de progresso, failed terminal, pós-sucesso.
 
         A saída vai para process.log NA PASTA DA REUNIÃO — nunca para PIPE: os
         warnings nativos (ex.: torchcodec, ~8 KB no import do pyannote) enchiam
@@ -893,15 +907,15 @@ class ScribaApp:
                      folder.name)
             self.ui(self._hide_pill_if_processing)
             return
-        log.info("processando %s (subprocesso)", folder.name)
-        args = util.app_command("process", str(folder))
+        log.info("processando %s (subprocesso: %s)", folder.name, verb)
+        args = util.app_command(verb, str(folder))
         meta_path = folder / "meta.json"
         log_path = folder / "process.log"
         out = None
         try:
             try:
                 out = open(log_path, "a", encoding="utf-8", errors="replace")
-                out.write(f"\n==== scriba process · {time.strftime('%d/%m/%Y %H:%M:%S')} ====\n")
+                out.write(f"\n==== scriba {verb} · {time.strftime('%d/%m/%Y %H:%M:%S')} ====\n")
                 out.flush()
             except OSError:
                 out = None  # sem log em disco; segue com DEVNULL
@@ -965,9 +979,9 @@ class ScribaApp:
             self.ui(self._hide_pill_if_processing)
             self._marcar_falha(
                 meta_path, folder,
-                f"processamento encerrado pelo ScribaDev: ficou {parado_min:.0f} min sem "
-                f"nenhum sinal de progresso (nem CPU, nem log). Detalhes em process.log; "
-                f"para tentar de novo: scribadev process")
+                f"processamento encerrado pelo ScribaDev: ficou {parado_min:.0f} min "
+                f"{_ERRO_WATCHDOG} (nem CPU, nem log). Detalhes em process.log; para "
+                f"tentar de novo: botão direito na reunião → Reprocessar")
             self._toast("ScribaDev: processamento travado",
                         f"{folder.name} parou de responder e foi encerrado - a fila seguiu.")
             return
@@ -1001,6 +1015,11 @@ class ScribaApp:
         export_path = title = None
         try:
             done_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            # sucesso fecha o episódio de watchdog (#186): sem o carimbo, uma
+            # PRÓXIMA falha de watchdog volta a ter direito à readoção única
+            if done_meta.pop("watchdog_requeued", None):
+                util.atomic_write_text(
+                    meta_path, json.dumps(done_meta, ensure_ascii=False, indent=2))
             export_path = done_meta.get("export_path")
             title = done_meta.get("title")
             # diarização falhou mas o processamento seguiu (com "Participantes"): o erro
@@ -1060,17 +1079,68 @@ class ScribaApp:
         log.info("concluído %s -> %s", folder.name, export_path)
 
     def _worker(self) -> None:
-        """Fila serial de processamento: gravações recém-encerradas e pendências
-        órfãs de sessões anteriores passam por aqui, uma de cada vez."""
+        """Fila serial de processamento: gravações recém-encerradas, pendências
+        órfãs de sessões anteriores e reprocessos manuais (#186) passam por aqui,
+        uma de cada vez. Item = pasta (fluxo completo) ou (pasta, verbo da CLI)."""
         while not self.stop_event.is_set():
             try:
-                folder = self.jobs.get(timeout=1)
+                item = self.jobs.get(timeout=1)
             except queue.Empty:
                 continue
+            folder, verb = item if isinstance(item, tuple) else (item, "process")
             try:
-                self._process_subprocess(folder)
+                self._process_subprocess(folder, verb)
             except Exception:
                 log.exception("worker: erro ao processar %s", getattr(folder, "name", folder))
+            finally:
+                # só DEPOIS de processar: o summarize não cria .lock, então soltar
+                # o dedup na retirada da fila reabriria o menu no meio do job
+                self._reprocess_queued.discard(str(folder))
+
+    # ------------------------------------------------- reprocesso manual (#186) --
+
+    def is_reprocess_queued(self, folder) -> bool:
+        """True se a pasta já espera um reprocesso manual na fila (o menu desabilita)."""
+        return str(folder) in self._reprocess_queued
+
+    def enqueue_reprocess(self, folder, verb: str) -> None:
+        """Reprocesso pedido pelo menu Reprocessar (#186), na MESMA fila serial do
+        processamento normal - dois Whisper na mesma GPU já travou calls seguidas.
+
+        `verb` é o subcomando da CLI: "summarize" (refaz resumo + nota reusando o
+        transcript.json) ou "process" (refaz tudo a partir do áudio). A nota
+        exportada anterior fica preservada como .bak (notes.build_notes).
+        """
+        import json
+        from pathlib import Path
+
+        from . import addons
+
+        folder = Path(folder)
+        if addons.is_installing():
+            # o worker adiaria e o job se perderia (reunião done não volta pela
+            # varredura de pendentes) - recusar já, com o motivo, em vez de sumir
+            # com o clique
+            self._toast("Componentes em instalação",
+                        "Espere a instalação terminar e peça o reprocesso de novo.")
+            return
+        if str(folder) in self._reprocess_queued:
+            self._toast("Já está na fila", folder.name)
+            return
+        # intervenção manual zera o episódio de watchdog: se ESTE reprocesso
+        # travar, a readoção automática do próximo boot volta a valer
+        meta_path = folder / "meta.json"
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if meta.pop("watchdog_requeued", None):
+                util.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
+        except (OSError, ValueError):
+            pass
+        self._reprocess_queued.add(str(folder))
+        self.jobs.put((folder, verb))
+        log.info("reprocesso manual (%s) enfileirado: %s", verb, folder.name)
+        self._toast("Reprocessamento na fila",
+                    f"{folder.name} - a nota atual fica guardada como .bak")
 
     def scan_pending(self) -> None:
         """Enfileira reuniões gravadas que ainda não viraram notas (ex.: app caiu)."""
@@ -1102,21 +1172,36 @@ class ScribaApp:
                 status = "recorded"
             # além de recorded/transcribed, readota também quem morreu NO MEIO do
             # processamento (transcribing/diarizing/summarizing presos por crash ou
-            # kill) - "failed" é terminal e não volta sozinho (retry: scriba process)
-            # ...COM UMA exceção (#167): failed por EACCES no addons é vítima da
-            # instalação de componentes, transitório por definição - readota
-            retryable = (status == "failed" and
-                         "addons" in str(meta.get("error") or "") and
-                         "Permission denied" in str(meta.get("error") or ""))
-            if retryable or status in ("recorded", "transcribed", "transcribing",
-                                       "diarizing", "summarizing"):
+            # kill) - "failed" é terminal e não volta sozinho (retry: menu
+            # Reprocessar) ...COM DUAS exceções, transitórias por definição:
+            # - EACCES no addons (#167): vítima da instalação de componentes;
+            # - derrubada pelo watchdog (#186): o travamento era do AMBIENTE (ex.:
+            #   o CUDA quebrado da #185), não da reunião. Uma readoção POR FALHA
+            #   (carimbo watchdog_requeued; travou de novo = fica parada, sem
+            #   laço mata-readota-mata) e só com áudio utilizável - re-transcrever
+            #   sem áudio degradaria a falha para um "no_audio" terminal.
+            err = str(meta.get("error") or "")
+            retry_addons = (status == "failed" and
+                            "addons" in err and "Permission denied" in err)
+            retry_watchdog = (status == "failed" and _ERRO_WATCHDOG in err and
+                              not meta.get("watchdog_requeued") and
+                              util.has_audio(meta_path.parent, meta))
+            if retry_addons or retry_watchdog or status in (
+                    "recorded", "transcribed", "transcribing",
+                    "diarizing", "summarizing"):
                 # não readota pasta com .lock ativo (PID vivo/recente): pode haver
                 # um 'scriba process' manual em andamento sobre a mesma reunião
                 if util.is_locked(meta_path.parent):
                     log.info("pendente pulada (.lock ativo): %s", meta_path.parent.name)
                     continue
-                if retryable:
+                if retry_addons:
                     log.info("reunião falhada pela instalação de componentes readotada: %s",
+                             meta_path.parent.name)
+                if retry_watchdog:
+                    meta["watchdog_requeued"] = True
+                    util.atomic_write_text(
+                        meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
+                    log.info("reunião derrubada pelo watchdog readotada (única vez): %s",
                              meta_path.parent.name)
                 self.jobs.put(meta_path.parent)
                 count += 1

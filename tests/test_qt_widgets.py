@@ -5,9 +5,11 @@ layout de monitores muda; a persistência do splitter guarda a divisão dos pain
 state.json (mesma infra do remember_geometry, não QSettings)."""
 
 import importlib.util
+import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -190,6 +192,108 @@ class FocoNoMacTests(unittest.TestCase):
 
         widgets.bring_to_front(FakeWidget())
         self.assertEqual(chamou, ["raise", "activate"])
+
+
+class _ReprocessApp:
+    """App fake p/ o submenu (#186): registra o que o clique enfileira."""
+
+    def __init__(self, queued: bool = False):
+        self.calls = []
+        self._queued = queued
+
+    def is_reprocess_queued(self, _folder) -> bool:
+        return self._queued
+
+    def enqueue_reprocess(self, folder, verb) -> None:
+        self.calls.append((folder, verb))
+
+
+@unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")
+class ReprocessSubmenuTests(unittest.TestCase):
+    """Submenu "Reprocessar" (#186): fonte única dos menus da capa e de Notas -
+    habilitação por insumo vivo (transcript p/ resumo, áudio p/ tudo), tudo
+    desabilitado com .lock/fila, e nada anexado sem meta.json legível."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp(prefix="scriba_rpmenu_"))
+        self._meta({"status": "done", "streams": {"mic": {"file": "mic.wav"}}})
+
+    def _meta(self, meta: dict) -> None:
+        (self.d / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+
+    def _sub(self, app=None):
+        from PySide6.QtWidgets import QMenu
+
+        from scriba.qt import widgets
+
+        menu = QMenu()
+        sub = widgets.reprocess_submenu(menu, self.d, app or _ReprocessApp())
+        return menu, sub
+
+    def test_insumos_completos_habilitam_as_duas_acoes(self):
+        (self.d / "mic.wav").write_bytes(b"\0" * 100)
+        (self.d / "transcript.json").write_text("[]", encoding="utf-8")
+        _menu, sub = self._sub()
+        self.assertEqual([a.text() for a in sub.actions()],
+                         ["Refazer o resumo", "Refazer tudo"])
+        self.assertTrue(all(a.isEnabled() for a in sub.actions()))
+
+    def test_sem_transcript_desabilita_o_resumo(self):
+        (self.d / "mic.wav").write_bytes(b"\0" * 100)
+        _menu, sub = self._sub()
+        resumo, tudo = sub.actions()
+        self.assertFalse(resumo.isEnabled())
+        self.assertIn("transcript.json", resumo.toolTip())
+        self.assertTrue(tudo.isEnabled())
+
+    def test_sem_audio_desabilita_refazer_tudo(self):
+        # retenção/keep_audio=false levaram o áudio; o transcript sobreviveu
+        (self.d / "transcript.json").write_text("[]", encoding="utf-8")
+        _menu, sub = self._sub()
+        resumo, tudo = sub.actions()
+        self.assertTrue(resumo.isEnabled())
+        self.assertFalse(tudo.isEnabled())
+        self.assertIn("apagado", tudo.toolTip())
+
+    def test_lock_ativo_desabilita_o_submenu_inteiro(self):
+        (self.d / "mic.wav").write_bytes(b"\0" * 100)
+        (self.d / "transcript.json").write_text("[]", encoding="utf-8")
+        (self.d / ".lock").write_text(
+            json.dumps({"pid": os.getpid(), "started": time.time()}), encoding="utf-8")
+        _menu, sub = self._sub()
+        self.assertFalse(any(a.isEnabled() for a in sub.actions()))
+
+    def test_ja_na_fila_desabilita_o_submenu_inteiro(self):
+        (self.d / "mic.wav").write_bytes(b"\0" * 100)
+        _menu, sub = self._sub(_ReprocessApp(queued=True))
+        self.assertFalse(any(a.isEnabled() for a in sub.actions()))
+
+    def test_em_processamento_desabilita_o_submenu_inteiro(self):
+        self._meta({"status": "transcribing"})
+        _menu, sub = self._sub()
+        self.assertFalse(any(a.isEnabled() for a in sub.actions()))
+
+    def test_sem_meta_legivel_nao_anexa_nada(self):
+        (self.d / "meta.json").unlink()
+        menu, sub = self._sub()
+        self.assertIsNone(sub)
+        self.assertEqual(menu.actions(), [])
+
+    def test_clique_enfileira_o_verbo_certo(self):
+        (self.d / "mic.wav").write_bytes(b"\0" * 100)
+        (self.d / "transcript.json").write_text("[]", encoding="utf-8")
+        app = _ReprocessApp()
+        _menu, sub = self._sub(app)
+        resumo, tudo = sub.actions()
+        resumo.trigger()
+        tudo.trigger()
+        self.assertEqual(app.calls, [(self.d, "summarize"), (self.d, "process")])
 
 
 if __name__ == "__main__":

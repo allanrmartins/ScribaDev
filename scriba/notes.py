@@ -652,6 +652,13 @@ def build_notes(folder: Path) -> Path | None:
     export_dir = load().output.resolved_export_dir()
     export_dir.mkdir(parents=True, exist_ok=True)
     export_path = export_dir / f"{_export_stem(meta, folder)}_reuniao.md"
+    if export_path.exists():
+        # reprocessar (#186) sobrescreve uma nota que pode ter edição manual: a
+        # versão anterior fica ao lado como .bak (mesmo padrão do promptgen)
+        try:
+            shutil.copyfile(export_path, export_path.with_suffix(".md.bak"))
+        except OSError as e:
+            print(f"AVISO: não guardei o .bak da nota anterior ({e})")
     shutil.copyfile(md_path, export_path)
 
     meta["status"] = "done"

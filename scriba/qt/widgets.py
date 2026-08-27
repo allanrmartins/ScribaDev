@@ -816,3 +816,75 @@ class Collapsible(QWidget):
         self._render_hdr()
         if self._content is not None:
             self._content.setVisible(self._open)
+
+
+# == submenu "Reprocessar" (#186) =============================================
+
+def reprocess_submenu(menu, folder, app):
+    """Anexa o submenu "Reprocessar" a um menu de contexto de reunião (#186).
+
+    Fonte única para a capa (reunião recente) e a janela de Notas (nota pronta e
+    reunião falhada): mesmas opções, mesma habilitação. As duas ações:
+      - Refazer o resumo -> CLI `summarize` (barato: reusa o transcript.json);
+      - Refazer tudo     -> CLI `process` (re-transcreve do áudio + nota nova).
+    "Refazer a transcrição" separado não existe de propósito: pela UI o resultado
+    visível é a NOTA, então re-transcrever sempre termina regenerando a nota -
+    que é exatamente o que o `process` faz.
+
+    Cada opção só habilita com o insumo vivo (resumo pede transcript.json; tudo
+    pede áudio ainda em disco - retenção e keep_audio=false apagam), e o motivo
+    fica no tooltip da opção desabilitada. Reunião com .lock ativo, em
+    processamento ou já na fila ganha o submenu inteiro desabilitado. Sem
+    meta.json legível (ex.: pasta apagada), nada é anexado. Devolve o QMenu
+    criado, ou None.
+    """
+    import json
+    from pathlib import Path
+
+    from PySide6.QtWidgets import QMenu
+
+    folder = Path(folder)
+    try:
+        meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+    # parent explícito no construtor: menu.addMenu(icon, título) deixaria a
+    # ownership do C++ com o wrapper Python retornado - o submenu morria junto
+    # com a variável local e o clique abria um menu já deletado (libshiboken)
+    sub = QMenu("Reprocessar", menu)
+    sub.setIcon(theme.qicon("refresh"))
+    menu.addMenu(sub)
+    sub.setToolTipsVisible(True)
+    resumo = sub.addAction(theme.qicon("sparkle"), "Refazer o resumo",
+                           lambda: app.enqueue_reprocess(folder, "summarize"))
+    tudo = sub.addAction(theme.qicon("refresh"), "Refazer tudo",
+                         lambda: app.enqueue_reprocess(folder, "process"))
+
+    if util.is_locked(folder):
+        busy = "Esta reunião está sendo processada agora."
+    elif (meta.get("status") in util.IN_PROGRESS_STATUSES
+          or getattr(app, "is_reprocess_queued", lambda _f: False)(folder)):
+        busy = "Esta reunião já está na fila de processamento."
+    else:
+        busy = None
+    if busy:
+        for a in (resumo, tudo):
+            a.setEnabled(False)
+            a.setToolTip(busy)
+        return sub
+
+    if (folder / "transcript.json").exists():
+        resumo.setToolTip("Rápido: reusa a transcrição já feita e regenera a nota. "
+                          "A nota atual fica guardada como .bak.")
+    else:
+        resumo.setEnabled(False)
+        resumo.setToolTip("Sem transcrição salva (transcript.json) nesta gravação.")
+    if util.has_audio(folder, meta):
+        tudo.setToolTip("Transcreve o áudio de novo e regenera a nota. "
+                        "A nota atual fica guardada como .bak.")
+    else:
+        tudo.setEnabled(False)
+        tudo.setToolTip("O áudio desta gravação já foi apagado "
+                        "(retenção ou keep_audio desligado).")
+    return sub

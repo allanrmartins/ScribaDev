@@ -628,6 +628,40 @@ def is_locked(folder: Path) -> bool:
     return True
 
 
+def has_audio(folder: Path, meta: dict | None = None) -> bool:
+    """True se a gravação ainda tem áudio utilizável para (re)transcrever (#186).
+
+    Fonte única para o menu Reprocessar (habilitar "Refazer tudo") e para a
+    readoção automática do scan_pending: re-transcrever sem áudio só produziria
+    um "no_audio" terminal por cima do status atual.
+
+    O áudio de verdade é o que o meta aponta em streams[*].file - pós-arquivamento
+    ele pode ser .opus/.flac, não .wav. `audio_removed` (keep_audio=false) é um
+    não definitivo. Meta legado sem streams cai num glob defensivo. Arquivo com
+    até 44 bytes é só o header WAV: nada gravado.
+    """
+    folder = Path(folder)
+    if meta is None:
+        try:
+            meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            meta = {}
+    if meta.get("audio_removed"):
+        return False
+    candidates = [folder / s["file"]
+                  for s in (meta.get("streams") or {}).values() if s and s.get("file")]
+    if not candidates:
+        candidates = [p for ext in ("*.wav", "*.opus", "*.flac") for p in folder.glob(ext)]
+
+    def _gravado(p: Path) -> bool:
+        try:
+            return p.stat().st_size > 44
+        except OSError:
+            return False
+
+    return any(_gravado(p) for p in candidates)
+
+
 def virtual_screen_rect() -> tuple[int, int, int, int] | None:
     """Retângulo que engloba TODOS os monitores: (x, y, largura, altura) em
     coordenadas virtuais do Windows — inclui telas à esquerda/acima do primário

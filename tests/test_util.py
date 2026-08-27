@@ -278,5 +278,55 @@ class ProcessingStagesTests(unittest.TestCase):
             self.assertEqual(util.stage(status).icon, icon)
 
 
+class HasAudioTests(unittest.TestCase):
+    """util.has_audio (#186): decide se "Refazer tudo" habilita no menu Reprocessar
+    e se o scan_pending pode readotar uma falha de watchdog (re-transcrever sem
+    áudio só degradaria a falha para no_audio)."""
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp(prefix="scriba_ha_"))
+
+    def _meta(self, **extra) -> dict:
+        meta = {"status": "done", "streams": {"mic": {"file": "mic.wav"}}}
+        meta.update(extra)
+        (self.d / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+        return meta
+
+    def test_stream_com_wav_gravado(self):
+        meta = self._meta()
+        (self.d / "mic.wav").write_bytes(b"\0" * 100)
+        self.assertTrue(util.has_audio(self.d, meta))
+
+    def test_audio_removed_e_nao_definitivo(self):
+        # keep_audio=false: os arquivos foram apagados DE PROPÓSITO
+        meta = self._meta(audio_removed=True)
+        (self.d / "mic.wav").write_bytes(b"\0" * 100)
+        self.assertFalse(util.has_audio(self.d, meta))
+
+    def test_arquivo_apontado_sumiu(self):
+        self.assertFalse(util.has_audio(self.d, self._meta()))
+
+    def test_so_header_wav_nao_conta(self):
+        meta = self._meta()
+        (self.d / "mic.wav").write_bytes(b"\0" * 44)   # header sem uma amostra
+        self.assertFalse(util.has_audio(self.d, meta))
+
+    def test_pos_arquivamento_opus_conta(self):
+        # archive_format=opus: o meta aponta .opus, não .wav
+        meta = self._meta(streams={"mic": {"file": "mic.opus"}})
+        (self.d / "mic.opus").write_bytes(b"\0" * 100)
+        self.assertTrue(util.has_audio(self.d, meta))
+
+    def test_meta_legado_sem_streams_cai_no_glob(self):
+        meta = self._meta(streams={})
+        (self.d / "loopback.wav").write_bytes(b"\0" * 100)
+        self.assertTrue(util.has_audio(self.d, meta))
+
+    def test_sem_meta_em_maos_le_do_disco(self):
+        self._meta()
+        (self.d / "mic.wav").write_bytes(b"\0" * 100)
+        self.assertTrue(util.has_audio(self.d))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

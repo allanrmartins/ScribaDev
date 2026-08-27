@@ -345,6 +345,42 @@ class NotesWindowSmokeTests(unittest.TestCase):
         self.assertTrue(any("Excluir" in t for t in texts))
         # esta nota de teste não tem voices.json -> sem "Rotular vozes" no menu
         self.assertFalse(any("Rotular" in t for t in texts))
+        # sem pasta de gravação no disco (meta ilegível) -> sem submenu Reprocessar
+        self.assertFalse(any(a.menu() is not None for a in menu.actions()))
+
+    def test_menu_da_nota_tem_reprocessar_quando_ha_gravacao(self):
+        """#186: nota com a pasta da gravação viva ganha o submenu Reprocessar;
+        cada opção habilita conforme o insumo (aqui: transcript sim, áudio não)."""
+        win = self._win()
+        rec = Path(win.app.cfg.output.resolved_recordings_dir()) / "2026-07-02_15-30_Boleto"
+        rec.mkdir(parents=True)
+        (rec / "meta.json").write_text(json.dumps({"status": "done"}), encoding="utf-8")
+        (rec / "transcript.json").write_text("[]", encoding="utf-8")
+        menu = win._build_tree_menu(Path(win._notes_dir()) / "2026-07-02_15-30_Boleto.md")
+        subs = [a.menu() for a in menu.actions() if a.menu() is not None]
+        self.assertEqual([s.title() for s in subs], ["Reprocessar"])
+        resumo, tudo = subs[0].actions()
+        self.assertTrue(resumo.isEnabled())    # transcript.json existe
+        self.assertFalse(tudo.isEnabled())     # sem áudio no disco
+
+    def test_menu_da_reuniao_falhada_oferece_reprocessar(self):
+        """#186: reunião FALHADA agora tem menu de contexto próprio - antes o
+        clique-direito não abria nada, e o retry ficava só no terminal."""
+        win = self._win()
+        rec = Path(win.app.cfg.output.resolved_recordings_dir()) / "falhada"
+        rec.mkdir(parents=True)
+        (rec / "meta.json").write_text(json.dumps(
+            {"status": "failed", "error": "boom",
+             "streams": {"mic": {"file": "mic.wav"}}}), encoding="utf-8")
+        (rec / "mic.wav").write_bytes(b"\0" * 100)
+        menu = win._build_failed_menu(rec)
+        texts = [a.text() for a in menu.actions() if a.text()]
+        self.assertIn("Abrir pasta da gravação", texts)
+        subs = [a.menu() for a in menu.actions() if a.menu() is not None]
+        self.assertEqual([s.title() for s in subs], ["Reprocessar"])
+        resumo, tudo = subs[0].actions()
+        self.assertFalse(resumo.isEnabled())   # a falha veio antes do transcript
+        self.assertTrue(tudo.isEnabled())      # áudio vivo: refazer tudo resolve
 
     def test_lista_vazia_mostra_mensagem(self):
         from scriba.qt.notes_ui import NotesWindow

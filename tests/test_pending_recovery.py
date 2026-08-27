@@ -19,6 +19,7 @@ import os
 import queue
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -53,8 +54,10 @@ class ScanPendingTests(unittest.TestCase):
         app.cfg = SimpleNamespace(
             output=SimpleNamespace(resolved_recordings_dir=lambda: self.root),
             detection=SimpleNamespace(min_call_seconds=60),
+            timesheet=SimpleNamespace(enabled=False, suggest=False),
         )
         app.jobs = queue.Queue()
+        app._reprocess_queued = set()
         app._toast = mock.Mock()
         return app
 
@@ -125,6 +128,39 @@ class ScanPendingTests(unittest.TestCase):
         app.scan_pending()
         self.assertEqual(self._queued(app), ["vitima"])
 
+    _ERRO_WD = ("processamento encerrado pelo ScribaDev: ficou 20 min sem nenhum "
+                "sinal de progresso (nem CPU, nem log). Detalhes em process.log")
+
+    def test_readota_failed_do_watchdog_uma_unica_vez(self):
+        """#186: derrubada pelo watchdog é transitória como a do EACCES (o
+        travamento era do AMBIENTE, ex.: o CUDA da #185) - volta UMA vez por
+        falha, com carimbo no meta; travar de novo = fica parada, sem laço."""
+        d = _meeting(self.root, "derrubada", {
+            "status": "failed", "error": self._ERRO_WD,
+            "streams": {"mic": {"file": "mic.wav"}}})
+        (d / "mic.wav").write_bytes(b"\0" * 100)
+        app = self._app()
+        app.scan_pending()
+        self.assertEqual(self._queued(app), ["derrubada"])
+        meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+        self.assertTrue(meta["watchdog_requeued"])   # a vez dela já foi gasta
+        # segundo boot com a MESMA falha: terminal de verdade
+        app2 = self._app()
+        app2.scan_pending()
+        self.assertEqual(self._queued(app2), [])
+
+    def test_nao_readota_watchdog_sem_audio_utilizavel(self):
+        """Re-transcrever sem áudio degradaria a falha para "no_audio" - deixa
+        parada (o menu Reprocessar ainda oferece o re-resumo, se houver transcript)."""
+        d = _meeting(self.root, "sem_audio", {
+            "status": "failed", "error": self._ERRO_WD,
+            "streams": {"mic": {"file": "mic.wav"}}})   # o arquivo não existe
+        app = self._app()
+        app.scan_pending()
+        self.assertEqual(self._queued(app), [])
+        meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+        self.assertNotIn("watchdog_requeued", meta)   # não gastou a vez à toa
+
     def test_processamento_adiado_durante_instalacao(self):
         """#167: com o marcador .installing ativo, o worker NÃO sobe o
         subprocesso - a reunião fica como está para a varredura readotar."""
@@ -139,23 +175,26 @@ class ScanPendingTests(unittest.TestCase):
         meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
         self.assertEqual(meta["status"], "recorded")   # intacta, readotável
 
-    def _run_com_rc(self, folder, rc: int, saida: str = ""):
-        """Roda _process_subprocess com o subprocesso FALSO saindo com `rc`."""
+    def _run_com_rc(self, folder, rc: int, saida: str = "", verb: str = "process"):
+        """Roda _process_subprocess com o subprocesso FALSO saindo com `rc`.
+        O mock de util.app_command fica em app.cmd_mock (p/ conferir o verbo)."""
         from scriba import util
 
         app = self._app()
         app.ui = lambda f: f()
         app._hide_pill_if_processing = lambda: None
         app._pill_processing = lambda _s: None
+        app._refresh_home_after_process = lambda: None
         if saida:
             (folder / "process.log").write_text(saida, encoding="utf-8")
         proc = mock.Mock()
         proc.poll.return_value = rc
         proc.returncode = rc
         with mock.patch("scriba.addons.is_installing", return_value=False), \
-                mock.patch.object(util, "app_command", return_value=["x"]), \
+                mock.patch.object(util, "app_command", return_value=["x"]) as cmd, \
                 mock.patch("subprocess.Popen", return_value=proc):
-            app._process_subprocess(folder)
+            app.cmd_mock = cmd
+            app._process_subprocess(folder, verb)
         return app, json.loads((folder / "meta.json").read_text(encoding="utf-8"))
 
     def test_rc_de_componentes_danificados_vira_mensagem_acionavel(self):
@@ -187,6 +226,80 @@ class ScanPendingTests(unittest.TestCase):
         app, meta = self._run_com_rc(d, 1, saida="ValueError: audio corrompido")
         self.assertIn("audio corrompido", meta["error"])
         self.assertIn("falha ao processar", app._toast.call_args[0][0].casefold())
+
+    def test_verbo_summarize_monta_o_comando_da_cli(self):
+        # #186: o reprocesso barato roda `scriba summarize <pasta>` no subprocesso
+        d = _meeting(self.root, "m4", {"status": "done"})
+        app, _meta = self._run_com_rc(d, 0, verb="summarize")
+        app.cmd_mock.assert_called_once_with("summarize", str(d))
+
+    def test_sucesso_limpa_o_carimbo_do_watchdog(self):
+        # #186: episódio fechado - a PRÓXIMA falha de watchdog readota de novo
+        d = _meeting(self.root, "m5", {"status": "done", "watchdog_requeued": True})
+        _app, meta = self._run_com_rc(d, 0)
+        self.assertNotIn("watchdog_requeued", meta)
+
+
+class ReprocessoManualTests(unittest.TestCase):
+    """#186: enqueue_reprocess (o que o menu Reprocessar chama) e o item com
+    verbo na fila serial - o worker normaliza e libera o dedup."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="scriba_rp_"))
+
+    def _app(self):
+        app = ScribaApp.__new__(ScribaApp)
+        app.jobs = queue.Queue()
+        app._reprocess_queued = set()
+        app._toast = mock.Mock()
+        return app
+
+    def test_enfileira_com_verbo_e_limpa_o_carimbo_do_watchdog(self):
+        d = _meeting(self.root, "m1", {"status": "done", "watchdog_requeued": True})
+        app = self._app()
+        with mock.patch("scriba.addons.is_installing", return_value=False):
+            app.enqueue_reprocess(d, "summarize")
+        self.assertEqual(app.jobs.get_nowait(), (d, "summarize"))
+        # intervenção manual zera o episódio: o retry automático volta a valer
+        meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+        self.assertNotIn("watchdog_requeued", meta)
+        self.assertTrue(app.is_reprocess_queued(d))
+
+    def test_clique_duplo_nao_duplica_o_job(self):
+        # duas passadas de GPU na mesma reunião por clique duplo = desperdício
+        d = _meeting(self.root, "m1", {"status": "done"})
+        app = self._app()
+        with mock.patch("scriba.addons.is_installing", return_value=False):
+            app.enqueue_reprocess(d, "process")
+            app.enqueue_reprocess(d, "process")
+        app.jobs.get_nowait()
+        self.assertTrue(app.jobs.empty())
+
+    def test_instalacao_de_componentes_recusa_com_aviso(self):
+        # o worker adiaria e o clique sumiria (done não volta pela varredura):
+        # melhor recusar já, com o motivo no toast
+        d = _meeting(self.root, "m1", {"status": "done"})
+        app = self._app()
+        with mock.patch("scriba.addons.is_installing", return_value=True):
+            app.enqueue_reprocess(d, "process")
+        self.assertTrue(app.jobs.empty())
+        self.assertIn("instalação", app._toast.call_args[0][0].casefold())
+
+    def test_worker_normaliza_o_item_e_libera_o_dedup(self):
+        d = _meeting(self.root, "m1", {"status": "done"})
+        app = self._app()
+        app.stop_event = threading.Event()
+        app._reprocess_queued = {str(d)}
+        app.jobs.put((d, "summarize"))
+        feito = threading.Event()
+        app._process_subprocess = mock.Mock(side_effect=lambda *_a: feito.set())
+        t = threading.Thread(target=app._worker, daemon=True)
+        t.start()
+        self.assertTrue(feito.wait(timeout=5))
+        app.stop_event.set()
+        t.join(timeout=5)
+        app._process_subprocess.assert_called_once_with(d, "summarize")
+        self.assertEqual(app._reprocess_queued, set())
 
 
 class WatchdogDoSubprocessoTests(unittest.TestCase):

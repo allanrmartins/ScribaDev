@@ -735,6 +735,7 @@ def qss(theme: Theme | None = None) -> str:
     }}
     QMenu::item {{ padding: 5px 24px 5px 12px; border-radius: {t.radius_sm}px; }}
     QMenu::item:selected {{ background-color: {t.accent}; color: {t.on_accent}; }}
+    QMenu::item:disabled {{ color: {t.faint}; }}
     QMenu::separator {{ height: 1px; background: {t.border}; margin: 4px 8px; }}
     """
 

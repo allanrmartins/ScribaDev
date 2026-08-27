@@ -716,6 +716,9 @@ class MainWindow(QWidget):
         if folder.is_dir():
             menu.addAction(theme.qicon("folder"), "Abrir pasta da gravação",
                            lambda: util.open_path(folder))
+            # reprocessar direto da capa (#186): é onde a reunião falhada aparece
+            # em vermelho, então é onde a vontade de tentar de novo nasce
+            widgets.reprocess_submenu(menu, folder, self.app)
         menu.addSeparator()
         menu.addAction(theme.qicon("delete", color=t.rec), "Excluir reunião…",
                        lambda: self._ask_delete_recent(m))

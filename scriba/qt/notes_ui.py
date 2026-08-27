@@ -470,11 +470,16 @@ class NotesWindow(QWidget):
 
     def _tree_context_menu(self, pos) -> None:
         item = self._tree.itemAt(pos)
-        if item is None or item not in self._items or self._items[item][2] is not None:
-            return   # sem item, ou reunião em processamento/falha (nota ainda não existe)
+        if item is None or item not in self._items:
+            return
+        path, _title, status = self._items[item]
+        if status is not None and not util.stage(status).is_error:
+            return   # em processamento: a nota ainda não existe, nada a oferecer
         if item not in self._tree.selectedItems():
             self._tree.setCurrentItem(item)   # não quebra uma multi-seleção existente
-        menu = self._build_tree_menu(self._items[item][0])
+        # reunião FALHADA ganha menu próprio (#186): antes o clique-direito não
+        # abria nada aqui, e reprocessar era exatamente o que faltava oferecer
+        menu = self._build_tree_menu(path) if status is None else self._build_failed_menu(path)
         menu.exec(self._tree.viewport().mapToGlobal(pos))
 
     def _build_tree_menu(self, path: Path):
@@ -484,6 +489,7 @@ class NotesWindow(QWidget):
         menu = QMenu(self._tree)
         menu.addAction(theme.qicon("folder"), "Abrir pasta da gravação",
                        lambda: self._open_recording_folder(path))
+        widgets.reprocess_submenu(menu, self._recording_folder_for(path), self.app)
         from .speakers_ui import voice_label_state
 
         try:
@@ -494,6 +500,16 @@ class NotesWindow(QWidget):
             menu.addAction(theme.qicon("people"), "Rotular vozes…", self._open_speaker_labeler)
         menu.addSeparator()
         menu.addAction(theme.qicon("delete", color=t.rec), "Excluir nota…", self._ask_delete)
+        return menu
+
+    def _build_failed_menu(self, folder: Path):
+        """Menu de contexto de uma reunião FALHADA (#186). A nota não existe, então
+        as ações são sobre a pasta da gravação: abrir e reprocessar. Separado do
+        exec() modal p/ ser testável, como o _build_tree_menu."""
+        menu = QMenu(self._tree)
+        menu.addAction(theme.qicon("folder"), "Abrir pasta da gravação",
+                       lambda: util.open_path(folder))
+        widgets.reprocess_submenu(menu, folder, self.app)
         return menu
 
     def _open_recording_folder(self, note_path: Path) -> None:
@@ -750,7 +766,8 @@ class NotesWindow(QWidget):
                 hint = "O processamento desta reunião falhou."
                 if err:
                     hint += f"\n\nÚltimo erro:\n{err}"
-                hint += f'\n\nPara tentar de novo:\nscribadev process "{folder}"'
+                hint += ("\n\nPara tentar de novo: clique com o botão direito na "
+                         "reunião, na lista à esquerda, e escolha Reprocessar.")
             self._prog_hint.setText(hint)
         else:
             self._prog_bar.setRange(0, 0)
