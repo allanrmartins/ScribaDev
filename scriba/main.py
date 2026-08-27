@@ -919,11 +919,16 @@ class ScribaApp:
                 out.flush()
             except OSError:
                 out = None  # sem log em disco; segue com DEVNULL
+            # PYTHONIOENCODING: cinto-e-suspensório do reconfigure do cli.main
+            # (#187) - o filho herda o handle do process.log e, sem isto, o
+            # Python dele embrulharia o stream na codepage ANSI (cp1252)
+            env = dict(os.environ, PYTHONIOENCODING="utf-8:replace")
             proc = subprocess.Popen(
                 args,
                 stdout=out if out is not None else subprocess.DEVNULL,
                 stderr=subprocess.STDOUT if out is not None else subprocess.DEVNULL,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                env=env,
             )
         except Exception:
             log.exception("não consegui iniciar o subprocesso de %s", folder.name)
@@ -1009,7 +1014,8 @@ class ScribaApp:
             else:
                 self._toast(
                     "ScribaDev: falha ao processar",
-                    f"{folder.name} — detalhes em process.log; retry: scribadev process",
+                    f"{folder.name} — detalhes em process.log; para tentar de novo: "
+                    f"botão direito na reunião → Reprocessar",
                 )
             return
         export_path = title = None

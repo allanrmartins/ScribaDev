@@ -76,6 +76,19 @@ def _timestamp_subprocess_output() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # stdout/stderr SEMPRE em UTF-8, sem morrer por caractere (#187): no exe
+    # congelado o filho de processamento herda o handle do process.log e o
+    # Python o embrulha na codepage ANSI (cp1252) - o primeiro print com um
+    # caractere fora dela (a seta do transcode) derrubava o processo INTEIRO
+    # com rc=1 DEPOIS da nota pronta: toast de falha em toda reunião e meta
+    # sem os .opus. Quem lê o process.log já lê como utf-8/replace.
+    for _s in (sys.stdout, sys.stderr):
+        try:
+            if _s is not None and hasattr(_s, "reconfigure"):
+                _s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass  # stream exótico: seguir com o que há é melhor que não subir
+
     # ANTES de qualquer shutil.which: app lançado do Finder/Dock/LaunchAgent recebe
     # do launchd um PATH mínimo (/usr/bin:/bin:/usr/sbin:/sbin) e não enxerga o
     # `claude` (~/.local/bin) nem o `ffmpeg` (/opt/homebrew/bin) — a UI dizia que

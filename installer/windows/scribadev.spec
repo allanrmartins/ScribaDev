@@ -50,6 +50,34 @@ _pkg_datas = [
     (str(REPO / "scriba" / "qt" / "icons"), "scriba/qt/icons"),
 ]
 
+# stdlib INTEIRA no bundle (#187): a análise estática só embarca a stdlib que o
+# código do repo importa - mas os addons (torch/pyannote, instalados sob demanda
+# FORA da análise) importam stdlib em runtime, e módulo fora do bundle não
+# existe num exe congelado. Caso vivido: pyannote importa `timeit`, o bundle não
+# o tinha, e a diarização nunca rodou em NENHUMA instalação pelo instalador
+# ("No module named 'timeit'", falha silenciosa com fallback p/ "Participantes").
+# Mesmo padrão do typing_extensions/#167, generalizado: custa poucos MB e fecha
+# a classe inteira do problema. Fora ficam só os pacotes-mamute sem uso
+# plausível por uma lib de ML; nome ausente na plataforma vira warning inócuo.
+import importlib.util as _ilu
+import sys as _sys
+
+_STDLIB_DENY = {
+    "antigravity", "this", "idlelib", "lib2to3", "turtledemo", "turtle",
+    "tkinter", "test", "ensurepip",
+}
+def _importavel(m):
+    try:
+        return _ilu.find_spec(m) is not None
+    except Exception:
+        return False  # módulo deprecated/quebrado: fora do bundle, sem drama
+
+
+_stdlib = sorted(
+    m for m in _sys.stdlib_module_names
+    if not m.startswith("_") and m not in _STDLIB_DENY and _importavel(m)
+)
+
 _common = dict(
     pathex=[str(REPO)],
     binaries=_pip_binaries,
@@ -58,7 +86,7 @@ _common = dict(
     # bundle, a resolução cai no addons — se o pip estiver reescrevendo a pasta,
     # até os toasts do app morrem com EACCES. Bundlado, o FrozenImporter (meta
     # path) vence o addons sempre.
-    hiddenimports=_pip_hidden + ["typing_extensions"],
+    hiddenimports=_pip_hidden + ["typing_extensions"] + _stdlib,
     excludes=_excludes,
     noarchive=False,
     module_collection_mode=_pip_collection_mode,

@@ -628,6 +628,28 @@ def is_locked(folder: Path) -> bool:
     return True
 
 
+def stream_file(folder: Path, stream: dict | None) -> Path | None:
+    """Arquivo de áudio REAL de um stream do meta, tolerante a meta desatualizado.
+
+    O caminho da verdade é streams[*].file, mas ele pode mentir: o crash de
+    encoding do exe congelado (#187) derrubava o archive_audio DEPOIS de
+    transcodar os .wav para .opus/.flac e ANTES de apontar o meta para eles -
+    sobrando um meta com .wav mortos e o áudio vivo do lado, com outro sufixo.
+    Devolve o arquivo apontado se existir; senão o mesmo nome com sufixo de
+    arquivamento (.opus/.flac) ou .wav; senão None.
+    """
+    if not stream or not stream.get("file"):
+        return None
+    p = Path(folder) / stream["file"]
+    if p.exists():
+        return p
+    for ext in (".opus", ".flac", ".wav"):
+        alt = p.with_suffix(ext)
+        if alt.exists():
+            return alt
+    return None
+
+
 def has_audio(folder: Path, meta: dict | None = None) -> bool:
     """True se a gravação ainda tem áudio utilizável para (re)transcrever (#186).
 
@@ -635,10 +657,11 @@ def has_audio(folder: Path, meta: dict | None = None) -> bool:
     readoção automática do scan_pending: re-transcrever sem áudio só produziria
     um "no_audio" terminal por cima do status atual.
 
-    O áudio de verdade é o que o meta aponta em streams[*].file - pós-arquivamento
-    ele pode ser .opus/.flac, não .wav. `audio_removed` (keep_audio=false) é um
-    não definitivo. Meta legado sem streams cai num glob defensivo. Arquivo com
-    até 44 bytes é só o header WAV: nada gravado.
+    O áudio de verdade é o que o meta aponta em streams[*].file - resolvido por
+    stream_file, que tolera meta desatualizado apontando .wav já transcodado
+    (#187). `audio_removed` (keep_audio=false) é um não definitivo. Meta legado
+    sem streams cai num glob defensivo. Arquivo com até 44 bytes é só o header
+    WAV: nada gravado.
     """
     folder = Path(folder)
     if meta is None:
@@ -648,9 +671,9 @@ def has_audio(folder: Path, meta: dict | None = None) -> bool:
             meta = {}
     if meta.get("audio_removed"):
         return False
-    candidates = [folder / s["file"]
-                  for s in (meta.get("streams") or {}).values() if s and s.get("file")]
-    if not candidates:
+    candidates = [stream_file(folder, s) for s in (meta.get("streams") or {}).values()]
+    candidates = [p for p in candidates if p is not None]
+    if not candidates and not (meta.get("streams") or {}):
         candidates = [p for ext in ("*.wav", "*.opus", "*.flac") for p in folder.glob(ext)]
 
     def _gravado(p: Path) -> bool:

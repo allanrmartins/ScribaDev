@@ -75,10 +75,17 @@ def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: Transc
         s = (meta.get("streams") or {}).get(stream_name)
         if not s or not s.get("file"):
             continue
-        wav = folder / s["file"]
-        if not wav.exists():
-            print(f"aviso: {wav.name} não existe, pulando")
+        # stream_file tolera meta desatualizado (#187): o crash de encoding do
+        # exe derrubava o archive_audio entre transcodar (.wav -> .opus) e
+        # apontar o meta - o arquivo real está lá, com outro sufixo. Ao resolver
+        # por fallback, conserta o ponteiro (o meta é regravado logo abaixo).
+        wav = util_mod.stream_file(folder, s)
+        if wav is None:
+            print(f"aviso: {s['file']} não existe, pulando")
             continue
+        if wav.name != s["file"]:
+            print(f"aviso: meta apontava {s['file']}; usando {wav.name}")
+            s["file"] = wav.name
         if wav.stat().st_size <= 44:  # só o header (ou nem isso): nada gravado
             print(f"aviso: {wav.name} vazio, pulando")
             continue
@@ -355,33 +362,39 @@ def archive_audio(folder: Path, cfg) -> None:
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda w: _transcode_one(ff, w, codec_args, ext), wavs))
     for res in results:
+        if res["ok"]:
+            renamed[res["wav"].name] = res["out"].name
+            saved += res["before"] - res["after"]
+
+    # aponta o meta.json para os arquivos novos ANTES de qualquer print: os .wav
+    # já morreram no transcode, e um print que estoure (#187: stdout cp1252 do
+    # exe engasgava num caractere) não pode deixar o meta mentindo sobre eles -
+    # era o que desabilitava o "Refazer tudo" e o retry automático sem motivo.
+    if renamed:
+        meta_path = folder / "meta.json"
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            for st in (meta.get("streams") or {}).values():
+                if st.get("file") in renamed:
+                    st["file"] = renamed[st["file"]]
+                    st["rate"] = 16000
+                    st["channels"] = 1
+            meta["archive_format"] = fmt
+            _write_meta(meta_path, meta)
+        except Exception as e:
+            print(f"AVISO: não atualizei o meta.json pós-compactação ({e})")
+
+    for res in results:
         w = res["wav"]
         if res["ok"]:
-            renamed[w.name] = res["out"].name
-            saved += res["before"] - res["after"]
-            print(f"  {w.name} → {res['out'].name} "
-                  f"({res['before'] / 1e6:.0f} MB → {res['after'] / 1e6:.1f} MB)")
+            print(f"  {w.name} -> {res['out'].name} "
+                  f"({res['before'] / 1e6:.0f} MB -> {res['after'] / 1e6:.1f} MB)")
         elif "err" in res:
             print(f"AVISO: transcode de {w.name} falhou ({res['err']}); mantendo .wav")
         else:
             print(f"AVISO: ffmpeg falhou em {w.name} (rc={res.get('rc')}); mantendo .wav")
-
-    if not renamed:
-        return
-    # aponta o meta.json para os arquivos novos (uma re-transcrição precisa achá-los)
-    meta_path = folder / "meta.json"
-    try:
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        for st in (meta.get("streams") or {}).values():
-            if st.get("file") in renamed:
-                st["file"] = renamed[st["file"]]
-                st["rate"] = 16000
-                st["channels"] = 1
-        meta["archive_format"] = fmt
-        _write_meta(meta_path, meta)
-    except Exception as e:
-        print(f"AVISO: não atualizei o meta.json pós-compactação ({e})")
-    print(f"áudio compactado para {fmt}: ~{saved / 1e6:.0f} MB economizados")
+    if renamed:
+        print(f"áudio compactado para {fmt}: ~{saved / 1e6:.0f} MB economizados")
 
 
 def process_when_ready(folder: Path, poll_seconds: float = 2.0) -> int:

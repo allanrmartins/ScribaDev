@@ -327,6 +327,42 @@ class HasAudioTests(unittest.TestCase):
         (self.d / "mic.wav").write_bytes(b"\0" * 100)
         self.assertTrue(util.has_audio(self.d))
 
+    def test_meta_desatualizado_acha_o_opus_do_lado(self):
+        # #187: o crash de encoding deixava o meta apontando .wav morto com o
+        # .opus vivo ao lado - a vítima precisa continuar contando como "tem áudio"
+        meta = self._meta()
+        (self.d / "mic.opus").write_bytes(b"\0" * 100)
+        self.assertTrue(util.has_audio(self.d, meta))
+
+
+class StreamFileTests(unittest.TestCase):
+    """util.stream_file (#187): resolve o arquivo REAL de um stream do meta,
+    tolerando ponteiro morto pós-transcode (.wav -> .opus/.flac)."""
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp(prefix="scriba_sf_"))
+
+    def test_apontado_existente_vence(self):
+        (self.d / "mic.wav").write_bytes(b"\0")
+        (self.d / "mic.opus").write_bytes(b"\0")
+        self.assertEqual(util.stream_file(self.d, {"file": "mic.wav"}).name, "mic.wav")
+
+    def test_fallback_para_opus(self):
+        (self.d / "mic.opus").write_bytes(b"\0")
+        self.assertEqual(util.stream_file(self.d, {"file": "mic.wav"}).name, "mic.opus")
+
+    def test_fallback_para_flac(self):
+        (self.d / "loopback.flac").write_bytes(b"\0")
+        self.assertEqual(util.stream_file(self.d, {"file": "loopback.wav"}).name,
+                         "loopback.flac")
+
+    def test_nada_no_disco_devolve_none(self):
+        self.assertIsNone(util.stream_file(self.d, {"file": "mic.wav"}))
+
+    def test_stream_vazio_devolve_none(self):
+        self.assertIsNone(util.stream_file(self.d, None))
+        self.assertIsNone(util.stream_file(self.d, {"file": None}))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

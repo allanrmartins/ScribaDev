@@ -67,13 +67,38 @@ _pkg_datas = [
     (str(REPO / "scriba" / "qt" / "icons"), "scriba/qt/icons"),
 ]
 
+# stdlib INTEIRA no bundle (#187) — mesmo racional do spec Windows: os addons
+# (torch/pyannote, fora da análise estática) importam stdlib em runtime, e
+# módulo fora do bundle não existe num exe congelado (caso vivido: `timeit`,
+# diarização morta em silêncio em toda instalação por instalador).
+import importlib.util as _ilu
+import sys as _sys
+
+_STDLIB_DENY = {
+    "antigravity", "this", "idlelib", "lib2to3", "turtledemo", "turtle",
+    "tkinter", "test", "ensurepip",
+}
+
+
+def _importavel(m):
+    try:
+        return _ilu.find_spec(m) is not None
+    except Exception:
+        return False  # módulo deprecated/quebrado: fora do bundle, sem drama
+
+
+_stdlib = sorted(
+    m for m in _sys.stdlib_module_names
+    if not m.startswith("_") and m not in _STDLIB_DENY and _importavel(m)
+)
+
 _common = dict(
     pathex=[str(REPO)],
     binaries=_pip_binaries + _mlx_binaries + _mlxw_binaries,
     datas=_pkg_datas + _pip_datas + _mlx_datas + _mlxw_datas + _fw_datas,
     # typing_extensions no bundle (#167) — mesmo racional do spec Windows: core
     # do app não pode depender do addons em estado transitório de instalação
-    hiddenimports=_pip_hidden + _mlx_hidden + _mlxw_hidden + ["typing_extensions"],
+    hiddenimports=_pip_hidden + _mlx_hidden + _mlxw_hidden + ["typing_extensions"] + _stdlib,
     excludes=_excludes,
     noarchive=False,
     module_collection_mode=_pip_collection_mode,

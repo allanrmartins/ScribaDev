@@ -125,5 +125,31 @@ class ProcessLogVivoTest(unittest.TestCase):
                 proc.wait(timeout=10)
 
 
+class StdoutUtf8Tests(unittest.TestCase):
+    """#187: no exe congelado o stdout herdado (handle do process.log) era
+    embrulhado na codepage ANSI (cp1252) - o primeiro caractere fora dela (a
+    seta do print do transcode) derrubava o processo INTEIRO com rc=1, já com
+    a nota pronta. cli.main agora reconfigura stdout/stderr p/ utf-8/replace."""
+
+    def test_main_reconfigura_stdout_cp1252_para_utf8(self):
+        import io
+
+        from scriba import cli
+
+        orig_out, orig_err = sys.stdout, sys.stderr
+        buf = io.BytesIO()
+        sys.stdout = io.TextIOWrapper(buf, encoding="cp1252")
+        sys.stderr = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+        try:
+            rc = cli.main([])          # sem cmd: imprime o help e retorna 0
+            self.assertEqual(rc, 0)
+            self.assertEqual(sys.stdout.encoding.lower().replace("-", ""), "utf8")
+            print("mic.wav → mic.opus")   # o caractere do crash real
+            sys.stdout.flush()
+            self.assertIn("mic.opus".encode(), buf.getvalue())
+        finally:
+            sys.stdout, sys.stderr = orig_out, orig_err
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
