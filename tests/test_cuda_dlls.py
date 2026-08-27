@@ -17,6 +17,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -127,11 +128,28 @@ class BootstrapCudaDllsTests(unittest.TestCase):
         finally:
             os.environ["PATH"] = path0
 
+    @unittest.skipUnless(sys.platform == "win32", "o guard de uma vez só é do caminho Windows")
     def test_roda_uma_vez_so(self):
         (util.APP_DIR / "addons" / "nvidia" / "cublas" / "bin").mkdir(parents=True)
         util.bootstrap_cuda_dlls()
         self.assertTrue(util._dll_dirs_added)
         util.bootstrap_cuda_dlls()   # idempotente, não pode levantar
+
+    def test_chamar_duas_vezes_nunca_levanta(self):
+        """Vale em todo SO. Fora do Windows a função sai antes do guard (é no-op),
+        então aqui não dá para afirmar nada sobre o _dll_dirs_added - só que
+        chamar de novo é seguro."""
+        (util.APP_DIR / "addons" / "nvidia" / "cublas" / "bin").mkdir(parents=True)
+        util.bootstrap_cuda_dlls()
+        util.bootstrap_cuda_dlls()
+
+    def test_fora_do_windows_e_no_op(self):
+        """O layout nvidia/*/bin e o add_dll_directory são do Windows; no Linux o
+        CUDA chega pelos wheels (RPATH) e no macOS não existe (#98)."""
+        (util.APP_DIR / "addons" / "nvidia" / "cublas" / "bin").mkdir(parents=True)
+        with mock.patch.object(util.sys, "platform", "linux"):
+            util.bootstrap_cuda_dlls()
+        self.assertFalse(util._dll_dirs_added)
 
     def test_sem_dll_nenhuma_nao_levanta(self):
         util.bootstrap_cuda_dlls()
