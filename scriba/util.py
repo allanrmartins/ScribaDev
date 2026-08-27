@@ -192,6 +192,31 @@ def preload_msvc_runtime() -> None:
 _dll_dirs_added = False
 
 
+def cuda_dll_dirs() -> list[str]:
+    """Pastas `bin` dos pacotes nvidia-* pip, onde quer que eles morem.
+
+    São DOIS layouts, e olhar só para um foi o bug do exe (#185):
+
+    - fonte/venv: `<sys.prefix>/Lib/site-packages/nvidia/*/bin`;
+    - instalador: `APP_DIR/addons/nvidia/*/bin`, porque no congelado os
+      componentes pesados são baixados para o addons, e `sys.prefix` aponta para
+      o `_MEIPASS` do PyInstaller - onde `Lib/site-packages/nvidia` NÃO existe.
+
+    O `addons.bootstrap()` põe o addons no `sys.path`, o que resolve import de
+    Python e não resolve carga de DLL: o ctranslate2 chama LoadLibrary, que
+    consulta o PATH do processo.
+    """
+    raizes = [Path(sys.prefix) / "Lib" / "site-packages" / "nvidia",
+              APP_DIR / "addons" / "nvidia"]
+    bins: list[str] = []
+    for raiz in raizes:
+        try:
+            bins += [str(b) for b in raiz.glob("*/bin") if b.is_dir()]
+        except OSError:
+            continue
+    return bins
+
+
 def bootstrap_cuda_dlls() -> None:
     """Disponibiliza as DLLs CUDA instaladas via pip (cublas/cudnn/nvrtc).
 
@@ -206,13 +231,15 @@ def bootstrap_cuda_dlls() -> None:
     if _dll_dirs_added:
         return
     _dll_dirs_added = True
-    nv = Path(sys.prefix) / "Lib" / "site-packages" / "nvidia"
-    bins = [str(b) for b in nv.glob("*/bin") if b.is_dir()]
+    bins = cuda_dll_dirs()
     if not bins:
+        log.warning("nenhuma DLL CUDA encontrada (nem no venv nem no addons) - "
+                    "a transcricao vai depender do CUDA do sistema")
         return
     os.environ["PATH"] = os.pathsep.join(bins) + os.pathsep + os.environ.get("PATH", "")
     for b in bins:
         os.add_dll_directory(b)
+    log.info("DLLs CUDA disponibilizadas: %s", ", ".join(bins))
 
 
 def open_path(path) -> None:

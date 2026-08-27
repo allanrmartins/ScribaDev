@@ -1078,10 +1078,14 @@ class SettingsWindow(QWidget):
             return
         # o que reinstalar depois: medir ANTES de apagar (o cache do modelo fica
         # fora do addons e não é tocado, então ele não entra no replano)
+        # CUDA volta se a máquina TEM GPU, e não só se o addons já tinha os
+        # pacotes (#185): quem ficou sem eles - instalação interrompida, pip que
+        # falhou no meio - caía num estado absorvente, porque o replano lia a
+        # ausência como "não usa CUDA" e reinstalava sem eles para sempre.
         try:
-            tinha_cuda = any(d.glob("nvidia*"))
+            tinha_cuda = any(d.glob("nvidia*")) or plat.has_nvidia_gpu()
         except OSError:
-            tinha_cuda = False
+            tinha_cuda = plat.has_nvidia_gpu()
         try:
             import importlib.util as ilu
 
