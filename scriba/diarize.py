@@ -155,8 +155,19 @@ def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None,
             _fail(f"modelo indisponível — confirme que aceitou os termos de {cfg.model} no "
                   "Hugging Face com a conta do token")
             return None
+        # em que dispositivo o pyannote vai rodar, do mesmo jeito que a transcrição
+        # imprime o dela (#190): "cuda" no log era só o faster-whisper, e um torch
+        # build CPU passava batido - a #188 levou uma rodada inteira p/ descobrir
         if force_cpu and torch.cuda.is_available():
             print("diarização em CPU (forçada com --cpu)")
+        elif not torch.cuda.is_available():
+            print(f"diarização em CPU (torch {torch.__version__} sem CUDA)")
+        else:
+            try:
+                dev_name = torch.cuda.get_device_name(0)
+            except Exception:
+                dev_name = "GPU"
+            print(f"diarização em cuda ({dev_name})")
         if torch.cuda.is_available() and not force_cpu:
             pipe.to(torch.device("cuda"))
             # blinda contra o sysmem fallback do Windows (spill VRAM->RAM = freeze):
