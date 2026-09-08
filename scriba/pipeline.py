@@ -6,6 +6,7 @@ import json
 import time
 from pathlib import Path
 
+from . import idlewatch
 from . import merge as merge_mod
 from . import util as util_mod
 from .config import load
@@ -22,6 +23,7 @@ def _set_status(meta: dict, meta_path: Path, status: str) -> None:
     """Marca o estágio no meta e persiste (a pílula, a aba Notas e a capa leem o status daqui)."""
     meta["status"] = status
     _write_meta(meta_path, meta)
+    idlewatch.beat()  # mudança de estágio é sinal de vida para a sentinela (#188)
 
 
 def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: TranscriptionProvider | None = None,
@@ -53,6 +55,9 @@ def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: Transc
 
     repair_folder(folder)  # idempotente; conserta headers de gravações pós-crash
 
+    # sentinela de travamento (#188): a partir daqui o processo é CPU/GPU-bound;
+    # ficar minutos sem progresso é trava, e as pilhas vão para hang.log na pasta
+    idlewatch.arm(folder)
     # marca o estágio antes de carregar o modelo: a UI mostra "Transcrevendo…"
     # já durante a carga da GPU (que faz parte do tempo percebido)
     _set_status(meta, meta_path, "transcribing")
@@ -245,6 +250,7 @@ def process_folder(folder: Path, force_cpu: bool = False, transcriber: Transcrip
         )
     except OSError:
         pass  # pasta sumiu ou sem permissão: o processamento tentará e falhará adiante
+    idlewatch.arm(folder)  # sentinela de travamento (#188); idempotente com a do transcribe
     try:
         skip_transcribe = False
         if (folder / "transcript.json").exists():
@@ -260,7 +266,13 @@ def process_folder(folder: Path, force_cpu: bool = False, transcriber: Transcrip
             return None
         from . import notes
 
-        md = notes.build_notes(folder)
+        # o resumo é espera legítima de rede/CLI (sem CPU, sem log por minutos):
+        # a sentinela fica suspensa; ali quem vigia é o timeout do resumo (pai)
+        idlewatch.suspend()
+        try:
+            md = notes.build_notes(folder)
+        finally:
+            idlewatch.resume()
     except Exception as e:
         _mark_failed(folder, e)
         raise
