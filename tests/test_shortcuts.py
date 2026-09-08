@@ -41,6 +41,7 @@ class IconIsStaleTests(unittest.TestCase):
         self.assertFalse(shortcuts.icon_is_stale(str(outro), "C:/nao/existe.ico,0", self.tray))
         self.assertFalse(shortcuts.icon_is_stale("", "C:/nao/existe.ico,0", self.tray))
 
+    @unittest.skipUnless(sys.platform == "win32", "caixa/separador só se igualam no Windows (normcase)")
     def test_comparacao_do_alvo_ignora_caixa_e_separador(self):
         # o WScript.Shell devolve o caminho como foi gravado; normcase/normpath igualam
         alvo = str(self.tray).upper().replace("\\", "/")
