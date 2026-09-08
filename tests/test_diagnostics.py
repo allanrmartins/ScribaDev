@@ -204,6 +204,24 @@ class ExportZipTests(unittest.TestCase):
         self.assertIn("ambiente.txt", names)
         self.assertIn("OFUSCACAO.txt", names)
 
+    def test_zip_embarca_o_hang_log_da_reuniao_com_falha(self):
+        """A sentinela do filho (#188) despeja as pilhas em hang.log na pasta da
+        reunião; o zip precisa trazê-lo junto do process.log, senão o travamento
+        chega de novo sem rastro."""
+        rec = self.tmp / "rec"
+        failed = rec / "2026" / "09" / "03" / "15-05_Call Vetra"
+        failed.mkdir(parents=True)
+        (failed / "meta.json").write_text(json.dumps({"status": "failed", "title": "Call Vetra"}),
+                                          encoding="utf-8")
+        (failed / "process.log").write_text("separando participantes por voz\n", encoding="utf-8")
+        (failed / "hang.log").write_text("Timeout (0:08:00)!\nThread 0x1 (most recent call first):\n",
+                                         encoding="utf-8")
+        dest = dg.export_zip(rec)
+        with self.zipfile.ZipFile(dest) as z:
+            names = z.namelist()
+            self.assertIn("reuniao_com_falha/hang.log", names)
+            self.assertIn("Timeout (0:08:00)", z.read("reuniao_com_falha/hang.log").decode("utf-8"))
+
     def test_zip_sai_ofuscado(self):
         """Nome de cliente/pessoa/reunião e usuário do SO NÃO saem no zip - nem
         no scriba.log, nem no meta.json/process.log da reunião com falha."""

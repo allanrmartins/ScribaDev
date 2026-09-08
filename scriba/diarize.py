@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import idlewatch
 from .config import Diarization
 from .transcriber import Segment
 
@@ -487,6 +488,9 @@ def _diarize_chunked(pipe, audio, sr: int, chunk_s: int) -> tuple[list[Turn], di
     for i in range(n_chunks):
         a, b = i * chunk_n, min((i + 1) * chunk_n, total)
         offset = a / sr
+        # a diarização em blocos não imprime nada por bloco: sem este batimento a
+        # sentinela (#188) tomaria uma diarização longa em CPU por travamento
+        idlewatch.beat()
         try:
             out = _run_pipe(pipe, {"waveform": wav[:, a:b].clone(), "sample_rate": sr}, {})
         except Exception as e:

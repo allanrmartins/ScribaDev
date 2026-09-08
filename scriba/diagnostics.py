@@ -595,7 +595,7 @@ def _arquivos_da_reuniao(folder: Path, scrubber) -> list[tuple[str, str]]:
     de ofuscação com o que for encontrado no caminho."""
     out: list[tuple[str, str]] = []
     scrubber.add(folder.name, "reuniao")
-    for fn in ("meta.json", "process.log", ".lock"):
+    for fn in ("meta.json", "process.log", "hang.log", ".lock"):
         try:
             text = (folder / fn).read_text(encoding="utf-8", errors="replace")
         except OSError:

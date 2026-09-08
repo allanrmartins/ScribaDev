@@ -977,9 +977,17 @@ class ScribaApp:
                 foto = sysprobe.snapshot_line()
             except Exception:
                 foto = "(snapshot indisponivel)"
+            # pilhas do filho no instante da trava (#188): a sentinela dele
+            # (idlewatch) despeja em hang.log na pasta bem antes de chegarmos aqui
+            pilhas = ""
+            try:
+                if (folder / "hang.log").stat().st_size > 0:
+                    pilhas = " · pilhas das threads do filho em hang.log (na pasta da reuniao)"
+            except OSError:
+                pass
             log.error("processamento de %s TRAVADO: %.0f min sem progresso (CPU, meta.json e "
                       "process.log parados) - encerrando o subprocesso pid=%s · maquina no "
-                      "momento: %s", folder.name, parado_min, proc.pid, foto)
+                      "momento: %s%s", folder.name, parado_min, proc.pid, foto, pilhas)
             self._matar_filho(proc, folder)
             self.ui(self._hide_pill_if_processing)
             self._marcar_falha(

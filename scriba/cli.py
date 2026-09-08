@@ -258,9 +258,13 @@ def main(argv: list[str] | None = None) -> int:
 
         return audioprobe.main(args.mode)
     if args.cmd == "transcribe":
+        from . import idlewatch
         from .pipeline import transcribe_folder
 
-        return transcribe_folder(args.folder, force_cpu=args.cpu, num_speakers=args.speakers)
+        try:
+            return transcribe_folder(args.folder, force_cpu=args.cpu, num_speakers=args.speakers)
+        finally:
+            idlewatch.disarm()  # sentinela de travamento (#188): fecha o hang.log
     if args.cmd == "summarize":
         from .pipeline import summarize_folder
 
@@ -284,6 +288,8 @@ def main(argv: list[str] | None = None) -> int:
         # não mudar sozinha (#181). O `run` faz o mesmo no boot da bandeja; aqui
         # cobre o `scribadev process` rodado na mão e o subprocesso do app.
         notes.freeze_area_defaults()
+        from . import idlewatch
+
         try:
             # o import ENTRA no try: o EACCES do addons costuma estourar já na
             # cadeia de imports pesados (faster_whisper -> huggingface_hub -> ...)
@@ -300,6 +306,10 @@ def main(argv: list[str] | None = None) -> int:
                 raise
             print(f"ERRO: {addons.DAMAGED_HINT}")
             return 4
+        finally:
+            # sentinela de travamento (#188): fecha o hang.log da pasta (removido
+            # se não houve dump); o pipeline arma quando o trabalho pesado começa
+            idlewatch.disarm()
     if args.cmd == "run":
         from .main import run_app
 
