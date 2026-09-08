@@ -11,6 +11,7 @@ jobs:
   test:
     # Windows = plataforma principal (captura WASAPI, toasts, detecção por registro)
     runs-on: windows-latest
+    timeout-minutes: 30   # suíte leva ~8 min; runner pendurado não fica 6 h preso
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -29,6 +30,7 @@ jobs:
     # test-linux. Sem brew install ffmpeg de partida — nenhum teste exige o binário
     # (ffmpeg_status só consulta o PATH).
     runs-on: macos-latest
+    timeout-minutes: 30   # a suíte leva ~6 min; um job pendurado (viu-se 1x no #193) não segura o PR
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -46,6 +48,7 @@ jobs:
     # push. Os markers do pyproject deixam pyaudiowpatch/windows-toasts de fora;
     # os testes Windows-only pulam por skipUnless(sys.platform == "win32").
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

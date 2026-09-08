@@ -10,6 +10,7 @@ mesmo AUMID) em vez de cair no ícone/hint do Python.
 from __future__ import annotations
 
 import ctypes
+import os
 import subprocess
 import sys
 from ctypes import POINTER, byref, c_int, c_uint, c_ulong, c_void_p, c_wchar_p
@@ -172,3 +173,115 @@ def create_shortcuts(desktop: bool = True, start_menu: bool = True) -> int:
         print("nenhum atalho criado")
         return 1
     return 0
+
+
+# ---- reparo de ícone quebrado (#192) -----------------------------------------
+# O IconLocation dos .lnk é o caminho ABSOLUTO de scriba/assets/scriba.ico dentro
+# do repositório (instalação por código-fonte). Repo movido = arquivo sumiu = a
+# janela aparece na barra de tarefas com o ícone genérico de documento, porque o
+# atalho fixado tem o mesmo AUMID da janela e o shell usa o ícone DELE. O app
+# conserta no boot: só os atalhos cujo alvo é o tray DESTA instalação.
+
+
+def _pinned_taskbar_dir() -> Path:
+    """Pasta dos atalhos fixados na barra de tarefas (não tem FOLDERID próprio)."""
+    return Path(os.environ.get("APPDATA", "")) / r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
+
+
+def candidate_lnks() -> list[Path]:
+    """Os ScribaDev.lnk que o app cria (Área de Trabalho, Iniciar, Startup) ou que
+    o usuário fixa na barra. Só os que existem."""
+    from . import autostart
+
+    dirs = [util.known_folder(_FOLDERID_DESKTOP), util.known_folder(_FOLDERID_PROGRAMS),
+            autostart._startup_dir(), _pinned_taskbar_dir()]
+    return [d / "ScribaDev.lnk" for d in dirs if d and (d / "ScribaDev.lnk").exists()]
+
+
+def _norm(p) -> str:
+    return os.path.normcase(os.path.normpath(str(p or "")))
+
+
+def icon_is_stale(target: str, icon: str, this_target: Path) -> bool:
+    """(pura) O atalho é desta instalação (alvo = nosso tray) e o ícone está
+    vazio ou aponta para arquivo inexistente? Atalho de outra instalação, ou
+    com ícone válido, não é tocado."""
+    if not target or _norm(target) != _norm(this_target):
+        return False
+    icon_file = str(icon or "").split(",")[0].strip()
+    return not icon_file or not Path(icon_file).exists()
+
+
+def read_lnks(lnks: list[Path]) -> dict[Path, tuple[str, str]]:
+    """{lnk: (TargetPath, IconLocation)} via WScript.Shell, numa única chamada
+    do PowerShell (saída em UTF-8: caminhos acentuados chegam inteiros)."""
+    if not lnks:
+        return {}
+    items = ",".join(f"'{p}'" for p in lnks)
+    ps = (
+        "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+        "$ws = New-Object -ComObject WScript.Shell; "
+        f"foreach ($p in @({items})) {{ $s = $ws.CreateShortcut($p); "
+        "Write-Output ($p + '|' + $s.TargetPath + '|' + $s.IconLocation) }"
+    )
+    proc = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+        capture_output=True, timeout=60,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    out: dict[Path, tuple[str, str]] = {}
+    for line in proc.stdout.decode("utf-8", errors="replace").splitlines():
+        parts = line.rstrip("\r").split("|")
+        if len(parts) == 3:
+            out[Path(parts[0])] = (parts[1], parts[2])
+    return out
+
+
+def set_lnk_icon(lnk: Path, icon: Path) -> bool:
+    """Regrava só o IconLocation do .lnk (alvo, argumentos e AUMID ficam)."""
+    ps = (
+        "$ws = New-Object -ComObject WScript.Shell; "
+        f"$s = $ws.CreateShortcut('{lnk}'); "
+        f"$s.IconLocation = '{icon},0'; "
+        "$s.Save()"
+    )
+    proc = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+        capture_output=True, timeout=60,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return proc.returncode == 0
+
+
+def stale_lnks(lnks: list[Path] | None = None, target: Path | None = None,
+               read=read_lnks) -> list[Path]:
+    """Atalhos desta instalação com o ícone quebrado. Lista vazia fora do Windows."""
+    if sys.platform != "win32":
+        return []
+    lnks = candidate_lnks() if lnks is None else lnks
+    target = tray_exe() if target is None else target
+    info = read(lnks)
+    return [p for p in lnks if p in info and icon_is_stale(*info[p], target)]
+
+
+def repair_stale_icons(lnks: list[Path] | None = None, target: Path | None = None,
+                       icon: Path | None = None, read=read_lnks, write=set_lnk_icon) -> list[Path]:
+    """Reaponta o ícone dos atalhos quebrados para o .ico atual. Devolve os
+    consertados. Nunca levanta (roda no boot, em thread, best-effort)."""
+    try:
+        icon = util.ICON_ICO if icon is None else icon
+        if not icon.exists():
+            return []
+        fixed = [p for p in stale_lnks(lnks, target, read) if write(p, icon)]
+        if fixed:
+            # o shell guarda o ícone velho em cache: sem isto a barra segue genérica
+            # até o próximo logon (best-effort; ie4uinit existe desde o Vista)
+            try:
+                subprocess.run(["ie4uinit.exe", "-show"], capture_output=True, timeout=30,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            except Exception:
+                pass
+        return fixed
+    except Exception as e:
+        print(f"aviso: reparo dos atalhos falhou ({e})")
+        return []

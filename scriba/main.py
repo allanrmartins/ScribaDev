@@ -1268,6 +1268,28 @@ class ScribaApp:
 
         threading.Thread(target=work, daemon=True, name="migrate-notes").start()
 
+    def _repair_shortcuts_boot(self) -> None:
+        """Atalhos com ícone quebrado (#192): instalação por código-fonte com o
+        repositório movido deixa o IconLocation dos .lnk apontando para um
+        scriba.ico que não existe mais, e a janela cai no ícone genérico da
+        barra de tarefas. Em thread e best-effort: PowerShell no boot nunca
+        pode segurar a GUI."""
+        if sys.platform != "win32":
+            return
+
+        def work() -> None:
+            try:
+                from . import shortcuts
+
+                fixed = shortcuts.repair_stale_icons()
+                if fixed:
+                    log.info("ícone dos atalhos reapontado (#192): %s",
+                             ", ".join(p.name + " em " + str(p.parent) for p in fixed))
+            except Exception:
+                log.exception("reparo dos atalhos no boot falhou")
+
+        threading.Thread(target=work, daemon=True, name="repair-shortcuts").start()
+
     def _timesheet_boot(self) -> None:
         """Boot do timesheet (#123): com o módulo ativado (#126), aplica o override
         de caminho do banco, reconcilia sugestões que faltam (reuniões processadas
@@ -1384,6 +1406,7 @@ class ScribaApp:
         self._after(5000, self._migrate_export_dir_boot)
         self._after(9000, self._check_updates_boot)    # aviso de nova versão (#19)
         self._after(12000, self._timesheet_boot)       # sugestões + backup diário (#123)
+        self._after(15000, self._repair_shortcuts_boot)  # ícone dos atalhos (#192)
 
         if not self.start_hidden:
             self.show_main()  # lançamento manual (atalho): abre a janela na frente
