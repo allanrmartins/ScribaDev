@@ -288,6 +288,18 @@ def environment_report() -> str:
         diar = "ausente"   # find_spec de submódulo LEVANTA quando nem o pai existe
     except Exception:
         diar = "erro ao checar"
+    # versão do torch SEM importá-lo (pesado): o sufixo (+cpu/+cu128) diz se a
+    # separação de vozes enxerga a GPU - foi o que faltou no zip da #188 (#190)
+    try:
+        from importlib.metadata import version as _pkg_ver
+
+        torch_v = _pkg_ver("torch")
+    except Exception:
+        torch_v = "ausente"
+    aviso = sysprobe.torch_cpu_build_warning(torch_v if torch_v != "ausente" else None,
+                                             bool(gs) or plat.has_nvidia_gpu())
+    if aviso:
+        torch_v += " (BUILD CPU: vozes nao usam a GPU)"
     return "\n".join([
         f"ScribaDev versao : {__version__}",
         f"Instalacao git   : {updates.is_git_install()}",
@@ -298,6 +310,7 @@ def environment_report() -> str:
         f"RAM              : {ram.get('total_gb', '?')} GB",
         f"GPU NVIDIA       : {gpu}",
         f"pyannote.audio   : {diar}",
+        f"torch            : {torch_v}",
         f"APP_DIR          : {util.APP_DIR}",
         f"Gerado em        : {datetime.now().isoformat(timespec='seconds')}",
     ]) + "\n"

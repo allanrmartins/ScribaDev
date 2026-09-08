@@ -1030,6 +1030,31 @@ def cmd_doctor(args) -> int:
     else:
         _print(_OK, "Diarização", "desabilitada (participantes saem agrupados)")
 
+    # PyTorch × GPU (#190): máquina com GPU NVIDIA e torch build CPU (`+cpu`, o
+    # `pip install torch` a seco) roda a separação de vozes inteira em CPU sem
+    # avisar - o log diz "cuda" (é só o faster-whisper). E VRAM de 4 GB ou menos
+    # não é "lento": é travamento (#188) - mesma régua do wizard de 1º uso.
+    if sys.platform != "darwin":
+        from . import plat, sysprobe
+
+        gpu_nv = plat.has_nvidia_gpu()
+        try:
+            import torch
+
+            torch_v, cuda_ok = torch.__version__, bool(torch.cuda.is_available())
+        except ImportError:
+            torch_v, cuda_ok = None, None
+        aviso = sysprobe.torch_cpu_build_warning(torch_v, gpu_nv, cuda_ok)
+        if aviso:
+            # em vermelho de propósito, mas não é "crítico": o app funciona (lento)
+            _print(_FAIL, "PyTorch × GPU", aviso)
+        elif torch_v:
+            _print(_OK, "PyTorch", f"{torch_v} - CUDA {'disponível' if cuda_ok else 'indisponível (sem GPU NVIDIA)'}")
+        if gpu_nv and cfg and cfg.diarization.enabled:
+            vram_warn = sysprobe.diarization_vram_warning(sysprobe._nvidia_vram_mb())
+            if vram_warn:
+                _print(_WARN, "Diarização × VRAM", vram_warn)
+
     # Enrollment de voz (#1): vozes que o app já aprende a reconhecer
     try:
         from . import speakers

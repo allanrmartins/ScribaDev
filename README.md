@@ -57,10 +57,25 @@ notas.md ──► exportado para %LOCALAPPDATA%\ScribaDev\Notas\
 | Windows 11 **ou** macOS 14.2+ (Apple Silicon) | Windows usa WASAPI loopback e toasts; macOS usa process tap do CoreAudio e transcrição Metal (MLX) |
 | Python 3.12–3.14 *(só na instalação via código-fonte)* | o **instalador** não precisa de Python — `winget install Python.Python.3.12` se for contribuir |
 | Teams/Zoom (desktop) ou reuniões no navegador | detecção automática em ambos; Meet, Teams web e afins são confirmados pelo título da janela |
-| GPU NVIDIA *(opcional)* | transcrição ~10× mais rápida; sem GPU cai para CPU automaticamente |
+| GPU NVIDIA *(opcional)* | transcrição ~10× mais rápida; sem GPU cai para CPU automaticamente. A **separação de vozes** pede **mais de 4 GB de VRAM** - veja [Hardware recomendado](#hardware-recomendado) |
 | [Claude Code](https://claude.com/claude-code) *(opcional)* | só para o resumo estruturado; sem ele, sai a transcrição pura |
 | [ffmpeg](https://ffmpeg.org/download.html) *(recomendado)* | comprime o áudio guardado: WAV cru ~1,3 GB/h → **opus ~20 MB/h**. Instale com `winget install ffmpeg` — ele entra no **PATH do Windows** sozinho (não é uma pasta do ScribaDev) — e **reabra o app**; confira com `where ffmpeg`. Sem ele, as gravações ficam em `.wav` cru e gigantes |
 | Fone de ouvido *(recomendado)* | com caixas de som, a voz dos outros vaza no seu microfone e aparece duplicada como "Eu" |
+
+### Hardware recomendado
+
+O que muda de uma máquina para outra é o **modelo de transcrição** que dá para rodar e se a **separação de vozes** (pyannote) é viável. O wizard de primeiro uso mede a máquina e aplica esta tabela sozinho; ela está aqui para você saber o que esperar antes de instalar.
+
+| Sua máquina | Transcrição (Whisper) | Separação de vozes | O que o wizard baixa |
+|---|---|---|---|
+| **GPU NVIDIA com mais de 4 GB de VRAM** (6 GB+: RTX 3050 6 GB, RTX 3060, RTX 4060…) | `large-v3-turbo` na GPU, quase em tempo real | **Ligada** - o wizard sugere aceitar os termos e registrar o token do Hugging Face | modelo (~1,5 GB) + bibliotecas CUDA (~3 GB) + torch/pyannote (~3 GB) |
+| **GPU NVIDIA com 4 GB de VRAM ou menos** (RTX 3050 4 GB, GTX 1650, MX…) | `large-v3-turbo` na GPU a partir de 3 GB; abaixo disso, CPU | **Desligada** - nessa faixa o pyannote trava o processamento em vez de só ficar lento ([#188](https://github.com/allanrmartins/ScribaDev/issues/188)); o wizard não baixa os modelos dela | modelo (~1,5 GB) + bibliotecas CUDA (~3 GB) |
+| **Sem GPU dedicada** (notebook corporativo) | `medium` com 16 GB de RAM e 8 núcleos; `small` com 8 GB; `tiny` abaixo disso | Opcional com 16 GB de RAM (roda na CPU, bem mais lenta); desaconselhada com menos | só o modelo (0,5 a 1,5 GB) |
+| **Mac com Apple Silicon** | `large-v3-turbo` via Metal (MLX) | Opcional (roda na CPU, mais lenta) | só o modelo (~1,5 GB) |
+
+- **RAM**: 8 GB é o mínimo; 16 GB deixa a transcrição em CPU e a separação de vozes confortáveis.
+- **Disco**: reserve de 2 GB (só o modelo) a 8 GB (GPU com tudo ligado) - o wizard avisa se não couber.
+- Tudo isso pode ser trocado depois em **Configurações**: modelo na aba Transcrição, separação de vozes na aba Gravação e os downloads em Sobre → Baixar componentes. Se você ligar a separação de vozes numa GPU de 4 GB, o `scribadev doctor` avisa.
 
 ## Instalação
 
@@ -84,7 +99,7 @@ Na primeira abertura, o **wizard de primeiro uso** analisa sua máquina (GPU, me
 - A primeira página é **o combinado de uso**: avisar os participantes antes de gravar e conferir as regras do seu contexto (o mesmo do [Aviso legal](#aviso-legal));
 - **Instalação Expressa** aceita as recomendações e baixa tudo de uma vez (modelo Whisper, bibliotecas CUDA se houver GPU NVIDIA);
 - **Instalação Avançada** deixa você escolher o modelo de transcrição (tiny → large-v3-turbo, com tamanho e velocidade de cada um) e os componentes;
-- A **separação de vozes** (pyannote) tem um passo a passo guiado para aceitar os termos e criar o token do Hugging Face — e pode ser **pulada** e ativada depois nas Configurações.
+- A **separação de vozes** (pyannote) segue a tabela de [Hardware recomendado](#hardware-recomendado): com GPU NVIDIA **acima de 4 GB de VRAM**, o wizard a recomenda e traz um passo a passo guiado para aceitar os termos e criar o token do Hugging Face; com **4 GB ou menos**, a Instalação Expressa a mantém **desligada** e não baixa os modelos dela (dá para ativar depois nas Configurações). Em qualquer caso ela pode ser **pulada**.
 
 <p align="center">
   <img src="docs/setup_combinado.png" alt="ScribaDev — wizard de primeiro uso: o combinado de uso antes de gravar" width="560">
@@ -306,7 +321,9 @@ O ScribaDev é focado em pt-BR por padrão, mas `language` e `hotwords` aceitam 
 
 Com a **diarização** ativa, as falas dos outros participantes saem como **Participante 1/2/3** em vez de um "Participantes" único — e o resumo tenta associar cada um ao nome/papel citado na conversa. Roda 100% local (pyannote.audio na GPU/CPU):
 
-1. **Instale o torch e o pyannote no venv do ScribaDev** — cole no PowerShell:
+> ⚠️ **Precisa de GPU NVIDIA com mais de 4 GB de VRAM** (ou de paciência na CPU). Com uma placa de **4 GB ou menos** o pyannote roda na GPU de qualquer jeito e **trava o processamento** em vez de só ficar lento ([#188](https://github.com/allanrmartins/ScribaDev/issues/188)) - nesse caso, deixe a diarização desligada. Veja [Hardware recomendado](#hardware-recomendado).
+
+1. **Instale o torch e o pyannote no venv do ScribaDev** - cole no PowerShell. Com GPU NVIDIA, o índice `cu128` é **obrigatório**: o `pip install torch` a seco instala o build **CPU** (`2.x.y+cpu`), e aí a separação de vozes roda inteira na CPU sem avisar - o `scribadev doctor` e a aba **Sobre** denunciam isso em vermelho:
 
    ```powershell
    $py = "$env:LOCALAPPDATA\ScribaDev\venv\Scripts\python.exe"

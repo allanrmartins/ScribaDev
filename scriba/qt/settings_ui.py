@@ -1171,11 +1171,25 @@ class SettingsWindow(QWidget):
             ("Python", sys.version.split()[0], "ok"),
             core("Transcrição", f"faster-whisper {fw or '?'} · ctranslate2 {ct or '?'}", bool(fw and ct)),
             ("Diarização", *self._diar_health(ver)),
-            ("PyTorch", torch_v or "não instalado (opcional — só p/ a diarização)", "ok" if torch_v else "warn"),
+            ("PyTorch", *self._torch_health(torch_v)),
             ("GPU", self._gpu_str(), "ok"),
             audio_row,
             ("Compressão de áudio", *self._ffmpeg_health()),
         ]
+
+    @staticmethod
+    def _torch_health(torch_v) -> tuple:
+        """Linha do PyTorch: versão e, com GPU NVIDIA + build CPU (`+cpu`), o
+        aviso em vermelho com o comando de correção (#190). Decide só pelo sufixo
+        da versão - importar o torch aqui congelaria a aba."""
+        if not torch_v:
+            return ("não instalado (opcional - só p/ a diarização)", "warn")
+        from .. import plat, sysprobe
+
+        aviso = sysprobe.torch_cpu_build_warning(torch_v, plat.has_nvidia_gpu())
+        if aviso:
+            return (aviso, "err")
+        return (torch_v, "ok")
 
     def _diar_health(self, ver) -> tuple:
         import importlib.util as ilu
