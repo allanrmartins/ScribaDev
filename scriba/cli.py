@@ -1055,6 +1055,18 @@ def cmd_doctor(args) -> int:
             if vram_warn:
                 _print(_WARN, "Diarização × VRAM", vram_warn)
 
+    # Atalhos com ícone quebrado (#192): repo movido na instalação por fonte
+    if sys.platform == "win32":
+        try:
+            from . import shortcuts
+
+            for lnk in shortcuts.stale_lnks():
+                _print(_WARN, f"Atalho {lnk.parent.name}\\{lnk.name}",
+                       "ícone aponta para arquivo inexistente (repositório movido?) - o app "
+                       "conserta no próximo boot; ou rode: scribadev shortcut")
+        except Exception as e:
+            _print(_WARN, "Atalhos", f"erro ao checar ({e})")
+
     # Enrollment de voz (#1): vozes que o app já aprende a reconhecer
     try:
         from . import speakers
