@@ -374,11 +374,8 @@ class SetupWizardWindow(QWidget):
             f = rb.font()
             f.setBold(True)
             rb.setFont(f)
-        self._voices_hint.setText({
-            "recomendada": "Recomendado para a sua máquina: a GPU dá conta sem esforço.",
-            "opcional": "Funciona nesta máquina, mas mais lento - você decide.",
-            "desaconselhada": "Nesta máquina tende a ficar lento - sugerimos pular por enquanto.",
-        }.get(r.diarization, ""))
+        # o porquê vem da sonda (sysprobe.recommend): é lá que mora a régua de VRAM
+        self._voices_hint.setText(r.diarization_hint)
 
     def _from_machine(self) -> None:
         self.express = self._rb_express.isChecked()
@@ -477,8 +474,13 @@ class SetupWizardWindow(QWidget):
             "<br><br><b>Alguns itens não baixaram</b> - sem problema: o app funciona "
             f"e você tenta de novo em Configurações → Sobre → Baixar componentes. Detalhe: {notes}")
         model = self._selected_model()
-        voices = ("pulada (baixe depois em Configurações → Sobre)" if self.skip_voices
-                  else "ativada")
+        if not self.skip_voices:
+            voices = "ativada"
+        elif self.rec is not None and self.rec.diarization == "desaconselhada":
+            voices = ("desligada, como recomendado para esta máquina (dá para ativar depois "
+                      "em Configurações → Sobre)")
+        else:
+            voices = "pulada (baixe depois em Configurações → Sobre)"
         self._ready_box.setText(
             f"Transcrição: <b>{model}</b> · Separação de vozes: <b>{voices}</b>.{extra}")
         self._stack.setCurrentIndex(_P_READY)

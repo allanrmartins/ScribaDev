@@ -57,10 +57,25 @@ audio archived as Opus (~20 MB/h) ──► folder renamed with the note's title
 | Windows 11 **or** macOS 14.2+ (Apple Silicon) | Windows uses WASAPI loopback and toasts; macOS uses CoreAudio process taps and Metal (MLX) transcription |
 | Python 3.12–3.14 *(source install only)* | the **installer** needs no Python — `winget install Python.Python.3.12` if contributing |
 | Teams/Zoom (desktop) or browser meetings | auto-detection for both; Meet, Teams web and friends are confirmed via the window title |
-| NVIDIA GPU *(optional)* | ~10× faster transcription; falls back to CPU automatically |
+| NVIDIA GPU *(optional)* | ~10× faster transcription; falls back to CPU automatically. **Speaker separation** needs **more than 4 GB of VRAM** - see [Recommended hardware](#recommended-hardware) |
 | [Claude Code](https://claude.com/claude-code) *(optional)* | only for the structured summary; without it you get the plain transcript |
 | [ffmpeg](https://ffmpeg.org/download.html) *(recommended)* | compresses the kept audio: raw WAV ~1.3 GB/h → **Opus ~20 MB/h**. Install with `winget install ffmpeg` — it adds itself to the **Windows PATH** (not a ScribaDev folder) — and **reopen the app**; check with `where ffmpeg`. Without it, recordings stay as raw, huge `.wav` |
 | Headphones *(recommended)* | with speakers, other people's voices leak into your mic and get duplicated as "Me" |
+
+### Recommended hardware
+
+What changes from one machine to the next is which **transcription model** you can run and whether **speaker separation** (pyannote) is viable. The first-run wizard measures your machine and applies this table on its own; it is here so you know what to expect before installing.
+
+| Your machine | Transcription (Whisper) | Speaker separation | What the wizard downloads |
+|---|---|---|---|
+| **NVIDIA GPU with more than 4 GB of VRAM** (6 GB+: RTX 3050 6 GB, RTX 3060, RTX 4060…) | `large-v3-turbo` on the GPU, near real time | **On** - the wizard suggests accepting the terms and registering the Hugging Face token | model (~1.5 GB) + CUDA libraries (~3 GB) + torch/pyannote (~3 GB) |
+| **NVIDIA GPU with 4 GB of VRAM or less** (RTX 3050 4 GB, GTX 1650, MX…) | `large-v3-turbo` on the GPU from 3 GB up; below that, CPU | **Off** - in that range pyannote hangs the processing instead of just being slow ([#188](https://github.com/allanrmartins/ScribaDev/issues/188)); the wizard does not download its models | model (~1.5 GB) + CUDA libraries (~3 GB) |
+| **No dedicated GPU** (corporate laptop) | `medium` with 16 GB of RAM and 8 cores; `small` with 8 GB; `tiny` below that | Optional with 16 GB of RAM (runs on the CPU, much slower); not advised with less | model only (0.5 to 1.5 GB) |
+| **Mac with Apple Silicon** | `large-v3-turbo` via Metal (MLX) | Optional (runs on the CPU, slower) | model only (~1.5 GB) |
+
+- **RAM**: 8 GB is the minimum; 16 GB keeps CPU transcription and speaker separation comfortable.
+- **Disk**: set aside 2 GB (model only) to 8 GB (GPU with everything on) - the wizard warns if it does not fit.
+- All of this can be changed later in **Settings**: model in the Transcription tab, speaker separation in the Recording tab and the downloads in About → Download components. If you turn speaker separation on with a 4 GB GPU, `scribadev doctor` warns you.
 
 ## Install
 
@@ -84,7 +99,7 @@ On first launch, the **first-run wizard** analyzes your machine (GPU, memory, di
 - The first page is **the ground rules**: tell the other participants before you record, and check the rules that apply to you (same as [Legal notice](#legal-notice));
 - **Express install** accepts the recommendations and downloads everything at once (Whisper model, CUDA libraries if you have an NVIDIA GPU);
 - **Advanced install** lets you pick the transcription model (tiny → large-v3-turbo, with size and speed for each) and the components;
-- **Speaker separation** (pyannote) has a guided walkthrough to accept the terms and create the Hugging Face token — and can be **skipped** and enabled later in Settings.
+- **Speaker separation** (pyannote) follows the [Recommended hardware](#recommended-hardware) table: with an NVIDIA GPU **above 4 GB of VRAM**, the wizard recommends it and walks you through accepting the terms and creating the Hugging Face token; with **4 GB or less**, Express install keeps it **off** and does not download its models (you can enable it later in Settings). Either way it can be **skipped**.
 
 <p align="center">
   <img src="docs/setup_combinado.png" alt="ScribaDev — first-run wizard: the ground rules before recording" width="560">
@@ -306,7 +321,9 @@ ScribaDev defaults to Brazilian Portuguese, but `language`, `hotwords` and the s
 
 With **diarization** on, the other participants come out as **Participante 1/2/3** instead of a single "Participantes" — and the summary tries to map each one to names/roles mentioned in the conversation. Runs 100% locally (pyannote.audio on GPU/CPU):
 
-1. **Install torch and pyannote in ScribaDev's venv** — paste into PowerShell:
+> ⚠️ **Needs an NVIDIA GPU with more than 4 GB of VRAM** (or patience on the CPU). With a **4 GB or smaller** card, pyannote still runs on the GPU and **hangs the processing** instead of just being slow ([#188](https://github.com/allanrmartins/ScribaDev/issues/188)) - in that case, leave diarization off. See [Recommended hardware](#recommended-hardware).
+
+1. **Install torch and pyannote in ScribaDev's venv** - paste into PowerShell. With an NVIDIA GPU the `cu128` index is **mandatory**: a bare `pip install torch` installs the **CPU** build (`2.x.y+cpu`), and then speaker separation silently runs entirely on the CPU - `scribadev doctor` and the **About** tab flag it in red:
 
    ```powershell
    $py = "$env:LOCALAPPDATA\ScribaDev\venv\Scripts\python.exe"

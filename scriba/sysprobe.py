@@ -45,11 +45,22 @@ class Probe:
     apple_silicon: bool = False
 
 
+# Separação de vozes só é recomendada ACIMA de 4 GB de VRAM. Numa placa de 4 GB
+# (RTX 3050 Laptop, #188) o pyannote fica na borda do cap do allocator e o
+# processamento TRAVA em vez de falhar; a mesma reunião roda de boa em 6 GB.
+# Placas de 4 GB reportam ~4096 MB no nvidia-smi, por isso a régua fica em 5000.
+DIARIZATION_MIN_VRAM_MB = 5000
+
+# comando que troca o torch de build CPU pelo build CUDA (README, doctor, Sobre)
+TORCH_CUDA_FIX = "pip install torch --index-url https://download.pytorch.org/whl/cu128 --force-reinstall"
+
+
 @dataclass
 class Recommendation:
     whisper_model: str = "small"
     device: str = "cpu"              # cuda | mlx | cpu
     diarization: str = "opcional"    # recomendada | opcional | desaconselhada
+    diarization_hint: str = ""       # frase da página de Vozes do wizard (o porquê)
     needs_cuda_libs: bool = False    # download das libs NVIDIA (só instalação congelada)
     reasons: list[str] = field(default_factory=list)
 
@@ -275,15 +286,30 @@ def recommend(p: Probe) -> Recommendation:
             r.reasons.append(f"Memória limitada ({ram:.0f} GB): o modelo tiny garante fluidez; "
                              "dá para trocar depois nas Configurações.")
 
-    # diarização (separação de vozes): torque de GPU faz diferença
-    if p.gpu_nvidia and (p.vram_mb or 0) >= 4000:
+    # diarização (separação de vozes): torque de GPU faz diferença - e VRAM de
+    # sobra também. Com GPU NVIDIA o pyannote SEMPRE roda em CUDA, então uma
+    # placa de 4 GB ou menos não cai em "CPU lenta": cai em travamento (#188).
+    vram_gb = round((p.vram_mb or 0) / 1024)
+    if p.gpu_nvidia and (p.vram_mb or 0) >= DIARIZATION_MIN_VRAM_MB:
         r.diarization = "recomendada"
-        r.reasons.append("Separação de vozes recomendada: sua GPU dá conta sem esforço.")
+        r.diarization_hint = (f"Recomendado para a sua máquina: sua GPU tem {vram_gb} GB de VRAM, "
+                              "mais do que a separação de vozes precisa.")
+        r.reasons.append(f"Separação de vozes recomendada: {vram_gb} GB de VRAM dão conta sem esforço "
+                         "(vale registrar o token do Hugging Face no próximo passo).")
+    elif p.gpu_nvidia:
+        r.diarization = "desaconselhada"
+        r.diarization_hint = (f"Sua GPU tem {vram_gb} GB de VRAM, e a separação de vozes precisa de mais "
+                              "de 4 GB: nessa faixa o processamento tende a travar. Sugerimos manter "
+                              "desligada e não baixar os modelos por enquanto.")
+        r.reasons.append(f"Separação de vozes desligada: com {vram_gb} GB de VRAM ela tende a travar o "
+                         "processamento (precisa de mais de 4 GB) - não baixamos os modelos dela.")
     elif p.apple_silicon or ram >= 16:
         r.diarization = "opcional"
+        r.diarization_hint = "Funciona nesta máquina, mas mais lento - você decide."
         r.reasons.append("Separação de vozes disponível, mas mais lenta nesta máquina — opcional.")
     else:
         r.diarization = "desaconselhada"
+        r.diarization_hint = "Nesta máquina tende a ficar lento - sugerimos pular por enquanto."
         r.reasons.append("Separação de vozes desaconselhada aqui (sem GPU e pouca memória) — "
                          "dá para ativar depois nas Configurações.")
 
@@ -294,3 +320,35 @@ def recommend(p: Probe) -> Recommendation:
         r.reasons.append(f"Atenção: só {p.disk_free_gb:.0f} GB livres em disco — os downloads "
                          f"recomendados somam ~{need_gb:.0f} GB.")
     return r
+
+
+# ------------------------------------------------- diagnóstico da diarização --
+# Puras (testáveis) e compartilhadas pelo `scribadev doctor`, pela aba Sobre e
+# pelo diagnóstico: o mesmo texto em todo lugar, para a régua não divergir.
+
+
+def diarization_vram_warning(vram_mb: int | None) -> str | None:
+    """Aviso quando a GPU NVIDIA tem VRAM de menos para a separação de vozes
+    (mesma régua do wizard); None quando dá conta ou a VRAM é desconhecida."""
+    if vram_mb is None or vram_mb >= DIARIZATION_MIN_VRAM_MB:
+        return None
+    return (f"GPU com {round(vram_mb / 1024)} GB de VRAM: a separação de vozes precisa de mais de "
+            "4 GB e nessa faixa o processamento tende a TRAVAR (#188). Recomendamos desligar "
+            "\"Separar participantes por voz\" na aba Gravação.")
+
+
+def torch_cpu_build_warning(torch_version: str | None, gpu_nvidia: bool,
+                            cuda_available: bool | None = None) -> str | None:
+    """Aviso quando a máquina tem GPU NVIDIA mas o torch instalado não a enxerga
+    (#190): build CPU do PyPI (`2.12.1+cpu`) ou CUDA indisponível em tempo de
+    execução. Sem GPU ou sem torch não há o que avisar. `cuda_available` é
+    opcional porque a aba Sobre não importa o torch (pesado demais p/ abrir
+    uma aba) e decide só pelo sufixo da versão."""
+    if not gpu_nvidia or not torch_version:
+        return None
+    cpu_build = torch_version.endswith("+cpu")
+    if not cpu_build and cuda_available is not False:
+        return None
+    motivo = ("é build CPU do PyPI" if cpu_build else "não enxerga a GPU (CUDA indisponível)")
+    return (f"torch {torch_version} {motivo}: a separação de vozes roda inteira em CPU, mesmo com "
+            f"GPU NVIDIA. Corrija com: {TORCH_CUDA_FIX}")

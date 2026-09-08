@@ -97,6 +97,24 @@ class SetupWizardTests(unittest.TestCase):
         w._from_machine()
         self.assertEqual(w._stack.currentIndex(), self.swz._P_VOICES)  # termos são manuais
 
+    def test_expressa_com_gpu_de_4gb_pula_vozes_e_nao_baixa_os_modelos(self):
+        # #188: placa de 4 GB (RTX 3050 Laptop) trava a diarização - a Expressa
+        # mantém desligada, não baixa torch/pyannote e diz o porquê na tela
+        sysprobe.probe = lambda: sysprobe.Probe(cpu_cores=16, ram_gb=32, disk_free_gb=100,
+                                                gpu_nvidia=True, vram_mb=4096)
+        w = self._win()
+        self.assertEqual(w.rec.diarization, "desaconselhada")
+        self.assertIn("4 GB de VRAM", w._voices_hint.text())
+        self.assertIn("GPU NVIDIA (4 GB)", w._machine_box.text())
+        w._rb_express.setChecked(True)
+        w._from_machine()
+        self.qapp.processEvents()
+        self.assertEqual(w._stack.currentIndex(), self.swz._P_READY)   # nem passou por Vozes
+        self.assertNotIn("voices", [k for k, _l, _mb in w._plan_items()])
+        self.assertIn("model:large-v3-turbo", [k for k, _l, _mb in w._plan_items()])
+        self.assertFalse(self._reload_cfg().diarization.enabled)
+        self.assertIn("desligada, como recomendado", w._ready_box.text())
+
     def test_avancada_passa_pela_pagina_de_modelo(self):
         w = self._win()
         w._rb_custom.setChecked(True)
