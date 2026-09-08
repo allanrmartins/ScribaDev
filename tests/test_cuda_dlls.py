@@ -30,8 +30,13 @@ class CudaDllDirsTests(unittest.TestCase):
         self.raiz = Path(self._tmp.name)
         self._app0 = util.APP_DIR
         util.APP_DIR = self.raiz / "appdir"
+        # isola também o venv REAL: numa máquina com GPU o site-packages tem os
+        # nvidia-* de verdade e "sem nada" devolvia 3 pastas (falhava só no dev)
+        self._prefix0 = sys.prefix
+        sys.prefix = str(self.raiz / "prefix-vazio")
 
     def tearDown(self):
+        sys.prefix = self._prefix0
         util.APP_DIR = self._app0
         self._tmp.cleanup()
 
