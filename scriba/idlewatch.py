@@ -6,20 +6,30 @@ ONDE o filho parou. O relato da #188 (diarização parada com CPU a zero, duas
 vezes na mesma gravação) chegou sem nenhum rastro da causa: o process.log só
 tem o que foi impresso ANTES da trava.
 
-Esta sentinela roda DENTRO do filho: `faulthandler.dump_traceback_later` é uma
-thread em C que despeja a pilha de TODAS as threads direto no fd quando o
-processo fica `idle_s` sem "bater" - funciona mesmo com o GIL preso num
-deadlock, que é exatamente o cenário que interessa. Batimentos: cada escrita no
-stdout (as linhas de progresso do process.log), cada mudança de estágio e cada
-bloco da diarização. O resumo (espera legítima de rede, sem CPU nem log) fica
-SUSPENSO - lá o watchdog do pai já respeita o timeout configurado.
+Esta sentinela roda DENTRO do filho: uma thread daemon (o mesmo desenho do
+watchdog da GUI, scriba/watchdog.py) confere a cada instante há quanto tempo o
+processo não "bate"; passado `idle_s`, despeja a pilha de TODAS as threads com
+`faulthandler.dump_traceback`. Batimentos: cada escrita no stdout (as linhas de
+progresso do process.log), cada mudança de estágio e cada bloco da diarização.
+O resumo (espera legítima de rede, sem CPU nem log) fica SUSPENSO - lá o
+watchdog do pai já respeita o timeout configurado.
+
+Por que NÃO `faulthandler.dump_traceback_later` (#194): a thread em C dele
+percorre os frames das outras threads SEM o GIL, enquanto elas executam Python.
+No macOS arm64 isso trava a própria thread em C dentro do dump (reproduzido em
+CI: thread principal em recursão com exceções no instante do dump) e o
+`cancel_dump_traceback_later` seguinte - que todo batimento e o desarme
+chamavam - espera por ela para sempre, pendurando o processo inteiro. O dump
+síncrono roda COM o GIL: nenhuma outra thread mexe em frames enquanto ele lê.
+O que se perde é o retrato de um travamento que segure o GIL em código C; esse
+caso segue coberto pelo encerramento do pai, só sem as pilhas.
 
 O dump vai para `hang.log` NA PASTA DA REUNIÃO, nunca para o process.log: o
 tamanho do process.log é um dos sinais de vida que o pai sonda, e escrever nele
-adiaria (ou anularia, com `repeat`) o encerramento do filho travado. Com
-`repeat=True` saem dois retratos (8 e 16 min parado) antes do pai agir: pilhas
-iguais = travado; diferentes = lentidão extrema. O arquivo só fica na pasta se
-houve dump; sem dump ele é removido no desarme.
+adiaria (ou anularia) o encerramento do filho travado. Parado de vez, saem
+retratos a cada `idle_s` (8 e 16 min) antes do pai agir: pilhas iguais =
+travado; diferentes = lentidão extrema. O arquivo só fica na pasta se houve
+dump; sem dump ele é removido no desarme.
 """
 
 from __future__ import annotations
@@ -37,12 +47,13 @@ log = logging.getLogger("scriba.idlewatch")
 
 IDLE_S = 8 * 60          # sem batimento por tanto tempo = despeja as pilhas
 HANG_LOG = "hang.log"    # na pasta da reunião (o do app, em logs/, é o da GUI)
-_MIN_REARM_S = 1.0       # cada rearme cria uma thread em C; batidas mais miúdas são coalescidas
+_POLL_S = 1.0            # cadência máxima da conferência (mais fina com idle_s curto)
+_JOIN_S = 2.0            # quanto o desarme espera a thread da sentinela encerrar
 
 
 class _State:
     __slots__ = ("folder", "path", "file", "idle_s", "header_end", "suspended",
-                 "last_arm", "prev_stdout")
+                 "last_beat", "prev_stdout", "stop", "thread", "retratos")
 
     def __init__(self, folder: Path, path: Path, file, idle_s: float, header_end: int,
                  prev_stdout) -> None:
@@ -52,8 +63,11 @@ class _State:
         self.idle_s = idle_s
         self.header_end = header_end
         self.suspended = False
-        self.last_arm = 0.0
+        self.last_beat = time.monotonic()
         self.prev_stdout = prev_stdout
+        self.stop = threading.Event()
+        self.thread: threading.Thread | None = None
+        self.retratos = 0
 
 
 _lock = threading.Lock()
@@ -77,9 +91,33 @@ class _BeatingStream:
         return getattr(self._s, name)
 
 
-def _schedule(st: _State) -> None:
-    faulthandler.dump_traceback_later(st.idle_s, repeat=True, file=st.file, exit=False)
-    st.last_arm = time.monotonic()
+def _dump_locked(st: _State, parado_s: float) -> None:
+    """(thread da sentinela, com _lock e o GIL) Cabeçalho + pilhas de todas as threads."""
+    st.retratos += 1
+    limiar = f"{parado_s / 60:.0f} min" if parado_s >= 60 else f"{parado_s:.1f} s"
+    st.file.write(f"==== {datetime.now():%d/%m/%Y %H:%M:%S} · {limiar} sem progresso "
+                  f"(retrato {st.retratos}) ====\n")
+    st.file.flush()   # o faulthandler escreve direto no fd: o cabeçalho tem que ir antes
+    faulthandler.dump_traceback(file=st.file, all_threads=True)
+    st.file.flush()
+
+
+def _monitor(st: _State) -> None:
+    poll = max(0.02, min(_POLL_S, st.idle_s / 4))
+    while not st.stop.wait(poll):
+        with _lock:
+            if _state is not st:
+                return
+            if st.suspended:
+                continue
+            parado = time.monotonic() - st.last_beat
+            if parado < st.idle_s:
+                continue
+            try:
+                _dump_locked(st, parado)
+            except Exception:
+                log.debug("sentinela: dump falhou", exc_info=True)
+            st.last_beat = time.monotonic()   # próximo retrato só após mais idle_s parado
 
 
 def arm(folder, idle_s: float | None = None) -> bool:
@@ -93,7 +131,7 @@ def arm(folder, idle_s: float | None = None) -> bool:
     with _lock:
         if _state is not None:
             if _state.folder == folder:
-                _beat_locked(_state)
+                _state.last_beat = time.monotonic()
                 return True
             _disarm_locked(None)
         try:
@@ -110,7 +148,9 @@ def arm(folder, idle_s: float | None = None) -> bool:
                 if prev_stdout is not None and not isinstance(prev_stdout, _BeatingStream):
                     sys.stdout = _BeatingStream(prev_stdout)
                 st = _State(folder, path, f, float(idle_s), header_end, prev_stdout)
-                _schedule(st)
+                st.thread = threading.Thread(target=_monitor, args=(st,), daemon=True,
+                                             name="scriba-idlewatch")
+                st.thread.start()
             except Exception:
                 f.close()
                 raise
@@ -121,51 +161,28 @@ def arm(folder, idle_s: float | None = None) -> bool:
         return True
 
 
-def _beat_locked(st: _State) -> None:
-    if st.suspended:
-        return
-    if time.monotonic() - st.last_arm < _MIN_REARM_S:
-        return
-    try:
-        _schedule(st)
-    except Exception:
-        log.debug("sentinela: rearme falhou", exc_info=True)
-
-
 def beat() -> None:
-    """Sinal de vida (thread-safe, barato quando bate mais de uma vez por segundo)."""
+    """Sinal de vida (thread-safe e barato: um timestamp, sem lock nem thread nova)."""
     st = _state
-    if st is None:
-        return
-    with _lock:
-        if _state is st:
-            _beat_locked(st)
+    if st is not None:
+        st.last_beat = time.monotonic()
 
 
 def suspend() -> None:
     """Pausa a sentinela: espera legítima sem CPU nem log (o resumo via rede/CLI)."""
     with _lock:
         st = _state
-        if st is None or st.suspended:
-            return
-        st.suspended = True
-        try:
-            faulthandler.cancel_dump_traceback_later()
-        except Exception:
-            pass
+        if st is not None:
+            st.suspended = True
 
 
 def resume() -> None:
-    """Volta a vigiar depois de `suspend()`."""
+    """Volta a vigiar depois de `suspend()`; o prazo conta a partir daqui."""
     with _lock:
         st = _state
-        if st is None or not st.suspended:
-            return
-        st.suspended = False
-        try:
-            _schedule(st)
-        except Exception:
-            log.debug("sentinela: rearme após suspensão falhou", exc_info=True)
+        if st is not None and st.suspended:
+            st.suspended = False
+            st.last_beat = time.monotonic()
 
 
 def dumped() -> bool:
@@ -180,16 +197,13 @@ def dumped() -> bool:
         return False
 
 
-def _disarm_locked(note: str | None) -> None:
+def _disarm_locked(note: str | None) -> _State | None:
     global _state
     st = _state
     if st is None:
-        return
+        return None
     _state = None
-    try:
-        faulthandler.cancel_dump_traceback_later()
-    except Exception:
-        pass
+    st.stop.set()
     if isinstance(sys.stdout, _BeatingStream):
         sys.stdout = st.prev_stdout
     houve_dump = False
@@ -209,6 +223,7 @@ def _disarm_locked(note: str | None) -> None:
             st.path.unlink(missing_ok=True)
         except OSError:
             pass
+    return st
 
 
 def disarm(note: str | None = "o processo seguiu depois do dump: lentidão extrema, "
@@ -216,4 +231,7 @@ def disarm(note: str | None = "o processo seguiu depois do dump: lentidão extre
     """Desliga a sentinela. Sem dump, o hang.log é removido; com dump, `note`
     é anexada para o leitor saber que o processo NÃO morreu ali."""
     with _lock:
-        _disarm_locked(note)
+        st = _disarm_locked(note)
+    # o join fica FORA do _lock: a thread precisa dele para perceber o desarme
+    if st is not None and st.thread is not None and st.thread is not threading.current_thread():
+        st.thread.join(_JOIN_S)
