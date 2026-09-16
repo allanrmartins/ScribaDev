@@ -133,7 +133,10 @@ def test_token(model: str, token: str) -> tuple[bool, str]:
         warnings.filterwarnings("ignore", message="(?s).*torchcodec.*")
         from pyannote.audio import Pipeline
     except Exception as e:  # noqa: BLE001 — ImportError E import interno quebrado (#197)
-        return (False, f"Diarização: {deps_error_message(e)}")
+        msg = deps_error_message(e)
+        if msg.startswith("dependências ausentes"):
+            return (False, f"Diarização não instalada — falta o extra [diarization] (pyannote + torch). {e}")
+        return (False, f"Diarização: {msg}")
     try:
         try:
             pipe = Pipeline.from_pretrained(model, token=token)

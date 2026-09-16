@@ -183,6 +183,28 @@ class DiarizeComImportQuebradoTests(unittest.TestCase):
             sys.modules.pop("pyannote", None)
         sys.modules.update(self._salvos)
 
+    def test_test_token_tambem_classifica(self):
+        """O botão "Testar" das Configurações passa pela mesma classificação."""
+        ok, msg = diarize.test_token("pyannote/x", "hf_faketoken")
+        self.assertFalse(ok)
+        self.assertTrue(msg.startswith("Diarização: torch/pyannote instalados"), msg)
+        self.assertIn("scipy.cluster", msg)
+
+    def test_test_token_pyannote_ausente_mantem_a_mensagem_de_instalacao(self):
+        # `None` em sys.modules = "não existe" para o import system (vale em qualquer CI)
+        sys.modules.pop("pyannote.audio", None)
+        salvo = sys.modules.get("pyannote")
+        sys.modules["pyannote"] = None
+        try:
+            ok, msg = diarize.test_token("pyannote/x", "hf_faketoken")
+        finally:
+            if salvo is None:
+                sys.modules.pop("pyannote", None)
+            else:
+                sys.modules["pyannote"] = salvo
+        self.assertFalse(ok)
+        self.assertIn("não instalada", msg)
+
     def test_meta_recebe_a_causa_real(self):
         meta: dict = {}
         cfg = Diarization(enabled=True, hf_token="hf_x")
