@@ -67,38 +67,37 @@ _pkg_datas = [
     (str(REPO / "scriba" / "qt" / "icons"), "scriba/qt/icons"),
 ]
 
+# Regras compartilhadas com o spec Windows (installer/speclib.py): stdlib inteira
+# COM submódulos, scipy inteiro quando presente e a asserção de build.
+import sys as _sys
+
+_sys.path.insert(0, str(REPO / "installer"))
+import speclib  # noqa: E402
+
 # stdlib INTEIRA no bundle (#187) — mesmo racional do spec Windows: os addons
 # (torch/pyannote, fora da análise estática) importam stdlib em runtime, e
 # módulo fora do bundle não existe num exe congelado (caso vivido: `timeit`,
-# diarização morta em silêncio em toda instalação por instalador).
-import importlib.util as _ilu
-import sys as _sys
+# diarização morta em silêncio em toda instalação por instalador). Desde a
+# #197 vai COM os submódulos: só o nome de topo deixava `unittest.mock` (que o
+# lightning_utilities e o próprio torch importam) de fora, e a diarização
+# nunca rodou no DMG ("No module named 'unittest.mock'").
+_stdlib = speclib.stdlib_hiddenimports()
 
-_STDLIB_DENY = {
-    "antigravity", "this", "idlelib", "lib2to3", "turtledemo", "turtle",
-    "tkinter", "test", "ensurepip",
-}
-
-
-def _importavel(m):
-    try:
-        return _ilu.find_spec(m) is not None
-    except Exception:
-        return False  # módulo deprecated/quebrado: fora do bundle, sem drama
-
-
-_stdlib = sorted(
-    m for m in _sys.stdlib_module_names
-    if not m.startswith("_") and m not in _STDLIB_DENY and _importavel(m)
-)
+# Pacotes compartilhados com os addons INTEIROS (#197): o mlx_whisper depende do
+# scipy e importa PARTE dele, o PyInstaller levava só essa parte (113 arquivos,
+# zero .py), e como o pacote do bundle vence o `__path__`, o scipy completo do
+# addons nunca era consultado — "No module named 'scipy.cluster'" no clustering
+# do pyannote. Mesma regra p/ o safetensors (installer/speclib.py).
+_scipy_datas, _scipy_binaries, _scipy_hidden = speclib.collect_all_compartilhados()
 
 _common = dict(
     pathex=[str(REPO)],
-    binaries=_pip_binaries + _mlx_binaries + _mlxw_binaries,
-    datas=_pkg_datas + _pip_datas + _mlx_datas + _mlxw_datas + _fw_datas,
+    binaries=_pip_binaries + _mlx_binaries + _mlxw_binaries + _scipy_binaries,
+    datas=_pkg_datas + _pip_datas + _mlx_datas + _mlxw_datas + _fw_datas + _scipy_datas,
     # typing_extensions no bundle (#167) — mesmo racional do spec Windows: core
     # do app não pode depender do addons em estado transitório de instalação
-    hiddenimports=_pip_hidden + _mlx_hidden + _mlxw_hidden + ["typing_extensions"] + _stdlib,
+    hiddenimports=(_pip_hidden + _mlx_hidden + _mlxw_hidden + ["typing_extensions"]
+                   + _stdlib + _scipy_hidden),
     excludes=_excludes,
     noarchive=False,
     module_collection_mode=_pip_collection_mode,
@@ -106,6 +105,11 @@ _common = dict(
 
 a_cli = Analysis([str(Path(SPECPATH) / "entry_cli.py")], **_common)
 a_app = Analysis([str(Path(SPECPATH) / "entry_tray.py")], **_common)
+
+# O build FALHA se o que os componentes baixados importam em runtime ficou de
+# fora (#196/#197) — melhor um build vermelho que um DMG com a diarização morta.
+for _a in (a_cli, a_app):
+    speclib.exigir_tudo(_a)
 
 pyz_cli = PYZ(a_cli.pure)
 pyz_app = PYZ(a_app.pure)

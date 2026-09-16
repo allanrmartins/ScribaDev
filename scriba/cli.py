@@ -163,6 +163,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="bibliotecas NVIDIA (cuBLAS/cuDNN, ~3 GB)")
     p_comp.add_argument("--voices", action="store_true",
                         help="separação de vozes (torch + pyannote, ~3 GB)")
+    p_comp.add_argument("--check", action="store_true",
+                        help="só verifica se os componentes de voz já baixados importam neste "
+                             "app (sem baixar nada); sai com 1 se não (#196/#197)")
 
     p_auto = sub.add_parser("autostart", help="liga/desliga o início automático com o Windows")
     p_auto.add_argument("mode", choices=["on", "off"])
@@ -370,9 +373,13 @@ def cmd_components(args) -> int:
     por terminal (no app instalado, o pip roda in-process — scriba.addons)."""
     from . import components
 
+    if getattr(args, "check", False):
+        ok, detalhe = components.check_voices()
+        print(f"separação de vozes: {'OK' if ok else 'FALHOU'} - {detalhe}")
+        return 0 if ok else 1
     plan = components.plan_items(model=args.model, cuda=args.cuda, voices=args.voices)
     if not plan:
-        print("nada a fazer - passe --model NOME, --cuda e/ou --voices (veja --help)")
+        print("nada a fazer - passe --model NOME, --cuda, --voices ou --check (veja --help)")
         return 2
     last_pct = -1
 
@@ -1015,8 +1022,12 @@ def cmd_doctor(args) -> int:
 
     # Diarização
     if cfg and cfg.diarization.enabled:
-        try:
-            import pyannote.audio  # noqa: F401
+        from . import components
+
+        # mesma checagem do `components --check` e do smoke do CI (#196/#197): um
+        # import interno quebrado (módulo fora do bundle) não é "falta o extra"
+        ok_voices, detalhe = components.check_voices()
+        if ok_voices:
             import torch
 
             gpu = "GPU" if torch.cuda.is_available() else "CPU"
@@ -1025,8 +1036,10 @@ def cmd_doctor(args) -> int:
                 _print(_OK, "Diarização", f"habilitada ({gpu}); modelo {cfg.diarization.model}; {mode}")
             else:
                 _print(_WARN, "Diarização", "habilitada mas SEM token HF — configure na aba Gravação")
-        except ImportError as e:
-            _print(_WARN, "Diarização", f"habilitada mas dependências ausentes ({e}) — pip install -e .[diarization]")
+        else:
+            if "falta o extra" in detalhe:
+                detalhe += " — pip install -e .[diarization]"
+            _print(_WARN, "Diarização", f"habilitada mas {detalhe}")
     else:
         _print(_OK, "Diarização", "desabilitada (participantes saem agrupados)")
 
