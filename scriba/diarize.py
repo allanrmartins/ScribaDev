@@ -241,8 +241,11 @@ def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None,
             # Áudio longo: diariza em blocos p/ NÃO estourar a VRAM (o pico da
             # diarização é ~O(duração²) — a matriz de afinidade do clustering). As
             # vozes da PRÓPRIA call são re-ligadas pelo embedding (não depende de
-            # conhecer ninguém). num_speakers não se aplica por bloco.
-            out = _diarize_chunked(pipe, audio, int(audio["sample_rate"]), chunk_s)
+            # conhecer ninguém). O nº de vozes informado vale aqui também (#198):
+            # teto por bloco + redução das vozes globais ao N no fim.
+            out = _diarize_chunked(pipe, audio, int(audio["sample_rate"]), chunk_s,
+                                   num_speakers=kwargs.get("num_speakers"),
+                                   max_speakers=kwargs.get("max_speakers"))
         else:
             if "num_speakers" in kwargs:
                 print(f"separando participantes por voz (fixo em {kwargs['num_speakers']} voz(es))...")
@@ -537,19 +540,62 @@ def _match_or_new_global(globals_: list, vec, threshold: float = _RELINK_THRESHO
     return gid
 
 
-def _diarize_chunked(pipe, audio, sr: int, chunk_s: int) -> tuple[list[Turn], dict[str, list[float]]] | None:
+def _reduce_globals_to(globals_: list, n: int) -> dict[str, str]:
+    """Funde as vozes globais mais parecidas até sobrarem `n` (#198).
+
+    Aglomerativo simples: a cada passo o par de centroides de maior cosseno vira
+    um só (média ponderada pelas amostras). `globals_` é mutado; devolve o mapa
+    {id fundido → id que ficou} p/ reescrever os trechos. Com `n` ≥ vozes atuais
+    não faz nada (não dá para SEPARAR o que o clustering juntou — só juntar).
+    """
+    mapa: dict[str, str] = {}
+    while n >= 1 and len(globals_) > n:
+        best = (-2.0, 0, 1)
+        for i in range(len(globals_)):
+            for j in range(i + 1, len(globals_)):
+                s = _cosine(globals_[i][0], globals_[j][0])
+                if s > best[0]:
+                    best = (s, i, j)
+        _s, i, j = best
+        cen_i, n_i, gid_i = globals_[i]
+        cen_j, n_j, gid_j = globals_[j]
+        globals_[i] = [(cen_i * n_i + cen_j * n_j) / (n_i + n_j), n_i + n_j, gid_i]
+        del globals_[j]
+        # quem já apontava p/ gid_j passa a apontar p/ gid_i (fusões encadeadas)
+        for k, v in list(mapa.items()):
+            if v == gid_j:
+                mapa[k] = gid_i
+        mapa[gid_j] = gid_i
+    return mapa
+
+
+def _diarize_chunked(pipe, audio, sr: int, chunk_s: int, num_speakers: int | None = None,
+                     max_speakers: int | None = None) -> tuple[list[Turn], dict[str, list[float]]] | None:
     """Diariza áudio longo em blocos de `chunk_s` segundos, re-ligando as vozes
     entre blocos pelo embedding (cosseno). Cada bloco cabe na VRAM; entre blocos o
     cache CUDA é liberado — assim o pico fica por-bloco e nunca estoura. As vozes
-    da própria call são re-ligadas, então funciona mesmo sem conhecer ninguém."""
+    da própria call são re-ligadas, então funciona mesmo sem conhecer ninguém.
+
+    num_speakers (#198): o nº informado pelo usuário era DESCARTADO neste caminho
+    — e com chunk_minutes=3 (default) praticamente toda reunião real cai aqui, o
+    que fazia a pergunta "quantas vozes?" só valer para calls de menos de 3 min.
+    O `num_speakers` do pyannote é por chamada e um bloco pode ter só parte das
+    vozes, então ele não pode ser fixado por bloco; o que vale é: (1) teto por
+    bloco (`max_speakers=N`: um bloco nunca tem mais vozes que a call inteira) e
+    (2) no fim, as vozes globais re-ligadas são REDUZIDAS a N fundindo os
+    centroides mais parecidos (`_reduce_globals_to`). Sem num_speakers, só o
+    max_speakers do config (se houver) vale como teto por bloco."""
     import numpy as np
 
     wav = audio["waveform"]
     total = wav.shape[-1]
     chunk_n = max(1, int(chunk_s * sr))
     n_chunks = (total + chunk_n - 1) // chunk_n
+    teto = int(num_speakers or max_speakers or 0)
+    block_kwargs = {"max_speakers": teto} if teto >= 1 else {}
+    fixo = f", fixo em {int(num_speakers)} voz(es)" if num_speakers else ""
     print(f"separando participantes por voz em {n_chunks} blocos de ~{chunk_s // 60} min "
-          "(áudio longo: evita estouro de VRAM)...")
+          f"(áudio longo: evita estouro de VRAM{fixo})...")
 
     globals_: list = []          # [centroide(np), n_amostras, id global] por voz da call
     all_turns: list[Turn] = []
@@ -561,7 +607,7 @@ def _diarize_chunked(pipe, audio, sr: int, chunk_s: int) -> tuple[list[Turn], di
         # sentinela (#188) tomaria uma diarização longa em CPU por travamento
         idlewatch.beat()
         try:
-            out = _run_pipe(pipe, {"waveform": wav[:, a:b].clone(), "sample_rate": sr}, {})
+            out = _run_pipe(pipe, {"waveform": wav[:, a:b].clone(), "sample_rate": sr}, block_kwargs)
         except Exception as e:
             if _is_cuda_context_error(e):
                 # Contexto CUDA corrompido (#115): NÃO submeter mais NADA à GPU —
@@ -598,6 +644,19 @@ def _diarize_chunked(pipe, audio, sr: int, chunk_s: int) -> tuple[list[Turn], di
         for s, e, label in turns:
             # voz sem embedding (NaN/silêncio): id isolado do bloco — não re-ligável
             all_turns.append((s + offset, e + offset, local_to_global.get(label, f"c{i}_{label}")))
+
+    if num_speakers and len(globals_) > int(num_speakers):
+        # mais vozes globais que o informado: o clustering fragmentou alguém entre
+        # blocos (voz "drifta" abaixo do limiar de re-ligação) - reduz ao N (#198)
+        antes = len(globals_)
+        mapa = _reduce_globals_to(globals_, int(num_speakers))
+        all_turns = [(s, e, mapa.get(lab, lab)) for s, e, lab in all_turns]
+        log.info("diarização: %d vozes globais reduzidas a %d (nº informado pelo usuário)",
+                 antes, len(globals_))
+        print(f"vozes re-ligadas entre blocos: {antes} -> {len(globals_)} (nº informado)")
+    elif num_speakers and len(globals_) < int(num_speakers):
+        log.info("diarização: só %d voz(es) global(is) para %d informadas - seguindo com o que há",
+                 len(globals_), int(num_speakers))
 
     all_turns.sort(key=lambda t: t[0])
     embeddings = {gid: cen.tolist() for cen, _n, gid in globals_}

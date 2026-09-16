@@ -244,6 +244,8 @@ class Diarization:
     ask_speakers_timeout: int = 90
     # Áudio longo: diariza em blocos deste tamanho (min) p/ não estourar a VRAM e
     # escalar p/ reuniões de 1 h; as vozes são re-ligadas pelo embedding. 0 = sempre inteiro.
+    # O nº de vozes informado ao fim da call vale aqui também (#198): teto por bloco
+    # e redução das vozes re-ligadas a esse número no fim.
     chunk_minutes: int = 3
 
 
