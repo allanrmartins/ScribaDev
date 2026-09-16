@@ -145,6 +145,94 @@ class EntryPointsTests(unittest.TestCase):
                 compile(arq.read_text(encoding="utf-8"), str(arq), "exec")
 
 
+sys.path.insert(0, str(REPO / "installer"))
+import speclib  # noqa: E402
+
+
+class _FakeAnalysis:
+    def __init__(self, nomes):
+        self.pure = [(n, f"/x/{n}.py", "PYMODULE") for n in nomes]
+
+
+class ModulosDosAddonsTests(unittest.TestCase):
+    """O que torch/pyannote (instalados FORA da análise, em addons/) importam em
+    runtime tem de estar no bundle — a análise estática não os vê (#196/#197).
+
+    Regressão: a stdlib entrava só pelo nome de topo, `unittest/__init__` não
+    importa `.mock`, e a diarização nunca rodou no DMG ("No module named
+    'unittest.mock'", #197); no Windows o mesmo buraco virou o falso "partially
+    initialized module 'torch' has no attribute 'autograd'" (#196).
+    """
+
+    def test_specs_usam_a_lib_compartilhada(self):
+        for spec in (MAC_SPEC, WIN_SPEC):
+            with self.subTest(spec=spec.name):
+                txt = spec.read_text(encoding="utf-8")
+                self.assertIn("import speclib", txt)
+                self.assertIn("speclib.stdlib_hiddenimports()", txt)
+                self.assertIn("speclib.collect_all_compartilhados()", txt)
+                # a asserção de build roda nas DUAS Analysis (CLI e app)
+                self.assertIn("speclib.exigir_tudo(_a)", txt)
+                # ...e o que ela devolve entra de fato nos hiddenimports/datas/binaries
+                bloco = txt.split("_common = dict(")[1].split("a_cli = Analysis(")[0]
+                for var in ("_scipy_hidden", "_scipy_datas", "_scipy_binaries", "_stdlib"):
+                    self.assertIn(var, bloco, f"{var} fora do _common")
+
+    def test_modulos_exigidos(self):
+        self.assertIn("unittest.mock", speclib.ADDON_RUNTIME_MODULES)
+        self.assertEqual(set(speclib.COMPARTILHADOS_COM_ADDONS), {"scipy", "safetensors"})
+        self.assertIn("scipy.cluster.hierarchy", speclib.COMPARTILHADOS_COM_ADDONS["scipy"])
+        self.assertIn("scipy._lib._disjoint_set", speclib.COMPARTILHADOS_COM_ADDONS["scipy"])
+        self.assertIn("safetensors.numpy", speclib.COMPARTILHADOS_COM_ADDONS["safetensors"])
+
+    def test_exigir_tudo_cobre_stdlib_e_compartilhados(self):
+        speclib.exigir_tudo(_FakeAnalysis(["unittest.mock", "unittest.util"]))  # sem scipy: ok
+        with self.assertRaises(SystemExit):  # stdlib faltando
+            speclib.exigir_tudo(_FakeAnalysis(["unittest"]))
+        with self.assertRaises(SystemExit):  # safetensors parcial
+            speclib.exigir_tudo(_FakeAnalysis(["unittest.mock", "unittest.util",
+                                               "safetensors", "safetensors.torch"]))
+        speclib.exigir_tudo(_FakeAnalysis(["unittest.mock", "unittest.util",
+                                           "safetensors", "safetensors.torch", "safetensors.numpy"]))
+
+    def test_stdlib_nomes_tem_pacotes_e_respeita_o_deny(self):
+        nomes = speclib.stdlib_nomes()
+        self.assertIn("unittest", nomes)
+        self.assertIn("timeit", nomes)          # o caso da #187
+        self.assertNotIn("tkinter", nomes)
+        self.assertNotIn("_thread", nomes)      # privados ficam de fora
+        self.assertTrue(speclib.e_pacote("unittest"))
+        self.assertFalse(speclib.e_pacote("timeit"))
+
+    def test_exigir_no_bundle_passa_quando_tudo_esta(self):
+        a = _FakeAnalysis(["unittest", "unittest.mock", "unittest.util"])
+        speclib.exigir_no_bundle(a, speclib.ADDON_RUNTIME_MODULES)  # não levanta
+
+    def test_exigir_no_bundle_falha_o_build_se_faltar(self):
+        a = _FakeAnalysis(["unittest", "unittest.case"])
+        with self.assertRaises(SystemExit) as cm:
+            speclib.exigir_no_bundle(a, speclib.ADDON_RUNTIME_MODULES)
+        self.assertIn("unittest.mock", str(cm.exception))
+
+    def test_scipy_so_e_exigido_quando_entrou_no_bundle(self):
+        scipy_mods = speclib.COMPARTILHADOS_COM_ADDONS["scipy"]
+        # sem scipy nenhum no bundle: o addons resolve, nada a exigir
+        speclib.exigir_no_bundle(_FakeAnalysis(["unittest.mock"]), scipy_mods, quando_presente="scipy")
+        # scipy PARCIAL no bundle (o caso da #197): tem de vir inteiro
+        with self.assertRaises(SystemExit):
+            speclib.exigir_no_bundle(_FakeAnalysis(["scipy", "scipy.linalg"]),
+                                     scipy_mods, quando_presente="scipy")
+        speclib.exigir_no_bundle(
+            _FakeAnalysis(["scipy", "scipy.cluster.hierarchy", "scipy._lib._disjoint_set"]),
+            scipy_mods, quando_presente="scipy")
+
+    def test_collect_all_se_instalado_ignora_pacote_ausente(self):
+        """Sem o pacote na venv (runner Windows do CI), nada entra — e nada do
+        PyInstaller é importado (a suíte roda sem ele)."""
+        self.assertEqual(speclib.collect_all_se_instalado("pacote_que_nao_existe_xyz"),
+                         ([], [], []))
+
+
 class SintaxeTests(unittest.TestCase):
     def test_specs_compilam(self):
         """Erro de sintaxe num .spec só aparece na hora do build (que é caro)."""

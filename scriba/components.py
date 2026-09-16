@@ -50,6 +50,47 @@ def plan_items(model: str | None = None, cuda: bool = False,
     return items
 
 
+# O que a separação de vozes importa em runtime, na ordem em que o pipeline real
+# importa (#196/#197): torch primeiro; depois o pyannote e os pacotes dele que
+# comprovadamente tropeçaram em módulo fora do bundle congelado (clustering ->
+# scipy.cluster.hierarchy; core.calibration -> safetensors.numpy). Importar sem
+# token e sem modelo: só prova que a instalação/empacotamento está íntegra.
+VOICES_IMPORTS = (
+    "torch",
+    "pyannote.audio",
+    "pyannote.audio.pipelines",
+    "pyannote.audio.pipelines.clustering",
+    "pyannote.audio.pipelines.speaker_diarization",
+)
+
+
+def check_voices() -> tuple[bool, str]:
+    """Os componentes de voz IMPORTAM neste app? (ok, detalhe) — sem baixar nada.
+
+    Serve ao `scribadev components --check`, ao doctor e ao smoke do CI de
+    release no binário congelado: o que a #187, a #196 e a #197 tinham em comum
+    era um import que só falhava na máquina do usuário, depois de baixar 3 GB.
+    Nunca levanta; a razão vem classificada por `diarize.deps_error_message`
+    (falta o extra × import interno quebrado = empacotamento/instalação).
+    """
+    import importlib
+
+    from . import diarize
+
+    for pkg in diarize._DEPS_TOPO:
+        diarize.purge_stale_submodules(pkg)
+    for nome in VOICES_IMPORTS:
+        try:
+            importlib.import_module(nome)
+        except Exception as e:  # noqa: BLE001 — classificado abaixo
+            return False, f"{nome}: {diarize.deps_error_message(e)}"
+    torch = sys.modules["torch"]
+    pa = sys.modules["pyannote.audio"]
+    versoes = (f"torch {getattr(torch, '__version__', '?')}, "
+               f"pyannote.audio {getattr(pa, '__version__', '?')}")
+    return True, versoes
+
+
 def dir_mb(path) -> float:
     """Tamanho (MB) de uma árvore de diretório; 0 em qualquer erro. Base do % real
     do modelo: mede o CRESCIMENTO do cache HF durante o download — robusto a versão

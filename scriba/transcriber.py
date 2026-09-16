@@ -177,11 +177,20 @@ class Transcriber:
         self.model = None
         self.batched = None  # BatchedInferencePipeline segura o modelo: sem isto o GC não libera
         import gc
+        import sys
 
         gc.collect()
+        # NÃO importa o torch aqui (#196). O faster-whisper (ctranslate2) não depende
+        # dele; só vale esvaziar o cache CUDA se ALGUÉM já o carregou. Importar dentro
+        # de um `except Exception: pass` era uma armadilha no app congelado: o 1º
+        # `import torch` falhava (módulo da stdlib fora do bundle), o except engolia,
+        # e o 2º import - o da diarização, logo em seguida - herdava os submódulos
+        # órfãos em sys.modules e morria com o falso "partially initialized module
+        # 'torch' has no attribute 'autograd'", escondendo a causa real.
+        torch = sys.modules.get("torch")
+        if torch is None:
+            return
         try:
-            import torch
-
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
         except Exception:

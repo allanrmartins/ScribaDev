@@ -20,6 +20,54 @@ log = logging.getLogger("scriba.diarize")
 
 Turn = tuple[float, float, str]  # (início, fim, rótulo da voz)
 
+# Pacotes dos componentes de voz: só a AUSÊNCIA de um destes é "falta o extra".
+_DEPS_TOPO = ("torch", "pyannote")
+
+
+def purge_stale_submodules(pkg: str) -> list[str]:
+    """Tira de sys.modules os submódulos ÓRFÃOS de `pkg` (topo não carregado).
+
+    Quando um `import torch` falha no meio (#196: `unittest.mock` fora do bundle
+    congelado), o Python remove `torch` de sys.modules mas DEIXA os submódulos que
+    já tinham importado (`torch.autograd`, ...). Na tentativa seguinte, o novo
+    `torch/__init__` encontra `torch.autograd` já em sys.modules e nunca o
+    amarra como atributo do pacote novo - e o import explode num falso
+    "partially initialized module 'torch' has no attribute 'autograd' (most
+    likely due to a circular import)", escondendo a causa real. Limpar os órfãos
+    faz a nova tentativa ser um import limpo, que falha (ou funciona) pelo motivo
+    verdadeiro. Devolve o que removeu (p/ o log). Sem efeito se o topo está vivo.
+    """
+    import sys
+
+    if pkg in sys.modules:
+        return []
+    orfaos = sorted(m for m in sys.modules if m.startswith(pkg + "."))
+    for m in orfaos:
+        del sys.modules[m]
+    if orfaos:
+        log.warning("import anterior de %s falhou no meio: limpando %d submódulo(s) órfão(s) "
+                    "antes de tentar de novo (ex.: %s)", pkg, len(orfaos), orfaos[0])
+    return orfaos
+
+
+def deps_error_message(e: BaseException) -> str:
+    """Mensagem certa p/ uma falha ao importar torch/pyannote (#196/#197).
+
+    Só "falta o extra [diarization]" quando o que não existe é o PRÓPRIO torch ou
+    pyannote. Qualquer outra falha (um módulo interno ausente no bundle, uma DLL
+    que não carrega, o falso circular import da #196) é instalação/empacotamento
+    - e mandar o usuário rodar `pip install` não resolve nada; a #197 levou uma
+    tarde de diagnóstico por causa dessa mensagem.
+    """
+    faltando = getattr(e, "name", None) if isinstance(e, ModuleNotFoundError) else None
+    if faltando and faltando.split(".")[0] in _DEPS_TOPO:
+        return f"dependências ausentes — falta o extra [diarization] ({e})"
+    primeira = (str(e) or type(e).__name__).splitlines()[0][:200]
+    return (f"torch/pyannote instalados, mas um import interno falhou ({type(e).__name__}: "
+            f"{primeira}) — não é falta do extra [diarization]: é a instalação dos componentes "
+            "ou o empacotamento do app. Reinstale os componentes em Configurações → Sobre; "
+            "se persistir, use Reportar erro")
+
 
 @dataclass
 class DiarizationResult:
@@ -77,13 +125,18 @@ def test_token(model: str, token: str) -> tuple[bool, str]:
     if not (token or "").strip():
         return (False, "Informe o token do Hugging Face antes de testar.")
     model = (model or "").strip() or "pyannote/speaker-diarization-community-1"
+    for pkg in _DEPS_TOPO:
+        purge_stale_submodules(pkg)
     try:
         import warnings
 
         warnings.filterwarnings("ignore", message="(?s).*torchcodec.*")
         from pyannote.audio import Pipeline
-    except ImportError as e:
-        return (False, f"Diarização não instalada — falta o extra [diarization] (pyannote + torch). {e}")
+    except Exception as e:  # noqa: BLE001 — ImportError E import interno quebrado (#197)
+        msg = deps_error_message(e)
+        if msg.startswith("dependências ausentes"):
+            return (False, f"Diarização não instalada — falta o extra [diarization] (pyannote + torch). {e}")
+        return (False, f"Diarização: {msg}")
     try:
         try:
             pipe = Pipeline.from_pretrained(model, token=token)
@@ -126,6 +179,10 @@ def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None,
     if not cfg.hf_token:
         _fail("habilitada sem token Hugging Face — configure na aba Transcrição")
         return None
+    # um `import torch` anterior que falhou no meio (engolido por alguém) deixaria
+    # este import morrer no falso circular import da #196 - limpa antes
+    for pkg in _DEPS_TOPO:
+        purge_stale_submodules(pkg)
     try:
         import warnings
 
@@ -134,8 +191,9 @@ def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None,
         warnings.filterwarnings("ignore", message="(?s).*torchcodec.*")
         import torch
         from pyannote.audio import Pipeline
-    except ImportError as e:
-        _fail(f"dependências ausentes — falta o extra [diarization] ({e})")
+    except Exception as e:  # noqa: BLE001 — ImportError E import interno quebrado (#196/#197)
+        # a causa real vai inteira p/ o log (exc=True): é o que o diagnóstico precisa
+        _fail(deps_error_message(e), exc=True)
         return None
     pipe = None
     ctx_broken = False  # erro de driver/contexto (#115): não tocar mais na GPU

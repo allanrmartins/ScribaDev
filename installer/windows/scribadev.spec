@@ -50,43 +50,40 @@ _pkg_datas = [
     (str(REPO / "scriba" / "qt" / "icons"), "scriba/qt/icons"),
 ]
 
+# Regras compartilhadas com o spec do mac (installer/speclib.py): stdlib inteira
+# COM submódulos, scipy inteiro quando presente e a asserção de build.
+import sys as _sys
+
+_sys.path.insert(0, str(REPO / "installer"))
+import speclib  # noqa: E402
+
 # stdlib INTEIRA no bundle (#187): a análise estática só embarca a stdlib que o
 # código do repo importa - mas os addons (torch/pyannote, instalados sob demanda
 # FORA da análise) importam stdlib em runtime, e módulo fora do bundle não
 # existe num exe congelado. Caso vivido: pyannote importa `timeit`, o bundle não
 # o tinha, e a diarização nunca rodou em NENHUMA instalação pelo instalador
 # ("No module named 'timeit'", falha silenciosa com fallback p/ "Participantes").
-# Mesmo padrão do typing_extensions/#167, generalizado: custa poucos MB e fecha
-# a classe inteira do problema. Fora ficam só os pacotes-mamute sem uso
-# plausível por uma lib de ML; nome ausente na plataforma vira warning inócuo.
-import importlib.util as _ilu
-import sys as _sys
+# Desde a #196/#197 vai COM os submódulos de cada pacote: só o nome de topo
+# deixava `unittest.mock` (que o próprio `import torch` puxa) de fora, e a
+# diarização seguia morta em toda instalação por instalador.
+_stdlib = speclib.stdlib_hiddenimports()
 
-_STDLIB_DENY = {
-    "antigravity", "this", "idlelib", "lib2to3", "turtledemo", "turtle",
-    "tkinter", "test", "ensurepip",
-}
-def _importavel(m):
-    try:
-        return _ilu.find_spec(m) is not None
-    except Exception:
-        return False  # módulo deprecated/quebrado: fora do bundle, sem drama
-
-
-_stdlib = sorted(
-    m for m in _sys.stdlib_module_names
-    if not m.startswith("_") and m not in _STDLIB_DENY and _importavel(m)
-)
+# Pacotes compartilhados com os addons (scipy, safetensors) INTEIROS quando
+# estão na venv de build (#197): coletados parcialmente, o pacote do bundle
+# vence o `__path__` e a cópia completa do addons nunca é consultada - "No
+# module named 'scipy.cluster'" / 'safetensors.numpy' na diarização. Onde não
+# estão instalados (runner do CI), nada entra e o addons cobre.
+_scipy_datas, _scipy_binaries, _scipy_hidden = speclib.collect_all_compartilhados()
 
 _common = dict(
     pathex=[str(REPO)],
-    binaries=_pip_binaries,
-    datas=_pkg_datas + _pip_datas + _fw_datas,
+    binaries=_pip_binaries + _scipy_binaries,
+    datas=_pkg_datas + _pip_datas + _fw_datas + _scipy_datas,
     # typing_extensions NO bundle (#167): winrt/anyio importam-no e, fora do
     # bundle, a resolução cai no addons — se o pip estiver reescrevendo a pasta,
     # até os toasts do app morrem com EACCES. Bundlado, o FrozenImporter (meta
     # path) vence o addons sempre.
-    hiddenimports=_pip_hidden + ["typing_extensions"] + _stdlib,
+    hiddenimports=_pip_hidden + ["typing_extensions"] + _stdlib + _scipy_hidden,
     excludes=_excludes,
     noarchive=False,
     module_collection_mode=_pip_collection_mode,
@@ -94,6 +91,12 @@ _common = dict(
 
 a_cli = Analysis([str(Path(SPECPATH) / "entry_cli.py")], **_common)
 a_tray = Analysis([str(Path(SPECPATH) / "entry_tray.py")], **_common)
+
+# O build FALHA se o que os componentes baixados importam em runtime ficou de
+# fora (#196/#197) - melhor um build vermelho que uma versão com a diarização
+# morta em silêncio em toda instalação por instalador.
+for _a in (a_cli, a_tray):
+    speclib.exigir_tudo(_a)
 
 pyz_cli = PYZ(a_cli.pure)
 pyz_tray = PYZ(a_tray.pure)

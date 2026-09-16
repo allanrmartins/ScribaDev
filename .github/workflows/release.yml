@@ -40,6 +40,20 @@ jobs:
           $json = & $exe search --json --limit 1
           if ($LASTEXITCODE -ne 0) { throw "search --json falhou" }
           $json | python -c "import json,sys; json.load(sys.stdin)"
+      - name: Smoke da separação de vozes (componentes baixados pelo próprio exe)
+        # O caminho real do usuário (#196/#197): o exe congelado instala torch +
+        # pyannote em APP_DIR/addons com o pip in-process e depois IMPORTA tudo.
+        # Era exatamente o que falhava só na máquina de quem instalou (módulo
+        # da stdlib/scipy/safetensors fora do bundle) - e só depois de 3 GB.
+        # LOCALAPPDATA isolado = APP_DIR descartável do runner.
+        env:
+          LOCALAPPDATA: ${{ runner.temp }}\scribadev-appdata
+        run: |
+          $exe = "installer\windows\dist\scribadev\scribadev.exe"
+          & $exe components --voices
+          if ($LASTEXITCODE -ne 0) { throw "components --voices falhou" }
+          & $exe components --check
+          if ($LASTEXITCODE -ne 0) { throw "components --check falhou: a separação de vozes não importa no exe congelado" }
       - name: Checksum SHA256
         run: |
           $exe = Get-ChildItem installer\windows\out\*.exe | Select-Object -First 1
@@ -78,6 +92,14 @@ jobs:
           CLI="installer/macos/dist/ScribaDev.app/Contents/MacOS/scribadev"
           "$CLI" --version
           "$CLI" search --json --limit 1 | python -c "import json,sys; json.load(sys.stdin)"
+      - name: Smoke da separação de vozes (componentes baixados pelo próprio .app)
+        # Mesmo smoke do job Windows (#196/#197): o DMG da 1.4.19 nunca rodou a
+        # diarização porque unittest.mock e scipy.cluster ficaram fora do bundle.
+        # APP_DIR aqui é o ~/Library/Application Support/ScribaDev do runner.
+        run: |
+          CLI="installer/macos/dist/ScribaDev.app/Contents/MacOS/scribadev"
+          "$CLI" components --voices
+          "$CLI" components --check
       - name: Checksum SHA256
         run: |
           DMG=$(ls installer/macos/out/*.dmg | head -1)
