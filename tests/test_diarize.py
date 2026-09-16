@@ -176,8 +176,10 @@ class _FakeOut:
 class _FakePipe:
     def __init__(self, outs):
         self._outs, self._i = outs, 0
+        self.kwargs: list[dict] = []  # o que cada bloco recebeu (#198)
 
     def __call__(self, audio, **kw):
+        self.kwargs.append(dict(kw))
         o = self._outs[self._i]
         self._i += 1
         return o
@@ -226,6 +228,85 @@ class ChunkedDiarizeTests(unittest.TestCase):
         g_b0 = next(l for s, _e, l in turns if s == 0.0)
         g_b1a = next(l for s, _e, l in turns if s == 61.0)
         self.assertEqual(g_b0, g_b1a)
+        # sem nº informado nem max_speakers: nenhum kwarg por bloco (comportamento de sempre)
+        self.assertEqual(pipe.kwargs, [{}, {}, {}])
+
+
+class ChunkedNumSpeakersTests(unittest.TestCase):
+    """#198: o nº de vozes informado era descartado no caminho em blocos - e com
+    chunk_minutes=3 toda reunião real cai nele. Agora vale como teto por bloco e
+    como alvo da redução das vozes globais no fim."""
+
+    @staticmethod
+    def _audio_e_pipe():
+        import numpy as np
+
+        sr, chunk_s = 16000, 60
+        audio = {"waveform": _FakeWave(np.zeros((1, int(2.5 * chunk_s * sr)), dtype=np.float32)),
+                 "sample_rate": sr}
+        EA = np.array([1.0, 0, 0], np.float32)
+        EA2 = np.array([0.4, 0.9, 0], np.float32)   # A "driftada": cosseno ~0,41 < limiar 0,5
+        EB = np.array([0, 0, 1.0], np.float32)
+        # bloco0: A · bloco1: A' (não re-liga com A) + B · bloco2: B  => 3 vozes globais
+        pipe = _FakePipe([
+            _FakeOut([(0.0, 5.0, "SPEAKER_00")], np.stack([EA])),
+            _FakeOut([(1.0, 4.0, "SPEAKER_00"), (10.0, 15.0, "SPEAKER_01")], np.stack([EA2, EB])),
+            _FakeOut([(2.0, 8.0, "SPEAKER_00")], np.stack([EB * 0.98])),
+        ])
+        return audio, sr, chunk_s, pipe
+
+    def test_sem_num_speakers_fragmenta_em_3(self):
+        audio, sr, chunk_s, pipe = self._audio_e_pipe()
+        turns, embeddings = diarize._diarize_chunked(pipe, audio, sr, chunk_s)
+        self.assertEqual(len(embeddings), 3)  # o problema relatado: 2 informadas, 3 na saída
+
+    def test_num_speakers_reduz_as_vozes_globais_ao_informado(self):
+        audio, sr, chunk_s, pipe = self._audio_e_pipe()
+        turns, embeddings = diarize._diarize_chunked(pipe, audio, sr, chunk_s, num_speakers=2)
+        self.assertEqual(len(embeddings), 2)
+        self.assertEqual(len({lab for *_x, lab in turns}), 2)
+        # A e A' (as mais parecidas) viraram uma só; B ficou separada
+        g_a = next(l for s, _e, l in turns if s == 0.0)
+        g_a2 = next(l for s, _e, l in turns if s == 61.0)
+        g_b = next(l for s, _e, l in turns if s == 70.0)
+        self.assertEqual(g_a, g_a2)
+        self.assertNotEqual(g_a, g_b)
+        # ...e cada bloco recebeu o teto (nunca mais vozes que a call inteira)
+        self.assertEqual(pipe.kwargs, [{"max_speakers": 2}] * 3)
+
+    def test_num_speakers_um_funde_tudo(self):
+        audio, sr, chunk_s, pipe = self._audio_e_pipe()
+        turns, embeddings = diarize._diarize_chunked(pipe, audio, sr, chunk_s, num_speakers=1)
+        self.assertEqual(len(embeddings), 1)
+        self.assertEqual(len({lab for *_x, lab in turns}), 1)
+        self.assertEqual(pipe.kwargs, [{"max_speakers": 1}] * 3)
+
+    def test_num_speakers_maior_que_o_achado_nao_inventa_voz(self):
+        audio, sr, chunk_s, pipe = self._audio_e_pipe()
+        turns, embeddings = diarize._diarize_chunked(pipe, audio, sr, chunk_s, num_speakers=5)
+        self.assertEqual(len(embeddings), 3)
+        self.assertEqual(pipe.kwargs, [{"max_speakers": 5}] * 3)
+
+    def test_max_speakers_do_config_vale_como_teto_por_bloco(self):
+        audio, sr, chunk_s, pipe = self._audio_e_pipe()
+        turns, embeddings = diarize._diarize_chunked(pipe, audio, sr, chunk_s, max_speakers=4)
+        self.assertEqual(len(embeddings), 3)  # teto não reduz nada, só limita o pyannote
+        self.assertEqual(pipe.kwargs, [{"max_speakers": 4}] * 3)
+
+    def test_reduce_encadeia_fusoes(self):
+        import numpy as np
+
+        g = [[np.array([1.0, 0, 0], np.float32), 1, "G0"],
+             [np.array([0.9, 0.1, 0], np.float32), 1, "G1"],
+             [np.array([0.8, 0.2, 0], np.float32), 1, "G2"],
+             [np.array([0, 0, 1.0], np.float32), 1, "G3"]]
+        mapa = diarize._reduce_globals_to(g, 2)
+        self.assertEqual([gid for _c, _n, gid in g], ["G0", "G3"])
+        self.assertEqual(mapa, {"G1": "G0", "G2": "G0"})
+        self.assertEqual(g[0][1], 3)  # amostras acumuladas
+        # n >= vozes: no-op
+        self.assertEqual(diarize._reduce_globals_to(g, 2), {})
+        self.assertEqual(diarize._reduce_globals_to(g, 0), {})
 
 
 if __name__ == "__main__":
