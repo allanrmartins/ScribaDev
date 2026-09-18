@@ -35,23 +35,38 @@ class TranscriptionProvider(Protocol):
         ...
 
 
-def make_transcriber(cfg: Whisper, force_cpu: bool = False) -> TranscriptionProvider:
-    """Constrói o provider de transcrição conforme `cfg.engine`: 'cloud' → STT na
-    nuvem (Groq/OpenAI-compat); 'mlx' (ou 'local' num mac Apple Silicon com
-    mlx_whisper instalado) → Metal via MLX (#104, M5); senão o faster-whisper local.
-    Com force_cpu o MLX é pulado — quem pediu CPU ganha CPU."""
+def effective_engine(cfg: Whisper, force_cpu: bool = False) -> str:
+    """Qual motor `make_transcriber` vai construir de fato p/ este config nesta
+    máquina: 'cloud' | 'mlx' | 'faster-whisper'. É a ÚNICA regra de escolha - o
+    `doctor` usa a mesma, p/ reportar o caminho efetivo e não só o que está
+    instalado (#202: um engine desviado p/ o faster-whisper aparecia como "Metal")."""
     import platform
     import sys
 
     engine = (cfg.engine or "local").strip().lower()
     if engine == "cloud":
+        return "cloud"
+    if (not force_cpu and engine in ("local", "mlx")
+            and sys.platform == "darwin" and platform.machine() == "arm64"):
+        from .stt_mlx import mlx_disponivel
+
+        if engine == "mlx" or mlx_disponivel():
+            return "mlx"
+    return "faster-whisper"
+
+
+def make_transcriber(cfg: Whisper, force_cpu: bool = False) -> TranscriptionProvider:
+    """Constrói o provider de transcrição conforme `cfg.engine`: 'cloud' → STT na
+    nuvem (Groq/OpenAI-compat); 'mlx' (ou 'local' num mac Apple Silicon com
+    mlx_whisper instalado) → Metal via MLX (#104, M5); senão o faster-whisper local.
+    Com force_cpu o MLX é pulado — quem pediu CPU ganha CPU."""
+    kind = effective_engine(cfg, force_cpu)
+    if kind == "cloud":
         from .stt_cloud import CloudTranscriptionProvider
 
         return CloudTranscriptionProvider(cfg)
-    if (not force_cpu and engine in ("local", "mlx")
-            and sys.platform == "darwin" and platform.machine() == "arm64"):
-        from .stt_mlx import MlxWhisperProvider, mlx_disponivel
+    if kind == "mlx":
+        from .stt_mlx import MlxWhisperProvider
 
-        if engine == "mlx" or mlx_disponivel():
-            return MlxWhisperProvider(cfg)
+        return MlxWhisperProvider(cfg)
     return Transcriber(cfg, force_cpu=force_cpu)

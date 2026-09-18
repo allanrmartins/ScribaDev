@@ -20,6 +20,26 @@ class Segment:
     text: str
 
 
+def vad_parameters(cfg: Whisper) -> dict | None:
+    """Parâmetros do VAD Silero (opt-in, #6). Tudo zero => None: mantém o default da
+    lib (nenhuma mudança de comportamento até o usuário calibrar com áudio real).
+    Compartilhado pelo faster-whisper e pelo recorte prévio do MLX (#202): a
+    calibragem do usuário vale igual nos dois motores."""
+    params: dict = {}
+    ms = int(getattr(cfg, "vad_min_silence_ms", 0) or 0)
+    if ms > 0:
+        params["min_silence_duration_ms"] = ms
+    th = float(getattr(cfg, "vad_threshold", 0.0) or 0.0)
+    if th > 0:
+        params["threshold"] = th
+    return params or None
+
+
+def vad_enabled(cfg: Whisper) -> bool:
+    """Filtro de voz ligado? (default True; False só p/ depurar, #202)"""
+    return bool(getattr(cfg, "vad_filter", True))
+
+
 class Transcriber:
     def __init__(self, cfg: Whisper, force_cpu: bool = False):
         self.cfg = cfg
@@ -95,7 +115,7 @@ class Transcriber:
                 return self._collect(segments, on_progress)
         kwargs = dict(
             language=self.cfg.language or None,
-            vad_filter=True,
+            vad_filter=vad_enabled(self.cfg),
             condition_on_previous_text=False,
             hotwords=self.cfg.hotwords or None,
             beam_size=beam,
@@ -112,7 +132,8 @@ class Transcriber:
                 from faster_whisper import BatchedInferencePipeline
 
                 self.batched = BatchedInferencePipeline(self.model)
-            kwargs = dict(language=self.cfg.language or None, batch_size=batch, beam_size=beam)
+            kwargs = dict(language=self.cfg.language or None, batch_size=batch, beam_size=beam,
+                          vad_filter=vad_enabled(self.cfg))
             if vad_params:
                 kwargs["vad_parameters"] = vad_params
             if self.cfg.hotwords:
@@ -139,16 +160,7 @@ class Transcriber:
         return out
 
     def _vad_parameters(self) -> dict | None:
-        """Parâmetros do VAD (opt-in, #6). Tudo zero => None: mantém o default da lib
-        (nenhuma mudança de comportamento até o usuário calibrar com áudio real)."""
-        params: dict = {}
-        ms = int(getattr(self.cfg, "vad_min_silence_ms", 0) or 0)
-        if ms > 0:
-            params["min_silence_duration_ms"] = ms
-        th = float(getattr(self.cfg, "vad_threshold", 0.0) or 0.0)
-        if th > 0:
-            params["threshold"] = th
-        return params or None
+        return vad_parameters(self.cfg)
 
     def _warmup(self) -> None:
         """Inferência muda de ~1 s de silêncio logo após carregar na GPU: paga o

@@ -832,13 +832,30 @@ def cmd_doctor(args) -> int:
 
     # GPU — CUDA no Windows/Linux; Metal via MLX no Apple Silicon (#104, M5)
     if sys.platform == "darwin":
+        # reporta o caminho EFETIVO (a mesma regra do make_transcriber), não só o
+        # que está instalado: um engine desviado p/ o faster-whisper saía como
+        # "Metal" e escondia que a transcrição estava em CPU (#202)
         try:
             import platform as _platform
 
             from .stt_mlx import mlx_disponivel
+            from .transcription import effective_engine
 
-            if _platform.machine() == "arm64" and mlx_disponivel():
+            arm = _platform.machine() == "arm64"
+            if cfg:
+                kind = effective_engine(cfg.whisper)
+                engine_cfg = (cfg.whisper.engine or "local").strip().lower()
+            else:
+                kind = "mlx" if arm and mlx_disponivel() else "faster-whisper"
+                engine_cfg = "local"
+            if kind == "mlx":
                 _print(_OK, "GPU (Metal/MLX)", "transcrição local acelerada no Apple Silicon")
+            elif kind == "cloud":
+                _print(_OK, "GPU (Metal/MLX)", "não se aplica: motor de transcrição = nuvem")
+            elif arm and mlx_disponivel():
+                _print(_WARN, "GPU (Metal/MLX)",
+                       f"mlx-whisper instalado, mas engine = \"{engine_cfg}\" desvia a transcrição "
+                       "para o faster-whisper em CPU (mais lenta) — engine = \"local\" usa o Metal")
             else:
                 _print(_WARN, "GPU (Metal/MLX)",
                        "mlx-whisper indisponível — transcrição local em CPU (mais lenta)")

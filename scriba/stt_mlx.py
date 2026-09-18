@@ -9,11 +9,17 @@ um repo explícito (com "/") passa direto.
 Diferenças vs faster-whisper aceitas no plano:
 - sem parâmetro `hotwords` → o vocabulário vai como `initial_prompt` (validado no
   spike M2 com a fixture pt-BR);
-- sem VAD Silero embutido → risco de alucinação em silêncio longo; o dedup do
-  merge (merge.py) pega o caso clássico; calibragem fica p/ uso real.
+- sem VAD Silero embutido → o recorte de fala é feito AQUI, antes do modelo
+  (`vadcut`, #202): sem ele, o stream do microfone numa call em que a pessoa mais
+  escuta do que fala (17 min de silêncio em 19,5) virava texto inventado que
+  seguia para a ata e para o resumo. Os tempos voltam ao relógio original antes
+  de sair daqui, então merge e diarização não sabem do recorte. `vad_filter =
+  false` no config desliga (áudio inteiro ao modelo, só p/ depurar).
 
 Falha em runtime (repo inexistente, MLX quebrado, OOM) cai para o faster-whisper
 em CPU — espelho do fallback CUDA→CPU do transcriber (transcriber.py:54-70).
+Falha no recorte (VAD indisponível, áudio que não decodifica) NÃO derruba nada:
+transcreve o arquivo inteiro como antes, com aviso no log.
 """
 
 from __future__ import annotations
@@ -23,7 +29,7 @@ from pathlib import Path
 from typing import Callable
 
 from .config import Whisper
-from .transcriber import Segment, Transcriber
+from .transcriber import Segment, Transcriber, vad_enabled, vad_parameters
 
 log = logging.getLogger("scriba.stt_mlx")
 
@@ -73,6 +79,30 @@ class MlxWhisperProvider:
         self.device_used = "metal"
         return self.device_used
 
+    def _speech_only(self, wav: Path):
+        """(áudio a entregar ao modelo, trechos de fala em amostras | None).
+
+        Com o filtro ligado: decodifica, detecta a fala com o Silero e devolve só os
+        trechos com voz emendados + os trechos p/ remapear os tempos depois. Sem
+        fala nenhuma: (None, []) — não há o que transcrever, e é exatamente o caso
+        em que o modelo inventaria texto. Filtro desligado ou qualquer falha no
+        recorte: (caminho do arquivo, None) — o comportamento de antes."""
+        if not vad_enabled(self.cfg):
+            return str(wav), None
+        try:
+            from . import vadcut
+
+            audio = vadcut.load_audio(wav)
+            chunks = vadcut.detect_speech(audio, params=vad_parameters(self.cfg))
+            print(f"  {vadcut.describe(chunks, len(audio))}")
+            if not chunks:
+                return None, []
+            return vadcut.concat_speech(audio, chunks), chunks
+        except Exception as e:
+            log.warning("recorte de fala (VAD) indisponível (%s); transcrevendo o áudio inteiro no MLX", e)
+            print(f"AVISO: filtro de voz indisponível ({e}); áudio inteiro ao modelo")
+            return str(wav), None
+
     def transcribe(self, wav: Path, on_progress: Callable[[float], None] | None = None) -> list[Segment]:
         if self._fallback is not None:
             return self._fallback.transcribe(wav, on_progress)
@@ -80,8 +110,13 @@ class MlxWhisperProvider:
             self.ensure_loaded()
             import mlx_whisper
 
+            audio_in, chunks = self._speech_only(wav)
+            if audio_in is None:
+                log.info("%s: nenhum trecho com fala; nada a transcrever", Path(wav).name)
+                return []
+            # mlx_whisper aceita o caminho OU o waveform (float32 16 kHz) direto
             result = mlx_whisper.transcribe(
-                str(wav),
+                audio_in,
                 path_or_hf_repo=self._repo(),
                 language=self.cfg.language or None,
                 initial_prompt=self.cfg.hotwords or None,  # hotwords via prompt (sem param dedicado)
@@ -99,8 +134,14 @@ class MlxWhisperProvider:
             text = (s.get("text") or "").strip()
             if text:
                 out.append(Segment(start=float(s["start"]), end=float(s["end"]), text=text))
-            if on_progress:
-                on_progress(float(s.get("end", 0.0)))
+        if chunks:
+            # o modelo viu o áudio recortado: devolve os tempos ao relógio do stream
+            from . import vadcut
+
+            out = vadcut.restore_segments(out, chunks)
+        if on_progress:
+            for s in out:
+                on_progress(s.end)
         return out
 
     def close(self) -> None:
