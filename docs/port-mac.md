@@ -34,6 +34,15 @@ existentes. **BlackHole é GPL-3 — nunca embutir nem sugerir.**
   fallback runtime p/ faster-whisper CPU) atrás do `make_transcriber` (darwin+arm64
   automático; `engine = "mlx"` força). **Verificado:** fixture transcrita "em metal",
   `whisper_device: metal` no meta.
+  **Recorte de fala antes do modelo (#202, v1.4.21):** o mlx-whisper não tem o VAD
+  Silero que o faster-whisper aplica por dentro, e um mic quase mudo (17 min de
+  silêncio em 19,5) virava texto inventado ("A CIDADE NO BRASIL" x17) que seguia
+  para a ata e para o resumo. `vadcut.py` detecta a fala com o MESMO Silero do
+  faster-whisper (já no pacote), entrega ao modelo só os trechos com voz emendados
+  e devolve os tempos ao relógio do stream (`TimeMap`). Resultado na gravação real
+  do report: 0 inserções e 4 s em vez de 17 s. Os limiares internos do Whisper
+  reduzem mas não zeram, e `clip_timestamps` piora (loops degenerados) - não
+  insistir por aí. `vad_filter = false` no config desliga (só p/ depurar).
 - **M6 — desktop A:** `_MacNotifier` (osascript, com escaping), autostart via
   LaunchAgent `~/Library/LaunchAgents/dev.scribadev.tray.plist` (`plutil -lint` OK,
   roundtrip verificado), `autostart.label()` nos textos, ícone TEMPLATE da menu bar

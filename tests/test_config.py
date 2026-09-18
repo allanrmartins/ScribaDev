@@ -187,6 +187,7 @@ class WhisperConfigTests(unittest.TestCase):
         self.assertEqual(w.cpu_threads, 0)
         self.assertEqual(w.vad_min_silence_ms, 0)
         self.assertEqual(w.vad_threshold, 0.0)
+        self.assertTrue(w.vad_filter)  # #202: filtro de voz ligado por padrão
 
     def test_round_trip_preserva_campos(self):
         import dataclasses
@@ -194,11 +195,12 @@ class WhisperConfigTests(unittest.TestCase):
         cfg = config.load()
         config.save(dataclasses.replace(cfg, whisper=dataclasses.replace(
             cfg.whisper, batch_size=24, beam_size=1, cpu_threads=8,
-            vad_min_silence_ms=500, vad_threshold=0.35)))
+            vad_min_silence_ms=500, vad_threshold=0.35, vad_filter=False)))
         w = config.load().whisper
         self.assertEqual((w.batch_size, w.beam_size, w.cpu_threads), (24, 1, 8))
         self.assertEqual(w.vad_min_silence_ms, 500)
         self.assertAlmostEqual(float(w.vad_threshold), 0.35)
+        self.assertFalse(w.vad_filter)
 
 
 _HAVE_DPAPI = util.dpapi_encrypt("probe") is not None

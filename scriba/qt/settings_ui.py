@@ -458,6 +458,8 @@ class SettingsWindow(QWidget):
         self._int(av, "Batch size", "whisper", "batch_size", 0, 64, hint="0 desliga o lote")
         self._int(av, "Beam size", "whisper", "beam_size", 0, 10)
         self._int(av, "Threads de CPU", "whisper", "cpu_threads", 0, 64, hint="0 = automático")
+        self._check(av, "Filtro de voz (VAD)", "whisper", "vad_filter",
+                    hint="transcreve só os trechos com fala; desligar só para depurar")
         self._int(av, "VAD silêncio mín. (ms)", "whisper", "vad_min_silence_ms", 0, 5000, hint="0 = padrão")
         self._float(av, "VAD limiar (0..1)", "whisper", "vad_threshold", 0.0, 1.0, 0.05, hint="0 = padrão")
         cl = self._group(f, "Nuvem (só com motor = Nuvem)")

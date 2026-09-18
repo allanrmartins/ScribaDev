@@ -78,6 +78,16 @@ class RunKwargsTests(unittest.TestCase):
         tr._run(Path("x.wav"), None)
         self.assertEqual(tr.model.calls[0]["vad_parameters"], {"min_silence_duration_ms": 300})
 
+    def test_vad_filter_ligado_por_padrao(self):
+        tr = self._ready_tr()
+        tr._run(Path("x.wav"), None)
+        self.assertTrue(tr.model.calls[0]["vad_filter"])
+
+    def test_vad_filter_desligado_chega_a_lib(self):  # #202: só p/ depurar
+        tr = self._ready_tr(vad_filter=False)
+        tr._run(Path("x.wav"), None)
+        self.assertFalse(tr.model.calls[0]["vad_filter"])
+
 
 class CargaLocalPrimeiroTests(unittest.TestCase):
     """#176: faster-whisper resolve o NOME do modelo pelo Hugging Face a cada carga,

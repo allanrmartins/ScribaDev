@@ -367,7 +367,7 @@ class TestMakeTranscriberMlx(unittest.TestCase):
     def test_segments_e_fallback_runtime(self):
         from scriba.stt_mlx import MlxWhisperProvider
 
-        cfg = mock.Mock(model="tiny", language="pt", hotwords="SAP ABAP")
+        cfg = mock.Mock(model="tiny", language="pt", hotwords="SAP ABAP", vad_filter=False)
         fake_mlx = mock.Mock()
         fake_mlx.transcribe.return_value = {"segments": [
             {"start": 0.0, "end": 2.0, "text": " olá "},
@@ -398,7 +398,7 @@ class TestMakeTranscriberMlx(unittest.TestCase):
         subir do ensure_loaded matava a transcrição inteira no app instalado."""
         from scriba.stt_mlx import MlxWhisperProvider
 
-        prov = MlxWhisperProvider(mock.Mock(model="tiny", language="pt", hotwords=""))
+        prov = MlxWhisperProvider(mock.Mock(model="tiny", language="pt", hotwords="", vad_filter=False))
         fake_fw = mock.Mock()
         fake_fw.ensure_loaded.return_value = "cpu"
         fake_fw.transcribe.return_value = ["seg"]
@@ -415,6 +415,128 @@ class TestMakeTranscriberMlx(unittest.TestCase):
             self.assertEqual(prov.ensure_loaded(), "cpu")
             self.assertEqual(prov.transcribe("x.wav"), ["seg"])  # segue pelo fallback
         self.assertEqual(prov.device_used, "cpu")
+
+
+class TestMlxVadCut(unittest.TestCase):
+    """#202: o mlx-whisper não tem VAD; o provider recorta a fala com o Silero ANTES
+    do modelo e devolve os tempos ao relógio do stream. Sem fala, nem chama o modelo."""
+
+    SR = 16000
+
+    def _cfg(self, **kw):
+        base = dict(model="tiny", language="pt", hotwords="", vad_filter=True,
+                    vad_min_silence_ms=0, vad_threshold=0.0)
+        base.update(kw)
+        return mock.Mock(**base)
+
+    def _vad(self, audio_len_s, chunks_s):
+        """Dubla o I/O do vadcut: áudio de N s e trechos de fala em segundos."""
+        import numpy as np
+
+        audio = np.zeros(audio_len_s * self.SR, dtype=np.float32)
+        chunks = [{"start": int(a * self.SR), "end": int(b * self.SR)} for a, b in chunks_s]
+        return mock.patch.multiple("scriba.vadcut", load_audio=mock.Mock(return_value=audio),
+                                   detect_speech=mock.Mock(return_value=chunks))
+
+    def test_modelo_recebe_so_a_fala_e_tempos_voltam_ao_original(self):
+        from scriba.stt_mlx import MlxWhisperProvider
+
+        fake_mlx = mock.Mock()
+        # o modelo viu 8 s de áudio (5 s + 3 s de fala) e respondeu nesse relógio
+        fake_mlx.transcribe.return_value = {"segments": [
+            {"start": 0.0, "end": 4.0, "text": "primeira frase"},
+            {"start": 5.0, "end": 7.5, "text": "segunda"},
+        ]}
+        seen = []
+        prov = MlxWhisperProvider(self._cfg())
+        with mock.patch.dict(sys.modules, {"mlx_whisper": fake_mlx}), self._vad(60, [(10, 15), (30, 33)]):
+            segs = prov.transcribe("mic.wav", on_progress=seen.append)
+        # 1) o que foi ao modelo é o waveform recortado (8 s), não o caminho de 60 s
+        audio_in = fake_mlx.transcribe.call_args[0][0]
+        self.assertEqual(len(audio_in), 8 * self.SR)
+        # 2) tempos no relógio do stream: merge/diarização não sabem do recorte
+        self.assertEqual([(s.start, s.end, s.text) for s in segs],
+                         [(10.0, 14.0, "primeira frase"), (30.0, 32.5, "segunda")])
+        self.assertEqual(seen, [14.0, 32.5])
+        self.assertEqual(prov.device_used, "metal")
+
+    def test_sem_fala_nao_chama_o_modelo(self):
+        """O caso do mic mudo: nada a transcrever = nada inventado."""
+        from scriba.stt_mlx import MlxWhisperProvider
+
+        fake_mlx = mock.Mock()
+        prov = MlxWhisperProvider(self._cfg())
+        with mock.patch.dict(sys.modules, {"mlx_whisper": fake_mlx}), self._vad(60, []):
+            self.assertEqual(prov.transcribe("mic.wav"), [])
+        fake_mlx.transcribe.assert_not_called()
+        self.assertEqual(prov.device_used, "metal")  # não caiu no fallback
+
+    def test_vad_filter_desligado_manda_o_arquivo_inteiro(self):
+        from scriba.stt_mlx import MlxWhisperProvider
+
+        fake_mlx = mock.Mock()
+        fake_mlx.transcribe.return_value = {"segments": [{"start": 1.0, "end": 2.0, "text": "x"}]}
+        prov = MlxWhisperProvider(self._cfg(vad_filter=False))
+        with mock.patch.dict(sys.modules, {"mlx_whisper": fake_mlx}), self._vad(60, [(10, 15)]):
+            segs = prov.transcribe("mic.wav")
+        self.assertEqual(fake_mlx.transcribe.call_args[0][0], "mic.wav")
+        self.assertEqual((segs[0].start, segs[0].end), (1.0, 2.0))  # sem remapear
+
+    def test_vad_indisponivel_nao_derruba_a_transcricao(self):
+        """Silero/PyAV quebrados no bundle: perde o recorte, não a transcrição."""
+        from scriba.stt_mlx import MlxWhisperProvider
+
+        fake_mlx = mock.Mock()
+        fake_mlx.transcribe.return_value = {"segments": [{"start": 1.0, "end": 2.0, "text": "x"}]}
+        prov = MlxWhisperProvider(self._cfg())
+        with mock.patch.dict(sys.modules, {"mlx_whisper": fake_mlx}), \
+                mock.patch("scriba.vadcut.load_audio", side_effect=RuntimeError("sem PyAV")):
+            segs = prov.transcribe("mic.wav")
+        self.assertEqual(fake_mlx.transcribe.call_args[0][0], "mic.wav")
+        self.assertEqual(len(segs), 1)
+        self.assertEqual(prov.device_used, "metal")
+
+    def test_calibragem_do_usuario_chega_ao_silero(self):
+        import numpy as np
+
+        from scriba.stt_mlx import MlxWhisperProvider
+
+        fake_mlx = mock.Mock()
+        fake_mlx.transcribe.return_value = {"segments": []}
+        prov = MlxWhisperProvider(self._cfg(vad_min_silence_ms=700, vad_threshold=0.4))
+        detect = mock.Mock(return_value=[{"start": 0, "end": self.SR}])
+        with mock.patch.dict(sys.modules, {"mlx_whisper": fake_mlx}),                 mock.patch("scriba.vadcut.load_audio", return_value=np.zeros(60 * self.SR, dtype=np.float32)),                 mock.patch("scriba.vadcut.detect_speech", detect):
+            prov.transcribe("mic.wav")
+        self.assertEqual(detect.call_args[1]["params"], {"min_silence_duration_ms": 700, "threshold": 0.4})
+
+
+class TestEffectiveEngine(unittest.TestCase):
+    """#202: o doctor reporta o caminho EFETIVO com a mesma regra da fábrica."""
+
+    def _kind(self, platform_name, machine, engine="local", force_cpu=False, mlx_ok=True):
+        from scriba import transcription
+
+        cfg = mock.Mock(engine=engine)
+        with mock.patch.object(sys, "platform", platform_name), \
+                mock.patch("platform.machine", return_value=machine), \
+                mock.patch("scriba.stt_mlx.mlx_disponivel", return_value=mlx_ok):
+            return transcription.effective_engine(cfg, force_cpu=force_cpu)
+
+    def test_mac_local_e_mlx(self):
+        self.assertEqual(self._kind("darwin", "arm64"), "mlx")
+
+    def test_engine_desviado_e_faster_whisper_mesmo_com_mlx_instalado(self):
+        # o contorno da #202: engine = "cpu" cai no faster-whisper; o doctor tem que dizer isso
+        self.assertEqual(self._kind("darwin", "arm64", engine="cpu"), "faster-whisper")
+
+    def test_cloud_e_cloud_em_qualquer_maquina(self):
+        self.assertEqual(self._kind("darwin", "arm64", engine="cloud"), "cloud")
+        self.assertEqual(self._kind("win32", "AMD64", engine="cloud"), "cloud")
+
+    def test_force_cpu_e_sem_mlx_caem_no_faster_whisper(self):
+        self.assertEqual(self._kind("darwin", "arm64", force_cpu=True), "faster-whisper")
+        self.assertEqual(self._kind("darwin", "arm64", mlx_ok=False), "faster-whisper")
+        self.assertEqual(self._kind("win32", "AMD64"), "faster-whisper")
 
 
 class TestNotifyMac(unittest.TestCase):

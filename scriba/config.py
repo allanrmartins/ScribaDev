@@ -111,6 +111,10 @@ cpu_threads = 0          # threads quando cai para CPU (0 = automático)
 # após testar com áudio real — pode recuperar voz baixa, mas arrisca alucinar em silêncio.
 vad_min_silence_ms = 0   # silêncio mínimo para cortar um trecho (ms); 0 = padrão
 vad_threshold = 0        # limiar de detecção de voz (0..1); 0 = padrão
+# Transcrever só os trechos com fala (Silero). Vale p/ o faster-whisper e p/ o MLX/Metal
+# do Apple Silicon: sem isso, um microfone quase mudo vira texto inventado que chega à
+# ata e ao resumo (#202). false = áudio inteiro ao modelo (só para depurar).
+vad_filter = true
 # Vocabulário para guiar a transcrição. Vazio = sem viés: instalação nova não sabe
 # a sua área e chutar o jargão errado atrapalha mais que ajuda. Preencha com o seu,
 # ou deixe o "Assistente de perfil…" (Configurações → IA) montar a lista.
@@ -223,6 +227,10 @@ class Whisper:
     # VAD opt-in (#6): 0 = defaults da lib (sem mudança). >0 recupera voz baixa/pausas.
     vad_min_silence_ms: int = 0        # silêncio mínimo p/ cortar (ms); 0 = default
     vad_threshold: float = 0.0         # limiar de voz do Silero (0..1); 0 = default
+    # Filtro de voz ligado: transcreve só os trechos com fala (Silero). No MLX/Metal
+    # o recorte é feito antes do modelo (#202): sem ele, um mic quase mudo vira texto
+    # inventado que chega à ata. False = áudio inteiro ao modelo (só p/ depurar).
+    vad_filter: bool = True
     hotwords: str = ""
     engine: str = "local"              # local (faster-whisper) | cloud (Groq/OpenAI-compat STT)
     cloud_base_url: str = ""           # vazio = Groq (https://api.groq.com/openai/v1)
@@ -424,6 +432,7 @@ beam_size = {_n(w.beam_size)}            # feixes da decodificação; menor = ma
 cpu_threads = {_n(w.cpu_threads)}          # threads quando cai para CPU (0 = automático)
 vad_min_silence_ms = {_n(w.vad_min_silence_ms)}   # silêncio mínimo para cortar (ms); 0 = padrão
 vad_threshold = {_n(w.vad_threshold)}        # limiar de detecção de voz (0..1); 0 = padrão
+vad_filter = {_b(w.vad_filter)}        # transcrever só trechos com fala (Silero); false = áudio inteiro (#202)
 # Vocabulário para guiar a transcrição (o jargão da sua área; vazio = sem viés):
 hotwords = {_s(w.hotwords)}
 engine = {_s(w.engine)}          # {_H["engine_save"]}
