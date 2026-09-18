@@ -8,6 +8,7 @@ página do modelo — depois disso, o download acontece uma vez e o resto é off
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -189,6 +190,10 @@ def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None,
         # o aviso de torchcodec/FFmpeg do pyannote despeja ~8 KB de traceback no
         # stderr; é inofensivo aqui (lemos o áudio nós mesmos em _load_waveform)
         warnings.filterwarnings("ignore", message="(?s).*torchcodec.*")
+        # Apple Silicon (#203): op do pyannote sem kernel Metal cai na CPU em vez de
+        # matar o processo. O torch lê a variável ao inicializar o backend MPS, por
+        # isso ela entra ANTES do import (setdefault: quem já exportou manda).
+        os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
         import torch
         from pyannote.audio import Pipeline
     except Exception as e:  # noqa: BLE001 — ImportError E import interno quebrado (#196/#197)
@@ -215,43 +220,65 @@ def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None,
             return None
         # em que dispositivo o pyannote vai rodar, do mesmo jeito que a transcrição
         # imprime o dela (#190): "cuda" no log era só o faster-whisper, e um torch
-        # build CPU passava batido - a #188 levou uma rodada inteira p/ descobrir
-        if force_cpu and torch.cuda.is_available():
-            print("diarização em CPU (forçada com --cpu)")
-        elif not torch.cuda.is_available():
-            print(f"diarização em CPU (torch {torch.__version__} sem CUDA)")
+        # build CPU passava batido - a #188 levou uma rodada inteira p/ descobrir.
+        # No Apple Silicon o caminho é o Metal via MPS (#203): antes só havia o
+        # ramo cuda e a separação de vozes rodava inteira em CPU (~0,55x do tempo
+        # real num M5 Pro: 10 min p/ uma call de 20, contra 33 s da transcrição).
+        device = pick_device(torch, force_cpu)
+        if device == "cpu":
+            if force_cpu:
+                print("diarização em CPU (forçada com --cpu)")
+            else:
+                print(f"diarização em CPU (torch {torch.__version__} sem CUDA nem MPS)")
         else:
-            try:
-                dev_name = torch.cuda.get_device_name(0)
-            except Exception:
-                dev_name = "GPU"
-            print(f"diarização em cuda ({dev_name})")
-        if torch.cuda.is_available() and not force_cpu:
+            print(f"diarização em {device_label(device, torch)}")
+        if device == "cuda":
             pipe.to(torch.device("cuda"))
             # blinda contra o sysmem fallback do Windows (spill VRAM->RAM = freeze):
             # capa o allocator do PyTorch com uma margem livre, então VRAM apertada/
             # bloco pesado vira OOM capturável (cai em "Participantes"), não trava (issue #8).
             _cap_pyannote_vram()
+        elif device == "mps":
+            pipe.to(torch.device("mps"))
         audio = _load_waveform(wav)
         kwargs = _speaker_kwargs(cfg, num_speakers)
         chunk_s = max(0, int(getattr(cfg, "chunk_minutes", 3) or 0)) * 60
         dur = (audio["waveform"].shape[-1] / int(audio["sample_rate"])) if audio is not None else 0.0
 
-        if audio is not None and chunk_s and dur > chunk_s:
-            # Áudio longo: diariza em blocos p/ NÃO estourar a VRAM (o pico da
-            # diarização é ~O(duração²) — a matriz de afinidade do clustering). As
-            # vozes da PRÓPRIA call são re-ligadas pelo embedding (não depende de
-            # conhecer ninguém). O nº de vozes informado vale aqui também (#198):
-            # teto por bloco + redução das vozes globais ao N no fim.
-            out = _diarize_chunked(pipe, audio, int(audio["sample_rate"]), chunk_s,
-                                   num_speakers=kwargs.get("num_speakers"),
-                                   max_speakers=kwargs.get("max_speakers"))
-        else:
+        def _run(strict_first_block: bool):
+            if audio is not None and chunk_s and dur > chunk_s:
+                # Áudio longo: diariza em blocos p/ NÃO estourar a VRAM (o pico da
+                # diarização é ~O(duração²) — a matriz de afinidade do clustering). As
+                # vozes da PRÓPRIA call são re-ligadas pelo embedding (não depende de
+                # conhecer ninguém). O nº de vozes informado vale aqui também (#198):
+                # teto por bloco + redução das vozes globais ao N no fim.
+                return _diarize_chunked(pipe, audio, int(audio["sample_rate"]), chunk_s,
+                                        num_speakers=kwargs.get("num_speakers"),
+                                        max_speakers=kwargs.get("max_speakers"),
+                                        strict_first_block=strict_first_block)
             if "num_speakers" in kwargs:
                 print(f"separando participantes por voz (fixo em {kwargs['num_speakers']} voz(es))...")
             else:
                 print("separando participantes por voz...")
-            out = _run_pipe(pipe, audio if audio is not None else str(wav), kwargs)
+            return _run_pipe(pipe, audio if audio is not None else str(wav), kwargs)
+
+        try:
+            out = _run(strict_first_block=(device == "mps"))
+        except _CudaContextError:
+            raise
+        except Exception as e:
+            if device != "mps":
+                raise
+            # MPS (#203): o pyannote no Metal não tem a quilometragem do CUDA - um
+            # op sem kernel que o fallback não cobre, ou um bug do backend, não pode
+            # custar a separação de vozes inteira. Refaz em CPU (o resultado de
+            # antes desta versão), com o motivo visível no process.log.
+            log.warning("diarização em MPS falhou (%s); refazendo em CPU", e)
+            print(f"AVISO: diarização em Metal (MPS) falhou ({e}); refazendo em CPU")
+            pipe.to(torch.device("cpu"))
+            _free_device_cache()
+            device = "cpu"
+            out = _run(strict_first_block=False)
 
         if out is None:
             _fail("não reconheci o retorno do pipeline (versão do pyannote?)")
@@ -281,14 +308,12 @@ def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None,
         if not ctx_broken:
             _uncap_pyannote_vram()  # restaura a fração do allocator (o cap valia só aqui)
         pipe = None
-        try:
+        if not ctx_broken:
+            _free_device_cache()
+        else:
             import gc
 
-            gc.collect()
-            if not ctx_broken and torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception:
-            pass
+            gc.collect()  # solta o modelo sem tocar no driver ferido
 
 
 def _extract_embeddings(result, annotation) -> dict[str, list[float]]:
@@ -369,16 +394,58 @@ def _run_pipe(pipe, audio, kwargs) -> tuple[list[Turn], dict[str, list[float]]] 
     return turns, _extract_embeddings(result, annotation)
 
 
-def _free_cuda() -> None:
-    """Libera o cache CUDA (o pico de trabalho), mantendo o modelo carregado."""
+def _mps_available(torch) -> bool:
+    """Metal Performance Shaders utilizáveis? (Apple Silicon com torch de MPS, #203)"""
+    try:
+        mps = getattr(torch.backends, "mps", None)
+        return bool(mps is not None and mps.is_available())
+    except Exception:
+        return False
+
+
+def pick_device(torch, force_cpu: bool = False) -> str:
+    """Onde o pyannote roda: 'cuda' | 'mps' (Metal no Apple Silicon, #203) | 'cpu'.
+    A MESMA regra vale p/ o `doctor`, que antes só olhava o CUDA e reportava
+    "CPU" num Mac que agora vai de Metal."""
+    if force_cpu:
+        return "cpu"
+    try:
+        if torch.cuda.is_available():
+            return "cuda"
+    except Exception:
+        pass
+    return "mps" if _mps_available(torch) else "cpu"
+
+
+def device_label(device: str, torch=None) -> str:
+    """Rótulo p/ log e doctor: 'cuda (NVIDIA ...)', 'GPU Metal (MPS)' ou 'CPU'."""
+    if device == "cuda":
+        name = "GPU"
+        try:
+            name = torch.cuda.get_device_name(0)
+        except Exception:
+            pass
+        return f"cuda ({name})"
+    if device == "mps":
+        return "GPU Metal (MPS)"
+    return "CPU"
+
+
+def _free_device_cache() -> None:
+    """Libera o cache do acelerador (CUDA ou MPS) - o pico de trabalho -, mantendo
+    o modelo carregado. Nunca toca no torch se ninguém o importou (#196)."""
     try:
         import gc
-
-        import torch
+        import sys
 
         gc.collect()
+        torch = sys.modules.get("torch")
+        if torch is None:
+            return
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+        elif _mps_available(torch):
+            torch.mps.empty_cache()
     except Exception:
         pass
 
@@ -570,7 +637,8 @@ def _reduce_globals_to(globals_: list, n: int) -> dict[str, str]:
 
 
 def _diarize_chunked(pipe, audio, sr: int, chunk_s: int, num_speakers: int | None = None,
-                     max_speakers: int | None = None) -> tuple[list[Turn], dict[str, list[float]]] | None:
+                     max_speakers: int | None = None,
+                     strict_first_block: bool = False) -> tuple[list[Turn], dict[str, list[float]]] | None:
     """Diariza áudio longo em blocos de `chunk_s` segundos, re-ligando as vozes
     entre blocos pelo embedding (cosseno). Cada bloco cabe na VRAM; entre blocos o
     cache CUDA é liberado — assim o pico fica por-bloco e nunca estoura. As vozes
@@ -584,7 +652,13 @@ def _diarize_chunked(pipe, audio, sr: int, chunk_s: int, num_speakers: int | Non
     bloco (`max_speakers=N`: um bloco nunca tem mais vozes que a call inteira) e
     (2) no fim, as vozes globais re-ligadas são REDUZIDAS a N fundindo os
     centroides mais parecidos (`_reduce_globals_to`). Sem num_speakers, só o
-    max_speakers do config (se houver) vale como teto por bloco."""
+    max_speakers do config (se houver) vale como teto por bloco.
+
+    strict_first_block (#203): num device sem quilometragem (MPS), o 1º bloco
+    falhando não é "um bloco ruim" - é o backend. Em vez de pular e insistir até
+    _MAX_CONSECUTIVE_FAILS (e devolver uma call quase sem vozes), deixa o erro
+    subir p/ diarize() refazer tudo em CPU. Do 2º bloco em diante vale a
+    resiliência de sempre."""
     import numpy as np
 
     wav = audio["waveform"]
@@ -613,12 +687,14 @@ def _diarize_chunked(pipe, audio, sr: int, chunk_s: int, num_speakers: int | Non
                 # Contexto CUDA corrompido (#115): NÃO submeter mais NADA à GPU —
                 # nem empty_cache. Aborta tudo; diarize() degrada p/ "Participantes".
                 raise _CudaContextError(f"bloco {i + 1}/{n_chunks}: {e}") from e
+            if strict_first_block and i == 0:
+                raise  # backend sem validação falhou de cara (#203): diarize() refaz em CPU
             # Resiliência por bloco: um bloco que falha (ex.: OOM sob VRAM apertada —
             # com o cap, o spill->freeze vira um OutOfMemoryError) NÃO derruba a call
             # inteira. Pula só este trecho (cai em "Participantes") e segue com os
             # demais. Antes, o erro subia e zerava TODA a diarização (issue #8).
             consecutive_fails += 1
-            _free_cuda()
+            _free_device_cache()
             log.warning("diarização: bloco %d/%d falhou (%s); pulando este trecho", i + 1, n_chunks, e)
             if consecutive_fails >= _MAX_CONSECUTIVE_FAILS:
                 # Insistir numa GPU que só falha piora o estado do driver (#115):
@@ -631,7 +707,7 @@ def _diarize_chunked(pipe, audio, sr: int, chunk_s: int, num_speakers: int | Non
                 break
             continue
         consecutive_fails = 0
-        _free_cuda()             # solta o pico de trabalho do bloco antes do próximo
+        _free_device_cache()     # solta o pico de trabalho do bloco antes do próximo
         if i + 1 < n_chunks:
             _thermal_pause()     # respiro/espera térmica entre blocos (#115)
         if out is None:

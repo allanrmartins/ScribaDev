@@ -43,6 +43,15 @@ existentes. **BlackHole é GPL-3 — nunca embutir nem sugerir.**
   do report: 0 inserções e 4 s em vez de 17 s. Os limiares internos do Whisper
   reduzem mas não zeram, e `clip_timestamps` piora (loops degenerados) - não
   insistir por aí. `vad_filter = false` no config desliga (só p/ depurar).
+- **Diarização no Metal (#203, v1.4.21):** `diarize.py` só tinha o ramo `cuda`, e
+  no Apple Silicon o pyannote rodava inteiro em CPU (~0,55x do tempo real num M5
+  Pro: 10 min p/ uma call de 20, com a transcrição em 33 s). Agora
+  `pick_device()` escolhe `cuda` → `mps` → `cpu`; `PYTORCH_ENABLE_MPS_FALLBACK=1`
+  entra antes do `import torch` (op sem kernel Metal cai na CPU em vez de matar o
+  processo); e se o MPS falhar de cara (1º bloco ou a chamada única), a diarização
+  é refeita em CPU com aviso no `process.log`. `doctor` e a aba Sobre reportam o
+  device pela mesma regra. Sem medição nossa: validação em gravação real pedida
+  na issue.
 - **M6 — desktop A:** `_MacNotifier` (osascript, com escaping), autostart via
   LaunchAgent `~/Library/LaunchAgents/dev.scribadev.tray.plist` (`plutil -lint` OK,
   roundtrip verificado), `autostart.label()` nos textos, ícone TEMPLATE da menu bar

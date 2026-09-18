@@ -303,7 +303,12 @@ def recommend(p: Probe) -> Recommendation:
                               "desligada e não baixar os modelos por enquanto.")
         r.reasons.append(f"Separação de vozes desligada: com {vram_gb} GB de VRAM ela tende a travar o "
                          "processamento (precisa de mais de 4 GB) - não baixamos os modelos dela.")
-    elif p.apple_silicon or ram >= 16:
+    elif p.apple_silicon:
+        # #203: pyannote no Metal (MPS), com fallback p/ CPU se o backend falhar
+        r.diarization = "opcional"
+        r.diarization_hint = "Roda na GPU do chip (Metal/MPS) - você decide."
+        r.reasons.append("Separação de vozes disponível na GPU (Metal/MPS) — opcional.")
+    elif ram >= 16:
         r.diarization = "opcional"
         r.diarization_hint = "Funciona nesta máquina, mas mais lento - você decide."
         r.reasons.append("Separação de vozes disponível, mas mais lenta nesta máquina — opcional.")
