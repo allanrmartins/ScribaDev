@@ -1047,10 +1047,13 @@ def cmd_doctor(args) -> int:
         if ok_voices:
             import torch
 
-            gpu = "GPU" if torch.cuda.is_available() else "CPU"
+            from . import diarize as diarize_mod
+
+            # a MESMA regra do diarize(): CUDA, senão Metal/MPS no Apple Silicon (#203), senão CPU
+            gpu = diarize_mod.device_label(diarize_mod.pick_device(torch), torch)
             if cfg.diarization.hf_token:
                 mode = "pergunta nº de participantes" if cfg.diarization.ask_speakers else "automático"
-                _print(_OK, "Diarização", f"habilitada ({gpu}); modelo {cfg.diarization.model}; {mode}")
+                _print(_OK, "Diarização", f"habilitada em {gpu}; modelo {cfg.diarization.model}; {mode}")
             else:
                 _print(_WARN, "Diarização", "habilitada mas SEM token HF — configure na aba Gravação")
         else:
@@ -1084,6 +1087,20 @@ def cmd_doctor(args) -> int:
             vram_warn = sysprobe.diarization_vram_warning(sysprobe._nvidia_vram_mb())
             if vram_warn:
                 _print(_WARN, "Diarização × VRAM", vram_warn)
+    else:
+        # Apple Silicon (#203): a separação de vozes vai de Metal (MPS) quando o
+        # torch enxerga o backend; senão fica em CPU, e é bom saber ANTES da call
+        try:
+            import torch
+
+            from . import diarize as diarize_mod
+
+            mps = diarize_mod.pick_device(torch) == "mps"
+            _print(_OK if mps else _WARN, "PyTorch",
+                   f"{torch.__version__} - Metal (MPS) {'disponível' if mps else 'indisponível'}: "
+                   f"separação de vozes {'na GPU' if mps else 'em CPU (mais lenta)'}")
+        except ImportError:
+            pass  # sem torch = sem diarização; a linha "Diarização" acima já disse
 
     # Atalhos com ícone quebrado (#192): repo movido na instalação por fonte
     if sys.platform == "win32":

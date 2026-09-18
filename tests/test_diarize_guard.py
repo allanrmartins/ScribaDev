@@ -59,20 +59,20 @@ class _FakeWav:
 
 @unittest.skipUnless(_HAS_NUMPY, "numpy não instalado")
 class ChunkedGuardTests(unittest.TestCase):
-    """_diarize_chunked com _run_pipe/_free_cuda/_thermal_pause dublados."""
+    """_diarize_chunked com _run_pipe/_free_device_cache/_thermal_pause dublados."""
 
     SR = 16000
     CHUNK_S = 60
 
     def setUp(self):
-        self._orig = (diarize._run_pipe, diarize._free_cuda, diarize._thermal_pause)
-        diarize._free_cuda = lambda: None
+        self._orig = (diarize._run_pipe, diarize._free_device_cache, diarize._thermal_pause)
+        diarize._free_device_cache = lambda: None
         diarize._thermal_pause = lambda: None
         self.audio = {"waveform": _FakeWav(5 * self.CHUNK_S * self.SR),  # 5 blocos
                       "sample_rate": self.SR}
 
     def tearDown(self):
-        diarize._run_pipe, diarize._free_cuda, diarize._thermal_pause = self._orig
+        diarize._run_pipe, diarize._free_device_cache, diarize._thermal_pause = self._orig
 
     def _run(self):
         return diarize._diarize_chunked(None, self.audio, self.SR, self.CHUNK_S)
