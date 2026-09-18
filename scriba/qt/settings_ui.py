@@ -1231,8 +1231,14 @@ class SettingsWindow(QWidget):
 
     @staticmethod
     def _gpu_str() -> str:
+        import platform
+        import sys
+
         from .. import plat
 
+        if sys.platform == "darwin" and platform.machine() == "arm64":
+            # #203: transcrição no MLX, separação de vozes no MPS - os dois via Metal
+            return "Apple Silicon — Metal (MLX na transcrição, MPS na separação de vozes)"
         if plat.has_nvidia_gpu():
             return "NVIDIA (CUDA disponível)"
         return "sem GPU CUDA — usa CPU"

@@ -71,7 +71,7 @@ O que muda de uma máquina para outra é o **modelo de transcrição** que dá p
 | **GPU NVIDIA com mais de 4 GB de VRAM** (6 GB+: RTX 3050 6 GB, RTX 3060, RTX 4060…) | `large-v3-turbo` na GPU, quase em tempo real | **Ligada** - o wizard sugere aceitar os termos e registrar o token do Hugging Face | modelo (~1,5 GB) + bibliotecas CUDA (~3 GB) + torch/pyannote (~3 GB) |
 | **GPU NVIDIA com 4 GB de VRAM ou menos** (RTX 3050 4 GB, GTX 1650, MX…) | `large-v3-turbo` na GPU a partir de 3 GB; abaixo disso, CPU | **Desligada** - nessa faixa o pyannote trava o processamento em vez de só ficar lento ([#188](https://github.com/allanrmartins/ScribaDev/issues/188)); o wizard não baixa os modelos dela | modelo (~1,5 GB) + bibliotecas CUDA (~3 GB) |
 | **Sem GPU dedicada** (notebook corporativo) | `medium` com 16 GB de RAM e 8 núcleos; `small` com 8 GB; `tiny` abaixo disso | Opcional com 16 GB de RAM (roda na CPU, bem mais lenta); desaconselhada com menos | só o modelo (0,5 a 1,5 GB) |
-| **Mac com Apple Silicon** | `large-v3-turbo` via Metal (MLX) | Opcional (roda na CPU, mais lenta) | só o modelo (~1,5 GB) |
+| **Mac com Apple Silicon** | `large-v3-turbo` via Metal (MLX) | Opcional (roda na GPU do chip via Metal/MPS; cai para CPU se o backend falhar) | só o modelo (~1,5 GB) |
 
 - **RAM**: 8 GB é o mínimo; 16 GB deixa a transcrição em CPU e a separação de vozes confortáveis.
 - **Disco**: reserve de 2 GB (só o modelo) a 8 GB (GPU com tudo ligado) - o wizard avisa se não couber.
@@ -343,6 +343,7 @@ Suporte a partir da **v1.4.0** (macOS 14.2+, Apple Silicon), contribuição do [
 
 - **Captura** via *process tap* do CoreAudio (o equivalente nativo do loopback WASAPI) + microfone;
 - **Transcrição acelerada por Metal** (mlx-whisper) — sem GPU NVIDIA, sem CUDA;
+- **Separação de vozes também no Metal** (pyannote em MPS, com fallback automático para CPU);
 - **Menu bar** com ícone template (segue o claro/escuro), notificações nativas e autostart via LaunchAgent;
 - **Atalho global** nativo (Carbon) e a pílula flutuante **fora do compartilhamento de tela** — quem está na call não a vê;
 - Detecção de calls pela mesma máquina de estados do Windows, sobre os *process objects* do CoreAudio.
