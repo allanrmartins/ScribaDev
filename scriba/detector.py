@@ -1,9 +1,11 @@
-"""Detecção de calls (Teams, Zoom, e reuniões no navegador) via registro do Windows.
+"""Detecção de calls (Teams, Zoom, e reuniões no navegador) pelo uso do microfone.
 
-O Windows rastreia o uso do microfone por aplicativo em
-HKCU\\Software\\...\\CapabilityAccessManager\\ConsentStore\\microphone.
-Enquanto o app está com o microfone aberto, o valor LastUsedTimeStop fica 0 —
-isso vale inclusive com o mic mutado no Teams (o mute é por software).
+A máquina de estados consome (chave, start, stop) no formato do ConsentStore do
+registro (HKCU\\Software\\...\\CapabilityAccessManager\\ConsentStore\\microphone):
+enquanto o app está com o microfone aberto, stop fica 0 — isso vale inclusive com
+o mic mutado no Teams (o mute é por software). No Windows a fonte hoje são as
+sessões de captura do WASAPI (micusage_win), porque o registro parou de ser
+atualizado no 25H2 de set/2026; o registro fica como fallback.
 
 Para apps desktop (Teams, Zoom) o registro basta. Para o navegador ele só diz
 "chrome.exe está com o mic aberto" — qualquer site faz isso —, então a call
@@ -72,6 +74,9 @@ def friendly_name(pattern_or_key: str) -> str:
     return pattern_or_key.split("_")[0].capitalize()
 
 
+_wasapi_failed_logged = False
+
+
 def _iter_mic_keys():
     """(subchave, LastUsedTimeStart, LastUsedTimeStop) para cada app rastreado.
 
@@ -86,6 +91,26 @@ def _iter_mic_keys():
 
         yield from micusage_mac.snapshot()
         return
+    # Windows: sessões de captura do WASAPI. O ConsentStore do registro parou de
+    # ser atualizado no Windows 11 25H2 de set/2026 (ver micusage_win); ele fica
+    # só como fallback se o COM falhar.
+    global _wasapi_failed_logged
+    try:
+        from . import micusage_win
+
+        keys = micusage_win.snapshot()
+    except Exception:
+        if not _wasapi_failed_logged:
+            _wasapi_failed_logged = True
+            log.exception("sessões WASAPI indisponíveis - usando o registro do Windows")
+    else:
+        yield from keys
+        return
+    yield from _iter_registry_keys()
+
+
+def _iter_registry_keys():
+    """(subchave, start, stop) do ConsentStore do registro (fonte histórica no Windows)."""
     # lazy: winreg só existe no Windows; o import no topo quebrava o módulo (e a
     # cadeia scriba.main) em Linux/macOS antes de qualquer código rodar (#96)
     import winreg
@@ -141,10 +166,29 @@ def active_app(patterns: list[str]) -> str | None:
     return None
 
 
+def _iter_known_keys():
+    """Subchaves de todo app que já usou o mic - para o doctor, não para detectar.
+
+    No Windows une o registro (histórico antigo) às sessões WASAPI (inclusive as
+    inativas): o snapshot do detector só conhece o que abriu o mic desde que o
+    ScribaDev subiu, e o doctor diria "nunca usou" para o Teams recém-aberto.
+    """
+    if sys.platform != "win32":
+        yield from (sub for sub, _s, _e in _iter_mic_keys())
+        return
+    yield from (sub for sub, _s, _e in _iter_registry_keys())
+    try:
+        from . import micusage_win
+
+        yield from micusage_win.sessions_by_key()
+    except Exception:
+        pass  # o doctor segue só com o registro
+
+
 def app_key_status(patterns: list[str]) -> dict[str, bool]:
-    """{nome amigável: já existe chave no registro?} — para o doctor."""
+    """{nome amigável: o app já usou o mic?} — para o doctor."""
     found = {friendly_name(p): False for p in patterns}
-    for sub, _start, _stop in _iter_mic_keys():
+    for sub in _iter_known_keys():
         low = sub.lower()
         for p in patterns:
             if p in low:
@@ -199,9 +243,9 @@ def active_browser(browser_pats: list[str]) -> str | None:
 
 
 def browser_key_status(browser_pats: list[str]) -> dict[str, bool]:
-    """{navegador: já existe chave de mic no registro?} — para o doctor."""
+    """{navegador: já usou o mic?} — para o doctor."""
     found = {p: False for p in browser_pats}
-    for sub, _start, _stop in _iter_mic_keys():
+    for sub in _iter_known_keys():
         for p in browser_pats:
             if _browser_key_match(sub, p):
                 found[p] = True
@@ -422,11 +466,14 @@ class Detector:
     def _mic_sessions(self) -> dict[str, tuple[int, int]]:
         """{subchave: (start, stop)} das sessões de mic de apps e navegadores
         monitorados — a matéria-prima para detectar a call e rastrear sua sessão."""
-        sessions = active_sessions(self.patterns)  # apps desktop (substring)
-        if self.browser_pats:  # navegadores: match exato por SO (não pega webview embutido)
-            for sub, start, stop in _iter_mic_keys():
-                if any(_browser_key_match(sub, p) for p in self.browser_pats):
-                    sessions[sub] = (start, stop)
+        # uma leitura só por poll: no Windows cada leitura é uma enumeração COM
+        sessions: dict[str, tuple[int, int]] = {}
+        for sub, start, stop in _iter_mic_keys():
+            low = sub.lower()
+            if (any(p in low for p in self.patterns)  # apps desktop (substring)
+                    # navegadores: match exato por SO (não pega webview embutido)
+                    or any(_browser_key_match(sub, p) for p in self.browser_pats)):
+                sessions[sub] = (start, stop)
         return sessions
 
     def _sense(self, sessions: dict[str, tuple[int, int]]) -> tuple[str, str, int] | None:

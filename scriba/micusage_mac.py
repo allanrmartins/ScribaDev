@@ -24,18 +24,11 @@ from __future__ import annotations
 
 import ctypes
 import logging
-import time
 
 from .mac_tap import _cfstr, _get_prop, _get_size, _SYSTEM_OBJECT
+from .micstamp import MicStamps
 
 log = logging.getLogger("scriba.micusage_mac")
-
-# segundos entre 1601-01-01 (época do FILETIME) e 1970-01-01 (época do Unix)
-_FILETIME_EPOCH_DELTA = 11_644_473_600
-
-
-def _now_filetime() -> int:
-    return int((time.time() + _FILETIME_EPOCH_DELTA) * 1e7)
 
 
 def _process_inputs() -> list[tuple[int, str, bool]]:
@@ -59,35 +52,21 @@ def _process_inputs() -> list[tuple[int, str, bool]]:
     return out
 
 
-# histórico sintetizado: chave -> [start_filetime, stop_filetime (0 = mic aberto)]
-_state: dict[str, list[int]] = {}
+# histórico sintetizado (a síntese é comum ao micusage_win: ver micstamp)
+_stamps = MicStamps()
 
 
 def reset() -> None:
     """Zera o histórico (testes)."""
-    _state.clear()
+    _stamps.reset()
 
 
 def snapshot() -> list[tuple[str, int, int]]:
     """(chave, start, stop) por app com histórico de mic — o análogo darwin do
     detector._iter_mic_keys. stop == 0 enquanto o app está com o mic aberto;
     start é reescrito quando o app REABRE o mic (fronteira entre calls, #34)."""
-    now = _now_filetime()
     aberto_por_chave: dict[str, bool] = {}
     for pid, bundle, running in _process_inputs():
         key = (bundle or f"pid{pid}").lower()
         aberto_por_chave[key] = aberto_por_chave.get(key, False) or running
-
-    for key, aberto in aberto_por_chave.items():
-        st = _state.get(key)
-        if aberto:
-            if st is None or st[1] != 0:  # (re)abriu o mic: novo start, stop zerado
-                _state[key] = [now, 0]
-        elif st is not None and st[1] == 0:  # fechou o mic agora
-            st[1] = now
-    # processo sumiu com o mic aberto (crash/quit): fecha a sessão
-    for key, st in _state.items():
-        if key not in aberto_por_chave and st[1] == 0:
-            st[1] = now
-
-    return [(k, s[0], s[1]) for k, s in _state.items()]
+    return _stamps.update(aberto_por_chave)
