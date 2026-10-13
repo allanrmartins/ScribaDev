@@ -61,6 +61,17 @@ class SpeakersTests(unittest.TestCase):
         w._tick()
         self.assertEqual(got, [None])
 
+    def test_respondida_para_os_timers(self):
+        # janela fechada seguia chamando raise_() a cada 2 s; timer vivo num widget
+        # descartado derruba o processo no PySide6 6.12 (#209)
+        from scriba.qt.speakers_ui import AskNumSpeakers
+
+        w = AskNumSpeakers(lambda _v: None, timeout_seconds=5)
+        self.assertTrue(w._timer.isActive() and w._keep.isActive())
+        w._finish(None)
+        self.assertFalse(w._timer.isActive())
+        self.assertFalse(w._keep.isActive())
+
     def test_ask_uma_chamada_so(self):
         from scriba.qt.speakers_ui import AskNumSpeakers
 

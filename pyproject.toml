@@ -42,7 +42,9 @@ dependencies = [
     "windows-toasts==1.3.1 ; sys_platform == 'win32'",
     # UI: PySide6 virou dependência principal no corte para Qt (#53); antes era o extra `qt`.
     # 6.7 = piso com High-DPI por padrão + QSS estável.
-    "PySide6>=6.7",
+    # <6.12: o 6.12.0 derruba o processo na saída (shared QObject was deleted
+    # directly) - teto até o #209 sair limpo.
+    "PySide6>=6.7,<6.12",
     # Timesheet (#122): exporta (e, na fase 2, importa) o xlsx de apontamento.
     # Puro Python (sem DLL — não atrapalha instalador futuro); stdlib não escreve xlsx.
     "openpyxl>=3.1",
