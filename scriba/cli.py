@@ -220,6 +220,18 @@ def main(argv: list[str] | None = None) -> int:
     p_ta.add_argument("--project", default="", help="código de OS/GAP (ex.: 123456)")
     p_ta.add_argument("--desc", default="", help="descrição breve da atividade")
     p_ta.add_argument("--extra", action="store_true", help="marca como hora extra")
+    p_ts_s = ts_sub.add_parser(
+        "suggest",
+        help="cria/atualiza a sugestão de uma fonte externa (ex.: mod de horas do Claude Code)")
+    p_ts_s.add_argument("--key", required=True,
+                        help="chave estável da unidade de trabalho (dedupe do reenvio)")
+    p_ts_s.add_argument("--date", metavar="AAAA-MM-DD", default=None, help="data (default: hoje)")
+    p_ts_s.add_argument("--start", required=True, metavar="HH:MM", help="hora de início")
+    p_ts_s.add_argument("--end", required=True, metavar="HH:MM", help="hora de fim")
+    p_ts_s.add_argument("--client", required=True, help="cliente (nome ou alias do cadastro)")
+    p_ts_s.add_argument("--project", default="", help="código de OS/GAP (ex.: 123456)")
+    p_ts_s.add_argument("--desc", default="", help="descrição breve da atividade")
+    p_ts_s.add_argument("--origin", default="claude", help="origem gravada (default: claude)")
     ts_sub.add_parser("sync", help="varre reuniões prontas e cria as sugestões que faltam")
     ts_sub.add_parser("backup", help="snapshot do timesheet.db (com rotação)")
     p_te = ts_sub.add_parser("export",
@@ -439,6 +451,8 @@ def cmd_timesheet(args) -> int:
         return _ts_list(args, tsdb)
     if args.ts_cmd == "add":
         return _ts_add(args, tsdb)
+    if args.ts_cmd == "suggest":
+        return _ts_suggest(args, tsdb)
     if args.ts_cmd == "sync":
         from . import timesheet_suggest
 
@@ -451,7 +465,7 @@ def cmd_timesheet(args) -> int:
         return _ts_export(args, ts)
     if args.ts_cmd == "import":
         return _ts_import(args)
-    print("uso: scribadev timesheet {list,add,sync,backup,export,import} (veja --help)")
+    print("uso: scribadev timesheet {list,add,suggest,sync,backup,export,import} (veja --help)")
     return 2
 
 
@@ -503,12 +517,7 @@ def _ts_add(args, tsdb) -> int:
     if client_id is None:
         print(f"aviso: cliente {text!r} não cadastrado — gravado como texto cru "
               "(cadastre pela UI ou adicione um alias)")
-    project_id, project_text = None, args.project.strip()
-    if client_id is not None and project_text:
-        match = [p for p in tsdb.list_projects(client_id)
-                 if p["code"].casefold() == project_text.casefold()]
-        if match:
-            project_id, project_text = match[0]["id"], ""
+    project_id, project_text = _resolve_project(tsdb, client_id, args.project)
     try:
         entry_id = tsdb.add_entry(
             work_date=work_date, start_time=args.start, end_time=args.end,
@@ -522,6 +531,51 @@ def _ts_add(args, tsdb) -> int:
     mine = next(r for r in tsdb.list_entries(day=work_date) if r["id"] == entry_id)
     print(f"registrado #{entry_id}: {mine['work_date']} {mine['start_time']}-{mine['end_time']} "
           f"({_hhmm(mine['minutes'])}) {mine['client_name'] or mine['client_text'] or '-'}")
+    return 0
+
+
+def _resolve_project(tsdb, client_id: int | None, code: str) -> tuple[int | None, str]:
+    """(project_id, project_text): o código casa com um projeto cadastrado do
+    cliente resolvido, senão fica como texto cru."""
+    text = (code or "").strip()
+    if client_id is not None and text:
+        match = [p for p in tsdb.list_projects(client_id)
+                 if p["code"].casefold() == text.casefold()]
+        if match:
+            return match[0]["id"], ""
+    return None, text
+
+
+def _ts_suggest(args, tsdb) -> int:
+    """Sugestão de fonte externa, idempotente por --key. Saída: UMA linha JSON
+    para o chamador (mod do Claude Code) ler - result created/updated/skipped,
+    id, o cliente como ficou gravado e, sem --project, o último código de OS
+    usado para o cliente (dica para quem chama pedir a OS ao usuário)."""
+    import json
+    from datetime import date
+
+    client_id, text = tsdb.resolve_client(args.client)
+    client_text = "" if client_id is not None else tsdb.known_client_spelling(text)
+    project_id, project_text = _resolve_project(tsdb, client_id, args.project)
+    try:
+        result, entry_id = tsdb.upsert_source_suggestion({
+            "source_key": args.key.strip(),
+            "work_date": args.date or date.today().isoformat(),
+            "start_time": args.start, "end_time": args.end,
+            "client_id": client_id, "client_text": client_text,
+            "project_id": project_id, "project_text": project_text,
+            "description": args.desc.strip(),
+        }, origin=args.origin.strip())
+    except ValueError as e:
+        print(json.dumps({"error": str(e)}, ensure_ascii=False))
+        return 2
+    client = text if client_id is not None else client_text
+    out = {"result": result, "id": entry_id, "client": client}
+    if not args.project.strip():
+        hist = next((h for k, h in tsdb.client_history().items()
+                     if k.casefold() == client.casefold()), None)
+        out["last_project"] = hist["projects"][0] if hist and hist["projects"] else ""
+    print(json.dumps(out, ensure_ascii=False))
     return 0
 
 

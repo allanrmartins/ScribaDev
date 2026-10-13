@@ -41,6 +41,8 @@ log = logging.getLogger("scriba.qt.timesheet")
 
 _WEEK = ("seg", "ter", "qua", "qui", "sex", "sáb", "dom")
 _LOCATIONS = ("", "Base", "In Loco", "Remoto")
+# coluna "Origem" da aba Sugestões (origens desconhecidas aparecem cruas)
+_ORIGIN_LABELS = {"scriba": "Call", "claude": "Claude", "manual": "Manual", "import": "Planilha"}
 _COL_EXTRA = 5    # flag de hora extra (grade e fila) - coluna própria, não
                   # mais concatenada na descrição (a coluna H da planilha)
 _COL_POSTED = 6   # checkbox "Lançado" da grade (a coluna J da planilha)
@@ -351,7 +353,7 @@ class TimesheetWindow(QWidget):
         else:
             menu.addAction(theme.qicon("checkmark"), "Marcar como lançado",
                            lambda: self._bg(lambda: tsdb.set_posted([entry["id"]], True)))
-        if entry["meeting_started_at"]:
+        if tsdb.is_linked(entry):
             menu.addAction(theme.qicon("dismiss"), "Descartar sugestão aceita",
                            lambda: self._discard(entry))
         else:
@@ -369,7 +371,7 @@ class TimesheetWindow(QWidget):
     def _discard(self, entry: dict) -> None:
         if QMessageBox.question(
                 self, "Descartar",
-                "O apontamento desta reunião será descartado e a sugestão não voltará.\n"
+                "Este apontamento será descartado e a sugestão não voltará.\n"
                 "Descartar mesmo assim?",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
             self._bg(lambda: tsdb.update_entry(entry["id"], status="discarded"))
@@ -488,7 +490,7 @@ class TimesheetWindow(QWidget):
         def work():
             self._persist_fields(fields, entry_id=primary["id"], accept_after=True)
             for e in rest:
-                if e["meeting_started_at"]:
+                if tsdb.is_linked(e):
                     tsdb.update_entry(e["id"], status="discarded")
                 else:
                     tsdb.delete_entry(e["id"])
@@ -503,19 +505,21 @@ class TimesheetWindow(QWidget):
         lay.setContentsMargins(4, 8, 4, 4)
         lay.setSpacing(6)
 
-        hint = QLabel("Reuniões processadas viram sugestões - revise, ajuste, agrupe e "
-                      "confirme. Cliente em destaque = não cadastrado.")
+        hint = QLabel("Reuniões processadas e blocos de trabalho do Claude Code viram "
+                      "sugestões - revise, ajuste, agrupe e confirme. Em destaque = "
+                      "cliente não cadastrado ou sem OS.")
         hint.setProperty("role", "muted")
         lay.addWidget(hint)
 
         self._sug_tree = self._make_tree(
-            ["Data", "Horário", "Total", "Cliente", "Descrição"],
-            widths=(84, 96, 48, 150, 0), stretch=4)
+            ["Data", "Horário", "Total", "Origem", "Cliente", "OS", "Descrição"],
+            widths=(84, 96, 48, 60, 120, 70, 0), stretch=6)
         self._sug_tree.setRootIsDecorated(False)
         # triagem em massa: aceitar/descartar valem para TODA a seleção
         self._sug_tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._sug_tree.itemDoubleClicked.connect(
             lambda item, _c: self._sug_edit_accept(item))
+        self._sug_tree.itemSelectionChanged.connect(self._sug_update_buttons)
         lay.addWidget(self._sug_tree, 1)
 
         btns = QHBoxLayout()
@@ -545,6 +549,11 @@ class TimesheetWindow(QWidget):
     def _sug_selection(self) -> list[dict]:
         return [self._sug_items[i] for i in self._sug_tree.selectedItems()
                 if i in self._sug_items]
+
+    def _sug_update_buttons(self) -> None:
+        """'Abrir reunião' só faz sentido para sugestão que veio de reunião."""
+        e = self._sug_selected()
+        self._b_open.setEnabled(e is None or bool(e["meeting_started_at"]))
 
     def _sug_accept(self) -> None:
         ids = [e["id"] for e in self._sug_selection()]
@@ -890,14 +899,20 @@ class TimesheetWindow(QWidget):
         self._sug_items.clear()
         for e in sorted(data["suggestions"],
                         key=lambda x: (x["work_date"], x["start_time"]), reverse=True):
+            project = e["project_code"] or e["project_text"]
             item = QTreeWidgetItem(self._sug_tree, [
                 e["work_date"], f"{e['start_time']}-{e['end_time']}",
                 _fmt_min(e["minutes"]),
+                _ORIGIN_LABELS.get(e["origin"], e["origin"]),
                 e["client_name"] or (f"? {e['client_text']}" if e["client_text"] else "? sem cliente"),
+                project or "? sem OS",
                 e["description"] or ""])
             if e["client_name"] is None:  # não resolvido: destaque de aviso
-                item.setForeground(3, QBrush(QColor(t.warn)))
+                item.setForeground(4, QBrush(QColor(t.warn)))
+            if not project:
+                item.setForeground(5, QBrush(QColor(t.warn)))
             self._sug_items[item] = e
+        self._sug_update_buttons()
 
     def _render_queue(self, data: dict) -> None:
         self._queue_tree.clear()

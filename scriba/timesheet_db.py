@@ -36,7 +36,7 @@ log = logging.getLogger("scriba.timesheet_db")
 # (mesmo racional do meetings_index.DB_PATH: isolar APP_DIR num teste já redireciona
 # o banco). O boot do app aponta para cá o override de [timesheet].db_path.
 DB_PATH = None
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _DDL_V1 = (
     """CREATE TABLE clients (
@@ -130,10 +130,20 @@ def _migrate_v2(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX ix_alias_norm ON client_aliases(alias_norm)")
 
 
+# v3: sugestões vindas de fora do Scriba (ex.: o mod de horas do Claude Code, que
+# aponta blocos de trabalho por demanda). source_key é a chave de dedupe delas, no
+# mesmo papel do meeting_started_at das reuniões: 1 chave = no máx. 1 apontamento,
+# e o descarte vira tombstone para o reenvio não ressuscitar a sugestão.
+_DDL_V3 = (
+    "ALTER TABLE entries ADD COLUMN source_key TEXT",
+    """CREATE UNIQUE INDEX ux_entries_source ON entries(source_key)
+        WHERE source_key IS NOT NULL""",
+)
+
 # Migrações incrementais: {versão alvo: passos que levam da versão anterior até
 # ela}. Cada passo é um SQL (DDL) ou um callable(conn) quando precisa de Python
 # (ex.: backfill do alias_norm, que o SQLite não calcula).
-_MIGRATIONS: dict[int, tuple] = {1: _DDL_V1, 2: (_migrate_v2,)}
+_MIGRATIONS: dict[int, tuple] = {1: _DDL_V1, 2: (_migrate_v2,), 3: _DDL_V3}
 
 _ENTRY_STATUSES = ("suggested", "confirmed", "discarded")
 
@@ -296,19 +306,25 @@ def update_entry(entry_id: int, **fields) -> bool:
         return True
 
 
+def is_linked(entry: dict) -> bool:
+    """Apontamento ligado a uma origem que reenvia (reunião ou fonte externa):
+    não se apaga, se descarta - o tombstone segura o reprocesso/reenvio."""
+    return bool(entry.get("meeting_started_at") or entry.get("source_key"))
+
+
 def delete_entry(entry_id: int) -> bool:
-    """Apaga um apontamento MANUAL. Linha ligada a reunião não se apaga: use
-    status='discarded' (o tombstone é o que impede a sugestão de ressuscitar)."""
+    """Apaga um apontamento MANUAL. Linha ligada a reunião ou fonte externa não se
+    apaga: use status='discarded' (o tombstone impede a sugestão de ressuscitar)."""
     with closing(connect()) as conn, conn:
         row = conn.execute(
-            "SELECT meeting_started_at FROM entries WHERE id = ?", (entry_id,)
+            "SELECT meeting_started_at, source_key FROM entries WHERE id = ?", (entry_id,)
         ).fetchone()
         if row is None:
             return False
-        if row["meeting_started_at"] is not None:
+        if is_linked(dict(row)):
             raise ValueError(
-                "apontamento vindo de reunião não se apaga — descarte a sugestão "
-                "(status='discarded') para ela não voltar no reprocesso"
+                "apontamento vindo de reunião ou do Claude não se apaga - descarte a "
+                "sugestão (status='discarded') para ela não voltar no reenvio"
             )
         conn.execute("DELETE FROM entries WHERE id = ?", (entry_id,))
         return True
@@ -458,6 +474,57 @@ def upsert_suggestion(rec: dict) -> str:
         return "updated"
 
 
+def upsert_source_suggestion(rec: dict, origin: str) -> tuple[str, int | None]:
+    """Cria/atualiza a sugestão de UMA unidade de trabalho de fonte externa
+    (rec['source_key'], ex.: um bloco de trabalho do Claude Code numa demanda).
+
+    Mesma regra do upsert_suggestion: inexistente → INSERT status='suggested'
+    ('created'); ainda 'suggested' → atualiza horários/cliente/projeto/descrição,
+    o bloco cresceu ou ganhou OS ('updated'); 'confirmed'/'discarded' → não toca,
+    dado do usuário vence ('skipped'). Devolve também o id da linha (None só na
+    corrida de INSERT perdida, que é resolvida como 'skipped').
+    """
+    key = rec.get("source_key")
+    if not key:
+        raise ValueError("sugestão sem source_key (chave de dedupe)")
+    if not origin:
+        raise ValueError("sugestão sem origem")
+    _check_date(rec["work_date"])
+    minutes = _minutes_between(rec["start_time"], rec["end_time"])
+    now = _now()
+    values = (rec["work_date"], rec["start_time"], rec["end_time"], minutes,
+              rec.get("client_id"), rec.get("client_text", ""),
+              rec.get("project_id"), rec.get("project_text", ""),
+              rec.get("description", ""))
+    with closing(connect()) as conn, conn:
+        row = conn.execute(
+            "SELECT id, status FROM entries WHERE source_key = ?", (key,)
+        ).fetchone()
+        if row is None:
+            try:
+                cur = conn.execute(
+                    """INSERT INTO entries (work_date, start_time, end_time, minutes,
+                           client_id, client_text, project_id, project_text,
+                           description, status, origin, source_key,
+                           created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,'suggested',?,?,?,?)""",
+                    (*values, origin, key, now, now),
+                )
+            except sqlite3.IntegrityError:
+                return "skipped", None
+            return "created", cur.lastrowid
+        if row["status"] != "suggested":
+            return "skipped", row["id"]
+        conn.execute(
+            """UPDATE entries SET work_date = ?, start_time = ?, end_time = ?,
+                   minutes = ?, client_id = ?, client_text = ?, project_id = ?,
+                   project_text = ?, description = ?, updated_at = ?
+               WHERE id = ?""",
+            (*values, now, row["id"]),
+        )
+        return "updated", row["id"]
+
+
 # -- clientes, aliases e projetos ---------------------------------------------
 
 def _norm(raw: str) -> str:
@@ -573,6 +640,16 @@ def known_client_names() -> list[str]:
                ORDER BY 1 COLLATE NOCASE"""
         )
         return [r[0] for r in rows]
+
+
+def known_client_spelling(raw: str) -> str:
+    """Grafia já usada para um cliente não cadastrado: casa `raw` (chave _fold)
+    com known_client_names e devolve a grafia existente ("Simpar" → "SIMPAR"),
+    senão o texto normalizado. Evita que a mesma empresa vire duas no combo e
+    no export só por caixa/acento."""
+    text = _norm(raw)
+    key = _fold(text)
+    return next((n for n in known_client_names() if _fold(n) == key), text)
 
 
 def client_history() -> dict[str, dict]:
