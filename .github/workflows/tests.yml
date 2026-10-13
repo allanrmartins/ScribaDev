@@ -13,8 +13,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30   # suíte leva ~8 min; runner pendurado não fica 6 h preso
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"   # piso do pyproject (requires-python >=3.12)
       - name: Instalar deps do projeto (PySide6 já é core desde o corte #53; sem cuda/diarization)
@@ -32,8 +32,8 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 30   # a suíte leva ~6 min; um job pendurado (viu-se 1x no #193) não segura o PR
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Instalar deps do projeto
@@ -50,8 +50,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Bibliotecas de sistema (Qt offscreen precisa da libegl; ffmpeg p/ áudio)
