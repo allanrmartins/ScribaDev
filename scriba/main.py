@@ -1011,7 +1011,9 @@ class ScribaApp:
         last_status = None
         limite = self._limite_sem_progresso()
         sinais = self._sinais_do_filho(proc.pid, meta_path, log_path)
-        ultimo_sinal = ultima_sonda = time.monotonic()
+        # relógio sem suspensão: notebook dormindo no meio do processamento não é
+        # filho travado (o time.monotonic do Windows conta o tempo dormindo)
+        ultimo_sinal = ultima_sonda = plat.awake_seconds()
         travado = False
         while proc.poll() is None:
             try:
@@ -1021,7 +1023,7 @@ class ScribaApp:
             if status and status != last_status:
                 last_status = status
                 self.ui(lambda s=status: self._pill_processing(s))
-            agora = time.monotonic()
+            agora = plat.awake_seconds()
             if agora - ultima_sonda >= _SONDA_PROGRESSO_S:
                 ultima_sonda = agora
                 novos = self._sinais_do_filho(proc.pid, meta_path, log_path)
@@ -1033,7 +1035,7 @@ class ScribaApp:
             time.sleep(_TICK_PROCESSAMENTO_S)
 
         if travado:
-            parado_min = (time.monotonic() - ultimo_sinal) / 60
+            parado_min = (plat.awake_seconds() - ultimo_sinal) / 60
             # foto da máquina ANTES de matar: é o único registro do instante real
             # do travamento - o Diagnóstico roda depois, com a carga já outra
             # (#182/#183: travas em CUDA chegavam sem GPU, driver nem VRAM)

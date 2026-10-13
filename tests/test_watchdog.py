@@ -17,6 +17,24 @@ class GuiWatchdogTests(unittest.TestCase):
         wd = GuiWatchdog(threshold_s=threshold, dump=dumps.append)
         return wd, dumps
 
+    def test_suspensao_da_maquina_nao_e_gui_travada(self):
+        """2026-10-12 e 13: toda manhã, ao acordar o notebook, "GUI sem responder há
+        ~15 h" + dump. O relógio padrão do watchdog não conta o tempo suspenso."""
+        from unittest import mock
+
+        relogio = {"t": 1000.0}
+        with mock.patch("scriba.plat.awake_seconds", lambda: relogio["t"]):
+            wd, dumps = self._wd()
+            wd.beat()
+            # máquina dorme 15 h: o relógio acordado não anda; ao voltar, a GUI bate
+            relogio["t"] += 0.5
+            with self.assertNoLogs("scriba.watchdog", level="WARNING"):
+                self.assertFalse(wd.check())
+            wd.beat()
+            relogio["t"] += 11.0                 # travamento REAL segue detectado
+            self.assertTrue(wd.check())
+        self.assertEqual(len(dumps), 1)
+
     def test_nao_dispara_com_heartbeat_vivo(self):
         wd, dumps = self._wd()
         wd.beat(now=100.0)

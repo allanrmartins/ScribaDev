@@ -123,6 +123,12 @@ def pid_started_at(pid: int) -> float | None:
     return None if t is None else t[0]
 
 
+def awake_seconds() -> float:
+    """Relógio que não conta a suspensão da máquina: no Linux (CLOCK_MONOTONIC) e
+    no macOS (mach_absolute_time) o time.monotonic já para com a máquina dormindo."""
+    return time.monotonic()
+
+
 def pid_cpu_seconds(pid: int) -> float | None:
     """CPU acumulada (utime + stime, em s) do processo, ou None. Sinal de progresso
     do subprocesso de processamento (#176)."""
