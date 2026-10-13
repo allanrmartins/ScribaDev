@@ -184,6 +184,119 @@ class ClaudeCliTests(unittest.TestCase):
         self.assertIsNone(ai._claude_cli(cfg, "s", "p", timeout=5, cwd=None, hidden_window=False))
         self.assertIsNone(ai.last_error)
 
+    def test_oauth_expirado_marca_logged_out(self):
+        # 2026-10-05: a sessão venceu com outro texto, e a nota saiu com a dica genérica
+        ai.last_error = None
+        self._patch_run(rc=1, stdout="Failed to authenticate: OAuth session expired and "
+                                     "could not be refreshed")
+        cfg = Summary(provider="claude", model="m")
+        self.assertIsNone(ai._claude_cli(cfg, "s", "p", timeout=5, cwd=None, hidden_window=False))
+        self.assertEqual(ai.last_error, ai.ERR_LOGGED_OUT)
+
+
+class _Relogio:
+    """Substitui ai.time: sleep avança o relógio em vez de dormir."""
+
+    def __init__(self):
+        self.agora = 0.0
+        self.sonos = 0
+
+    def monotonic(self):
+        return self.agora
+
+    def sleep(self, s):
+        self.sonos += 1
+        self.agora += s
+
+
+class ClaudeCliEsperaTests(unittest.TestCase):
+    """O auto-update do Claude Code reinstala o pacote npm e o `claude` some do PATH
+    por alguns segundos: o resumo que caía nessa janela era pulado em silêncio
+    (2026-10-08). Com cli_wait, o resumo espera a CLI voltar."""
+
+    def setUp(self):
+        self._real_run = subprocess.run
+        self._real_cmd = util.claude_command
+        self._real_time = ai.time
+        self.relogio = _Relogio()
+        ai.time = self.relogio
+        ai.last_error = None
+        self.runs = []
+
+    def tearDown(self):
+        subprocess.run = self._real_run
+        util.claude_command = self._real_cmd
+        ai.time = self._real_time
+        ai.last_error = None
+
+    def _cli_volta_apos(self, polls):
+        """claude_command() devolve None nas `polls` primeiras chamadas."""
+        estado = {"n": 0}
+
+        def cmd():
+            estado["n"] += 1
+            return None if estado["n"] <= polls else ["claude"]
+        util.claude_command = cmd
+
+    def _runs(self, *respostas):
+        fila = list(respostas)
+
+        def fake(cmd, **kw):
+            self.runs.append(cmd)
+            rc, out = fila.pop(0)
+            return type("P", (), {"returncode": rc, "stdout": out, "stderr": ""})()
+        subprocess.run = fake
+
+    def _cli(self, **kw):
+        cfg = Summary(provider="claude", model="m")
+        return ai._claude_cli(cfg, "s", "p", timeout=5, cwd=None, hidden_window=False, **kw)
+
+    def test_cli_volta_durante_a_espera(self):
+        self._cli_volta_apos(3)
+        self._runs((0, "resumo"))
+        self.assertEqual(self._cli(cli_wait=180), "resumo")
+        self.assertEqual(len(self.runs), 1)
+        self.assertIsNone(ai.last_error)
+
+    def test_cli_nao_volta_desiste_no_prazo(self):
+        util.claude_command = lambda: None
+        self._runs()
+        self.assertIsNone(self._cli(cli_wait=30))
+        self.assertEqual(ai.last_error, ai.ERR_NOT_FOUND)
+        self.assertLessEqual(self.relogio.agora, 30 + ai._CLI_POLL_S)
+        self.assertEqual(self.runs, [])
+
+    def test_sem_cli_wait_nao_espera(self):
+        # chat e wizard têm usuário esperando: falham na hora, como sempre
+        util.claude_command = lambda: None
+        self.assertIsNone(self._cli())
+        self.assertEqual(self.relogio.sonos, 0)
+        self.assertEqual(ai.last_error, ai.ERR_NOT_FOUND)
+
+    def test_pacote_some_sob_o_shim_tenta_de_novo(self):
+        util.claude_command = lambda: ["claude"]
+        self._runs((1, "Error: Cannot find module 'C:\\npm\\node_modules\\cli.js'"), (0, "resumo"))
+        self.assertEqual(self._cli(cli_wait=180), "resumo")
+        self.assertEqual(len(self.runs), 2)
+
+    def test_shim_some_entre_achar_e_rodar_tenta_de_novo(self):
+        # o cmd.exe reclama em texto localizado: o sinal é o shim fora do PATH
+        estado = {"n": 0}
+
+        def cmd():
+            estado["n"] += 1
+            return None if estado["n"] in (2, 3) else ["claude"]
+        util.claude_command = cmd
+        self._runs((1, "'claude.cmd' não é reconhecido como um comando interno"), (0, "resumo"))
+        self.assertEqual(self._cli(cli_wait=180), "resumo")
+        self.assertEqual(len(self.runs), 2)
+
+    def test_falha_comum_nao_repete(self):
+        util.claude_command = lambda: ["claude"]
+        self._runs((1, "boom"))
+        self.assertIsNone(self._cli(cli_wait=180))
+        self.assertEqual(len(self.runs), 1)
+
 
 class DispatchTests(unittest.TestCase):
     """complete() roteia pelo provider de [summary].provider."""

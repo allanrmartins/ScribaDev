@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 import urllib.error
 import urllib.request
 
@@ -28,7 +29,13 @@ _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 # no caminho de falha. Sequencial no worker de resumo; um chat concorrente no máximo
 # troca o texto da dica (cosmético), nunca quebra o resumo.
 ERR_LOGGED_OUT = "logged_out"
+ERR_NOT_FOUND = "not_found"
 last_error: str | None = None
+
+# Espera pela CLI no caminho do resumo (cli_wait). O auto-update do Claude Code
+# reinstala o pacote npm global e, por alguns segundos, o shim `claude` some do
+# PATH: um resumo que caía nessa janela era pulado em silêncio (2026-10-08).
+_CLI_POLL_S = 5.0
 
 
 def complete(
@@ -39,6 +46,7 @@ def complete(
     cwd=None,
     hidden_window: bool = False,
     model: str | None = None,
+    cli_wait: float = 0,
 ) -> str | None:
     """Roda o provider de IA configurado sobre (system_prompt, user_payload).
 
@@ -46,6 +54,9 @@ def complete(
     só valem para o provider claude (CLI) — são ignorados nos providers HTTP.
     `model` sobrescreve o modelo do provider ATIVO (ex.: o chat usa um modelo mais
     barato que o resumo); None = usa o modelo configurado para o resumo.
+    `cli_wait`: segundos que o provider claude espera a CLI reaparecer (ausente
+    ou no meio de uma atualização) antes de desistir. Só o resumo, que roda em
+    segundo plano, usa; quem tem usuário esperando (chat, wizard) fica no 0.
     """
     import dataclasses
 
@@ -64,14 +75,41 @@ def complete(
         return _openai(cfg, system_prompt, user_payload, timeout=timeout)
     if provider != "claude":
         print(f"IA: provider '{provider}' desconhecido — usando o claude CLI")
-    return _claude_cli(cfg, system_prompt, user_payload, timeout=timeout, cwd=cwd, hidden_window=hidden_window)
+    return _claude_cli(cfg, system_prompt, user_payload, timeout=timeout, cwd=cwd,
+                       hidden_window=hidden_window, cli_wait=cli_wait)
 
 
 # ----------------------------------------------------------- provider: claude --
 
-def _claude_cli(cfg, system_prompt, user_payload, *, timeout, cwd, hidden_window):
+def _wait_for_cli(cli_wait: float) -> list[str] | None:
+    """Comando da CLI, esperando até `cli_wait` s ela reaparecer no PATH."""
     cmd = util.claude_command()
+    if cmd is not None or cli_wait <= 0:
+        return cmd
+    print(f"claude CLI não encontrado - aguardando até {cli_wait:.0f}s "
+          "(pode estar se atualizando)")
+    deadline = time.monotonic() + cli_wait
+    while time.monotonic() < deadline:
+        time.sleep(_CLI_POLL_S)
+        cmd = util.claude_command()
+        if cmd is not None:
+            print("claude CLI voltou - seguindo com o resumo")
+            return cmd
+    return None
+
+
+def _mid_update(text: str) -> bool:
+    """A CLI falhou porque o npm está no meio da reinstalação: o pacote sumiu sob o
+    shim ("Cannot find module") ou o próprio shim sumiu entre achar e executar (o
+    cmd.exe reclama em texto localizado, então olha o PATH em vez da mensagem)."""
+    return "cannot find module" in (text or "").lower() or util.claude_command() is None
+
+
+def _claude_cli(cfg, system_prompt, user_payload, *, timeout, cwd, hidden_window, cli_wait=0):
+    global last_error
+    cmd = _wait_for_cli(cli_wait)
     if cmd is None:
+        last_error = ERR_NOT_FOUND
         print("claude CLI não encontrado — pulando resumo")
         return None
     flags = [
@@ -88,8 +126,9 @@ def _claude_cli(cfg, system_prompt, user_payload, *, timeout, cwd, hidden_window
     # tokens de thinking (80% da geração) por ~3x o tempo e 2x o custo, com qualidade
     # IGUAL ou melhor sem ele. Vale para o resumo e o test_connection (únicos usos).
     env = {**os.environ, "MAX_THINKING_TOKENS": "0"}
-    try:
-        proc = subprocess.run(
+
+    def run(cmd):
+        return subprocess.run(
             cmd + flags,
             input=user_payload,
             capture_output=True,
@@ -104,6 +143,21 @@ def _claude_cli(cfg, system_prompt, user_payload, *, timeout, cwd, hidden_window
             # dispara o bug do Windows Terminal (janela visível).
             creationflags=_CREATE_NO_WINDOW if hidden_window else 0,
         )
+
+    try:
+        proc = run(cmd)
+        if (proc.returncode != 0 and cli_wait > 0
+                and _mid_update(f"{proc.stderr or ''}\n{proc.stdout or ''}")):
+            # o shim ainda existe, mas o pacote está sendo reinstalado: espera
+            # o npm terminar e tenta uma vez mais
+            print("claude CLI incompleto (atualização em andamento?) - tentando de novo")
+            time.sleep(_CLI_POLL_S)
+            cmd = _wait_for_cli(cli_wait)
+            if cmd is None:
+                last_error = ERR_NOT_FOUND
+                print("claude CLI não encontrado — pulando resumo")
+                return None
+            proc = run(cmd)
     except subprocess.TimeoutExpired:
         print(f"resumo: timeout após {timeout}s")
         return None
@@ -116,7 +170,6 @@ def _claude_cli(cfg, system_prompt, user_payload, *, timeout, cwd, hidden_window
         # que foi o que aconteceu quando a sessão expirou).
         combined = f"{proc.stderr or ''}\n{proc.stdout or ''}"
         if _looks_logged_out(combined):
-            global last_error
             last_error = ERR_LOGGED_OUT
             print(f"resumo: claude CLI não está logada - rode `claude` e faça /login "
                   f"(retornou {proc.returncode})")
@@ -129,9 +182,12 @@ def _claude_cli(cfg, system_prompt, user_payload, *, timeout, cwd, hidden_window
 
 def _looks_logged_out(text: str) -> bool:
     """A CLI claude imprime "Not logged in · Please run /login" e sai 1 quando a sessão
-    expirou. Detecta isso para o chamador avisar o login em vez do genérico de re-rodar."""
+    expirou. Detecta isso para o chamador avisar o login em vez do genérico de re-rodar.
+    A sessão OAuth vencida sai com outro texto ("Failed to authenticate: OAuth session
+    expired and could not be refreshed", 2026-10-05) e também é logout."""
     t = (text or "").lower()
-    return "not logged in" in t or "/login" in t
+    return ("not logged in" in t or "/login" in t or "failed to authenticate" in t
+            or ("oauth" in t and "expired" in t))
 
 
 # ------------------------------------------------------------- providers HTTP --
