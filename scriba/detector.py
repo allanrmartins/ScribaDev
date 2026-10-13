@@ -389,6 +389,33 @@ def mesma_reuniao_pelo_titulo(antes: str, depois: str) -> bool:
     return bool(_nomes_do_nucleo(a) & _nomes_do_nucleo(d))
 
 
+def _is_teams_call_window(raw: str) -> bool:
+    """O título é de uma janela que só existe durante uma call do Teams (ms-teams.exe)?
+
+    A janela principal e os chats destacados usam "|" ("Chat | Fulano | Contoso |
+    conta | Microsoft Teams"). A janela da call usa " — " sem "|" ("Daily — Contoso
+    — conta", "Meeting join — ...", "... — Pinned window"), e as auxiliares (#177)
+    só aparecem com a call aberta.
+    """
+    t = re.sub(r"^\(\d+\)\s*", "", (raw or "").strip())
+    if _is_aux_window(t):
+        return True
+    return "|" not in t and " — " in t
+
+
+def teams_call_window_open() -> bool:
+    """Alguma janela de call do Teams está aberta? Falha ou prazo estourado = False:
+    sem evidência, o detector volta ao comportamento de sempre (mic livre encerra)."""
+    if sys.platform != "win32":
+        return False  # formato de título validado só no Windows
+    from .wintitles import window_titles
+
+    try:
+        return any(_is_teams_call_window(t) for t in window_titles({"ms-teams.exe"}))
+    except Exception:
+        return False
+
+
 def capture_meeting_title(cfg: Detection) -> str:
     """Nome da reunião lido do título da janela do app da call (Teams/Zoom/navegador).
 
@@ -462,6 +489,17 @@ class Detector:
         self._title_stable = ""      # título estável (2 amostras iguais e não-vazias)
         self._title_at_grace = ""    # título estável guardado ao entrar no GRACE (Uso A)
         self._polls_since_title = 0  # contador para reamostrar a cada _TITLE_SAMPLE_EVERY
+        # mic livre, mas a janela da call do Teams segue aberta: a call continua
+        self._mic_held = False
+
+    def _held_by_window(self) -> bool:
+        """A call do Teams desktop segue viva pela janela, com o mic livre?
+
+        O Teams fecha a sessão de captura do WASAPI quando o usuário fica calado ou
+        mudo em reunião grande. Sem esta checagem, ficar só ouvindo encerrava a
+        gravação no meio da call (2026-10-08, três vezes na mesma reunião).
+        """
+        return self.current_app == "Teams" and not self._web_call and teams_call_window_open()
 
     def _mic_sessions(self) -> dict[str, tuple[int, int]]:
         """{subchave: (start, stop)} das sessões de mic de apps e navegadores
@@ -538,7 +576,23 @@ class Detector:
 
         elif self.state is CallState.RECORDING:
             self._sample_title()  # #35: reamostra o título da janela ~a cada 10 s
+            if not in_use and self._held_by_window():
+                if not self._mic_held:
+                    self._mic_held = True
+                    log.info("mic livre (%s), mas a janela da call segue aberta - a call continua",
+                             self.current_app)
+                self._check_max_hours(now)
+                return
+            if in_use and self._mic_held:
+                self._mic_held = False
+                if sense[1] == self._session_sub:
+                    # o Teams reabriu a captura (voltou a falar ou desmutou): mesma call
+                    log.info("mic voltou (%s) - mesma call", self.current_app)
+                    self._session_start = sense[2]
+                    self._check_max_hours(now)
+                    return
             if not in_use:
+                self._mic_held = False
                 # mic liberado -> GRACE. Guarda o LastUsedTimeStop EXATO da subchave
                 # rastreada: o instante em que o app fechou o mic, sem depender do poll.
                 self.state = CallState.GRACE
@@ -558,6 +612,15 @@ class Detector:
         elif self.state is CallState.GRACE:
             if in_use:
                 self._resume_or_split(now, sense, sessions, prev_app)
+            elif now >= self._grace_deadline and self._held_by_window():
+                # a enumeração de janelas falhou ao entrar no GRACE (prazo, #114):
+                # a janela da call está aberta, então não é fim de call
+                self.state = CallState.RECORDING
+                self._mic_held = True
+                log.info("mic livre (%s), mas a janela da call segue aberta - a call continua",
+                         self.current_app)
+                if self.on_grace_cancel:
+                    self.on_grace_cancel()
             elif now >= self._grace_deadline:
                 log.info("call encerrada (mic livre > %.0fs)", self.cfg.grace_seconds)
                 self._end_call()
@@ -604,7 +667,12 @@ class Detector:
                 self.current_app,
             )
             self._session_start = start
-        elif now - self._recording_since > self.cfg.max_call_hours * 3600:
+        else:
+            self._check_max_hours(now)
+
+    def _check_max_hours(self, now: float) -> None:
+        """Parada de segurança: call mais longa que max_call_hours é encerrada."""
+        if now - self._recording_since > self.cfg.max_call_hours * 3600:
             log.info("call encerrada (limite de segurança de %gh)", self.cfg.max_call_hours)
             self._end_call()
 
@@ -668,6 +736,7 @@ class Detector:
         # nova call: zera o rastreamento de título (#35)
         self._title_last = self._title_stable = self._title_at_grace = ""
         self._polls_since_title = 0
+        self._mic_held = False
         self.on_call_started(probe=probe)
 
     def _rearm_if_stopped(self, sense: tuple[str, str, int]) -> bool:
@@ -685,6 +754,7 @@ class Detector:
     def _end_call(self) -> None:
         """Encerra a call e volta a IDLE (timeout do GRACE ou parada de segurança)."""
         self.state = CallState.IDLE
+        self._mic_held = False
         self.on_call_ended()
         self.current_app = None
         self._web_call = False

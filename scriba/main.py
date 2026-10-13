@@ -218,9 +218,20 @@ class ScribaApp:
         self.call_active = False
         self.call_started_at = None
         if self.is_recording():
+            if self._recording_is_manual():
+                # ⏺ é intenção explícita: só o ■ (ou o × da pílula) encerra. O fim de
+                # call do detector é palpite e já cortou reunião no meio (2026-10-08).
+                log.info("call encerrada pelo detector, mas a gravação é manual - segue até o ■")
+                self._toast("A call parece ter terminado",
+                            "A gravação manual continua. Clique em ■ na pílula para encerrar.")
+                return
             self.stop_recording()
         else:
             self.ui(self._hide_pill)
+
+    def _recording_is_manual(self) -> bool:
+        with self.rec_lock:
+            return self.rec is not None and self.rec_source == "manual"
 
     def call_duration(self) -> float:
         return time.monotonic() - self.call_started_at if self.call_started_at else 0.0
@@ -777,7 +788,8 @@ class ScribaApp:
             self.pill.hide()
 
     def _pill_finishing(self) -> None:
-        if self.pill is not None and self.is_recording():
+        # gravação manual não termina no fim da call: "finalizando…" seria mentira
+        if self.pill is not None and self.is_recording() and not self._recording_is_manual():
             self.pill.set_status("finalizando…")
 
     def _pill_resume(self) -> None:
