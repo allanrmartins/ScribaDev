@@ -208,6 +208,23 @@ class TimesheetWindowTests(unittest.TestCase):
         rows = tsdb.list_entries(day="2026-07-13")
         self.assertTrue(all(r["status"] == "confirmed" and not r["posted"] for r in rows))
 
+    def test_sugestao_do_claude_origem_os_e_botao_reuniao(self):
+        self._seed()
+        tsdb.upsert_source_suggestion({
+            "source_key": "claude:Vetra/GAP:2026-07-15:0800", "work_date": "2026-07-15",
+            "start_time": "08:00", "end_time": "10:00", "client_text": "Vetra",
+            "description": "bloco do Claude"}, origin="claude")
+        win = self._data_window()
+        rows = {win._sug_tree.topLevelItem(i).text(6): win._sug_tree.topLevelItem(i)
+                for i in range(win._sug_tree.topLevelItemCount())}
+        claude, call = rows["bloco do Claude"], rows["call sugerida"]
+        self.assertEqual((claude.text(3), claude.text(5)), ("Claude", "? sem OS"))
+        self.assertEqual(call.text(3), "Call")
+        win._sug_tree.setCurrentItem(claude)
+        self.assertFalse(win._b_open.isEnabled())   # bloco do Claude não tem reunião
+        win._sug_tree.setCurrentItem(call)
+        self.assertTrue(win._b_open.isEnabled())
+
     def test_aceitar_sugestao(self):
         self._seed()
         win = self._data_window()

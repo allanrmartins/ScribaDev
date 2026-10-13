@@ -96,9 +96,10 @@ class TimesheetDbTests(unittest.TestCase):
             c.execute("""INSERT INTO entries (work_date, start_time, end_time,
                              minutes, client_id, created_at, updated_at)
                          VALUES ('2026-07-01', '08:00', '09:00', 60, 1, 'x', 'x')""")
-        tsdb.connect().close()  # migra v1 -> v2
+        tsdb.connect().close()  # migra v1 -> v2 -> atual
         with sqlite3.connect(str(tsdb.DB_PATH)) as c:
-            self.assertEqual(c.execute("PRAGMA user_version").fetchone()[0], 2)
+            self.assertEqual(c.execute("PRAGMA user_version").fetchone()[0],
+                             tsdb.SCHEMA_VERSION)
         self.assertEqual(len(tsdb.list_entries(day="2026-07-01")), 1)
         cid = tsdb.list_clients()[0]["id"]
         self.assertEqual(tsdb.resolve_client("AURÓRRA SA"), (cid, "Aurora"))
@@ -287,6 +288,78 @@ class TimesheetDbTests(unittest.TestCase):
         with self.assertRaises(sqlite3.IntegrityError):
             self._entry(start_time="14:00", end_time="15:00",
                         meeting_started_at=key, origin="scriba")
+
+    # -- sugestões de fonte externa (v3: mod de horas do Claude Code) -----------
+    def _source(self, key="claude:simpar:2026-07-13:0800", **kw):
+        rec = {"source_key": key, "work_date": "2026-07-13", "start_time": "08:00",
+               "end_time": "10:00", "client_text": "SIMPAR", "project_text": "",
+               "description": "inicio desenvolvimento FM"}
+        rec.update(kw)
+        return tsdb.upsert_source_suggestion(rec, origin="claude")
+
+    def test_migracao_v2_para_v3_preserva(self):
+        """Banco v2 (DDL v1 + migração v2) ganha source_key sem perder linha."""
+        with sqlite3.connect(str(tsdb.DB_PATH)) as c:
+            c.row_factory = sqlite3.Row
+            for ddl in tsdb._DDL_V1:
+                c.execute(ddl)
+            tsdb._migrate_v2(c)
+            c.execute("PRAGMA user_version = 2")
+            c.execute("""INSERT INTO entries (work_date, start_time, end_time,
+                             minutes, client_text, created_at, updated_at)
+                         VALUES ('2026-07-01', '08:00', '09:00', 60, 'Vetra', 'x', 'x')""")
+        rows = tsdb.list_entries(day="2026-07-01")  # connect() migra v2 -> v3
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[0]["source_key"])
+        with sqlite3.connect(str(tsdb.DB_PATH)) as c:
+            self.assertEqual(c.execute("PRAGMA user_version").fetchone()[0], 3)
+
+    def test_upsert_source_ciclo_completo(self):
+        result, sid = self._source()
+        self.assertEqual(result, "created")
+        row = tsdb.list_entries(status="suggested")[0]
+        self.assertEqual((row["id"], row["origin"], row["minutes"]), (sid, "claude", 120))
+        # bloco cresceu e ganhou OS enquanto 'suggested': atualiza tudo
+        self.assertEqual(self._source(end_time="11:30", project_text="100041",
+                                      description="FM: tabelas e classes"),
+                         ("updated", sid))
+        row = tsdb.list_entries(status="suggested")[0]
+        self.assertEqual((row["end_time"], row["minutes"], row["project_text"],
+                          row["description"]),
+                         ("11:30", 210, "100041", "FM: tabelas e classes"))
+        # confirmada: o usuário vence o reenvio
+        tsdb.update_entry(sid, status="confirmed")
+        self.assertEqual(self._source(end_time="12:00"), ("skipped", sid))
+        self.assertEqual(tsdb.list_entries(day="2026-07-13")[0]["end_time"], "11:30")
+        # descartada: tombstone, não volta e não se apaga
+        _, other = self._source(key="claude:simpar:2026-07-13:1400",
+                                start_time="14:00", end_time="15:00")
+        tsdb.update_entry(other, status="discarded")
+        self.assertEqual(self._source(key="claude:simpar:2026-07-13:1400",
+                                      start_time="14:00", end_time="16:00"),
+                         ("skipped", other))
+        with self.assertRaises(ValueError):
+            tsdb.delete_entry(other)
+        with self.assertRaises(ValueError):
+            self._source(key="")
+        with self.assertRaises(ValueError):
+            tsdb.upsert_source_suggestion({"source_key": "k", "work_date": "2026-07-13",
+                                           "start_time": "08:00", "end_time": "09:00"},
+                                          origin="")
+
+    def test_source_key_nao_colide_com_reuniao(self):
+        """Chaves de reunião e de fonte externa vivem em colunas separadas."""
+        self._suggestion(key="2026-07-13T09:00:00")
+        self.assertEqual(self._source(key="2026-07-13T09:00:00")[0], "created")
+        self.assertEqual(len(tsdb.list_entries(status="suggested")), 2)
+
+    def test_known_client_spelling(self):
+        tsdb.add_entry(work_date="2026-07-01", start_time="08:00", end_time="09:00",
+                       client_text="SIMPAR")
+        tsdb.add_client("Coruripe")
+        self.assertEqual(tsdb.known_client_spelling("Simpar"), "SIMPAR")
+        self.assertEqual(tsdb.known_client_spelling("coruripe"), "Coruripe")
+        self.assertEqual(tsdb.known_client_spelling("  Nova   SA "), "Nova SA")
 
     # -- totais ----------------------------------------------------------------
     def test_totais_excluem_suggested_e_discarded(self):

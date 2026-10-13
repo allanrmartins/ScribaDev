@@ -73,6 +73,8 @@ class TimesheetCliTests(unittest.TestCase):
     # -- dormência (#126) ------------------------------------------------------
     def test_dormente_bloqueia_sem_criar_banco(self):
         for sub in (["list"], ["sync"], ["backup"], ["export"],
+                    ["suggest", "--key", "k", "--start", "08:00", "--end", "09:00",
+                     "--client", "X"],
                     ["add", "--start", "08:00", "--end", "09:00", "--client", "X"]):
             rc, out = self._run("timesheet", *sub)
             self.assertEqual(rc, 2, sub)
@@ -93,6 +95,46 @@ class TimesheetCliTests(unittest.TestCase):
         self.assertIn("aplicacao de notas (extra)", out)
         self.assertIn("total 5:00", out)
         self.assertIn("a lançar 5:00", out)
+
+    # -- suggest (fonte externa: mod de horas do Claude Code) --------------------
+    def _suggest(self, *extra, key="claude:Simpar/FM:2026-07-13:0800"):
+        rc, out = self._run("timesheet", "suggest", "--key", key, "--date", "2026-07-13",
+                            "--start", "08:00", "--end", "10:00", "--client", "Simpar",
+                            *extra)
+        return rc, json.loads(out.strip().splitlines()[-1])
+
+    def test_suggest_cria_atualiza_e_respeita_usuario(self):
+        self._enable()
+        self._add(client="SIMPAR", project="100041", desc="historico")
+        rc, out = self._suggest("--desc", "inicio FM")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out["result"], "created")
+        self.assertEqual(out["client"], "SIMPAR")         # grafia já usada vence a pasta
+        self.assertEqual(out["last_project"], "100041")   # dica de OS sem --project
+        row = tsdb.list_entries(status="suggested")[0]
+        self.assertEqual((row["origin"], row["client_text"], row["description"]),
+                         ("claude", "SIMPAR", "inicio FM"))
+        rc, out = self._suggest("--project", "100041", "--desc", "FM tabelas")
+        self.assertEqual((out["result"], out["id"]), ("updated", row["id"]))
+        self.assertNotIn("last_project", out)
+        self.assertEqual(tsdb.list_entries(status="suggested")[0]["project_text"], "100041")
+        tsdb.update_entry(row["id"], status="confirmed")
+        rc, out = self._suggest("--desc", "outra")
+        self.assertEqual(out["result"], "skipped")
+
+    def test_suggest_cliente_cadastrado_e_erros(self):
+        self._enable()
+        cid = tsdb.add_client("Simpar")
+        pid = tsdb.add_project(cid, "100041")
+        rc, out = self._suggest("--project", "100041")
+        self.assertEqual(rc, 0)
+        row = tsdb.list_entries(status="suggested")[0]
+        self.assertEqual((row["client_id"], row["project_id"]), (cid, pid))
+        self.assertEqual(out["client"], "Simpar")
+        rc, out = self._run("timesheet", "suggest", "--key", "k", "--start", "10:00",
+                            "--end", "09:00", "--client", "Simpar")
+        self.assertEqual(rc, 2)
+        self.assertIn("deve ser depois", json.loads(out.strip())["error"])
 
     def test_add_invalido_e_mes_invalido(self):
         self._enable()
