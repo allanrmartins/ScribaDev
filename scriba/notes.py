@@ -337,6 +337,9 @@ def split_header(text: str) -> tuple[str, str | None, str | None]:
 # com um teto de segurança (evita travar o worker se o claude pendurar de vez).
 _SUMMARY_S_PER_AUDIO_MIN = 20
 _SUMMARY_TIMEOUT_CEILING = 3600  # 1 h — folga grande mesmo p/ uma call de 4 h
+# O resumo roda em segundo plano: se a CLI claude sumiu do PATH (o auto-update do
+# Claude Code reinstala o pacote npm), espera ela voltar em vez de pular o resumo.
+_SUMMARY_CLI_WAIT_S = 180
 
 # Map-reduce do resumo para transcrições longas (#22): acima de _SINGLE_SHOT_CHARS a transcrição
 # é FATIADA e resumida em X requisições (map), depois consolidada (reduce) — para NUNCA deixar de
@@ -377,7 +380,8 @@ def _summary_call(body: str, meeting: str, timeout: int, folder: Path, *, notes_
                     "em ordem cronológica — trate como a transcrição) ===\n\n" + body)
     else:
         payload += f"\n\n=== TRANSCRIÇÃO ===\n\n{body}"
-    return ai.complete(SYSTEM_PROMPT, payload, timeout=timeout, cwd=folder, hidden_window=False)
+    return ai.complete(SYSTEM_PROMPT, payload, timeout=timeout, cwd=folder, hidden_window=False,
+                       cli_wait=_SUMMARY_CLI_WAIT_S)
 
 
 def _summarize_part(body: str, i: int, total: int, timeout: int, folder: Path) -> str | None:
@@ -388,7 +392,8 @@ def _summarize_part(body: str, i: int, total: int, timeout: int, folder: Path) -
     print(f"resumo: parte {i}/{total}…")
     for _ in (1, 2):
         out = ai.complete(_MAP_SYSTEM, f"TRECHO {i}/{total} (ordem cronológica):\n\n{body}",
-                          timeout=timeout, cwd=folder, hidden_window=False)
+                          timeout=timeout, cwd=folder, hidden_window=False,
+                          cli_wait=_SUMMARY_CLI_WAIT_S)
         if out:
             return out
     return None
@@ -602,11 +607,19 @@ def build_notes(folder: Path) -> Path | None:
     if summary is None:
         from . import ai
 
+        # Sem o caminho da pasta na dica: ela é renomeada logo depois (título da
+        # reunião) e o comando citado apontava para uma pasta que não existe mais.
+        redo = ('Depois, clique com o botão direito na reunião → Reprocessar → '
+                'Refazer o resumo.')
         if ai.last_error == ai.ERR_LOGGED_OUT:
             summary = ('> Resumo indisponível - a CLI `claude` não está logada. '
-                       f'Rode `claude`, faça `/login` e então: scribadev summarize "{folder}"')
+                       f'Rode `claude` e faça `/login`. {redo}')
+        elif ai.last_error == ai.ERR_NOT_FOUND:
+            summary = ('> Resumo indisponível - a CLI `claude` não foi encontrada no PATH. '
+                       f'Confira a instalação do Claude Code. {redo}')
         else:
-            summary = f'> Resumo indisponível - rode: scribadev summarize "{folder}"'
+            summary = ('> Resumo indisponível - a IA não respondeu. Clique com o botão '
+                       'direito na reunião → Reprocessar → Refazer o resumo.')
 
     started = meta.get("started_at", "")
     duration_min = int(float(meta.get("duration_seconds", 0)) // 60)
