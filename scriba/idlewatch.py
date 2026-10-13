@@ -39,9 +39,10 @@ import logging
 import os
 import sys
 import threading
-import time
 from datetime import datetime
 from pathlib import Path
+
+from . import plat
 
 log = logging.getLogger("scriba.idlewatch")
 
@@ -63,7 +64,7 @@ class _State:
         self.idle_s = idle_s
         self.header_end = header_end
         self.suspended = False
-        self.last_beat = time.monotonic()
+        self.last_beat = plat.awake_seconds()
         self.prev_stdout = prev_stdout
         self.stop = threading.Event()
         self.thread: threading.Thread | None = None
@@ -110,14 +111,14 @@ def _monitor(st: _State) -> None:
                 return
             if st.suspended:
                 continue
-            parado = time.monotonic() - st.last_beat
+            parado = plat.awake_seconds() - st.last_beat
             if parado < st.idle_s:
                 continue
             try:
                 _dump_locked(st, parado)
             except Exception:
                 log.debug("sentinela: dump falhou", exc_info=True)
-            st.last_beat = time.monotonic()   # próximo retrato só após mais idle_s parado
+            st.last_beat = plat.awake_seconds()   # próximo retrato só após mais idle_s parado
 
 
 def arm(folder, idle_s: float | None = None) -> bool:
@@ -131,7 +132,7 @@ def arm(folder, idle_s: float | None = None) -> bool:
     with _lock:
         if _state is not None:
             if _state.folder == folder:
-                _state.last_beat = time.monotonic()
+                _state.last_beat = plat.awake_seconds()
                 return True
             _disarm_locked(None)
         try:
@@ -165,7 +166,7 @@ def beat() -> None:
     """Sinal de vida (thread-safe e barato: um timestamp, sem lock nem thread nova)."""
     st = _state
     if st is not None:
-        st.last_beat = time.monotonic()
+        st.last_beat = plat.awake_seconds()
 
 
 def suspend() -> None:
@@ -182,7 +183,7 @@ def resume() -> None:
         st = _state
         if st is not None and st.suspended:
             st.suspended = False
-            st.last_beat = time.monotonic()
+            st.last_beat = plat.awake_seconds()
 
 
 def dumped() -> bool:

@@ -12,11 +12,10 @@ from __future__ import annotations
 import faulthandler
 import logging
 import threading
-import time
 from datetime import datetime
 from pathlib import Path
 
-from . import util
+from . import plat, util
 
 log = logging.getLogger("scriba.watchdog")
 
@@ -27,7 +26,8 @@ class GuiWatchdog:
     """`beat()` roda na thread da GUI (via QTimer); o monitor, em daemon-thread.
 
     `dump` é injetável nos testes (default = _dump_stacks, o faulthandler de verdade).
-    `beat`/`check` aceitam `now` explícito p/ teste determinístico (default = monotonic).
+    `beat`/`check` aceitam `now` explícito p/ teste determinístico (default =
+    plat.awake_seconds: o tempo com a máquina suspensa não conta como GUI travada).
     """
 
     def __init__(self, threshold_s: float = 10.0, poll_s: float = 1.0, dump=None,
@@ -36,7 +36,7 @@ class GuiWatchdog:
         self.poll_s = float(poll_s)
         self.early_s = float(early_s)
         self._dump = dump if dump is not None else self._dump_stacks
-        self._last_beat = time.monotonic()
+        self._last_beat = plat.awake_seconds()
         self._hung_since: float | None = None   # início do episódio em curso (já despejado)
         self._early_marked = False   # marcador precoce (#161) já logado neste episódio
         self._stop = threading.Event()
@@ -45,7 +45,7 @@ class GuiWatchdog:
 
     def beat(self, now: float | None = None) -> None:
         """(thread da GUI) Sinal de vida. Se a GUI trava, isto para de rodar — é o ponto."""
-        self._last_beat = time.monotonic() if now is None else now
+        self._last_beat = plat.awake_seconds() if now is None else now
 
     def start(self) -> None:
         threading.Thread(target=self._run, daemon=True, name="gui-watchdog").start()
@@ -67,7 +67,7 @@ class GuiWatchdog:
 
         Detecção por episódio: despeja UMA vez ao cruzar o limiar e rearma só quando o
         heartbeat volta (senão um travamento longo geraria um dump por segundo)."""
-        now = time.monotonic() if now is None else now
+        now = plat.awake_seconds() if now is None else now
         stalled_s = now - self._last_beat
         # marcador PRECOCE (#161): travamento curto finalizado pelo usuário no "não
         # está respondendo" morria antes do dump — esta linha no scriba.log é o rastro

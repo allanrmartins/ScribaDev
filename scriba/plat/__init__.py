@@ -26,6 +26,7 @@ open_path = _backend.open_path
 pid_alive = _backend.pid_alive       # sondagem de PID (no Windows, NUNCA os.kill)
 pid_started_at = _backend.pid_started_at   # nascimento do processo: PID reciclado (#176)
 pid_cpu_seconds = _backend.pid_cpu_seconds  # CPU acumulada: progresso do filho (#176)
+awake_seconds = _backend.awake_seconds  # relógio que não conta a suspensão (vigias de travamento)
 
 # instância única + relaunch pós-update (#100)
 single_instance = _backend.single_instance

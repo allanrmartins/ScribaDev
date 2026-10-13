@@ -117,6 +117,32 @@ def pid_cpu_seconds(pid: int) -> float | None:
     return None if t is None else t[1]
 
 
+def _make_awake_clock():
+    """QueryUnbiasedInterruptTime: tempo desde o boot SEM contar suspensão e
+    hibernação (unidades de 100 ns). O time.monotonic do Windows (QPC) segue
+    contando com a máquina dormindo; Linux e macOS já param sozinhos."""
+    try:
+        fn = ctypes.WinDLL("kernel32").QueryUnbiasedInterruptTime
+        fn.argtypes = [ctypes.POINTER(ctypes.c_ulonglong)]
+        fn.restype = ctypes.c_int
+        buf = ctypes.c_ulonglong()
+        if not fn(ctypes.byref(buf)):
+            raise OSError("QueryUnbiasedInterruptTime falhou")
+    except (OSError, AttributeError):
+        log.warning("relógio sem suspensão indisponível - usando time.monotonic")
+        return time.monotonic
+
+    def awake() -> float:
+        v = ctypes.c_ulonglong()   # buffer por chamada: vigias em threads diferentes
+        fn(ctypes.byref(v))
+        return v.value / 1e7
+
+    return awake
+
+
+awake_seconds = _make_awake_clock()
+
+
 def has_nvidia_gpu() -> bool:
     """Driver NVIDIA presente? (nvcuda.dll carrega — sonda histórica do diagnóstico)."""
     import ctypes
