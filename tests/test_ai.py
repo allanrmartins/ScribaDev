@@ -126,8 +126,23 @@ class HttpProviderTests(unittest.TestCase):
         self.assertIsNone(ai._openai(cfg, "s", "u", timeout=5))
 
 
-class ClaudeCliTests(unittest.TestCase):
+class _StateIsolado(unittest.TestCase):
+    """_claude_cli grava o marcador de logout no state.json (banner da capa): sem
+    isolar, um teste de logout acenderia o banner do app real."""
+
     def setUp(self):
+        self._state0 = util.STATE_PATH
+        self._tmpd = tempfile.TemporaryDirectory()
+        util.STATE_PATH = Path(self._tmpd.name) / "state.json"
+
+    def tearDown(self):
+        util.STATE_PATH = self._state0
+        self._tmpd.cleanup()
+
+
+class ClaudeCliTests(_StateIsolado):
+    def setUp(self):
+        super().setUp()
         self._real_run = subprocess.run
         self._real_cmd = util.claude_command
         self.captured = {}
@@ -136,6 +151,7 @@ class ClaudeCliTests(unittest.TestCase):
     def tearDown(self):
         subprocess.run = self._real_run
         util.claude_command = self._real_cmd
+        super().tearDown()
 
     def _patch_run(self, rc=0, stdout="ok", stderr=""):
         def fake(cmd, **kw):
@@ -193,6 +209,18 @@ class ClaudeCliTests(unittest.TestCase):
         self.assertIsNone(ai._claude_cli(cfg, "s", "p", timeout=5, cwd=None, hidden_window=False))
         self.assertEqual(ai.last_error, ai.ERR_LOGGED_OUT)
 
+    def test_logout_grava_marcador_e_sucesso_limpa(self):
+        # o resumo roda em subprocesso: o marcador é como o app principal fica sabendo
+        from scriba import claude_auth
+
+        cfg = Summary(provider="claude", model="m")
+        self._patch_run(rc=1, stdout="Not logged in · Please run /login")
+        ai._claude_cli(cfg, "s", "p", timeout=5, cwd=None, hidden_window=False)
+        self.assertTrue(claude_auth.marked())
+        self._patch_run(rc=0, stdout="ok")
+        ai._claude_cli(cfg, "s", "p", timeout=5, cwd=None, hidden_window=False)
+        self.assertFalse(claude_auth.marked())
+
 
 class _Relogio:
     """Substitui ai.time: sleep avança o relógio em vez de dormir."""
@@ -209,12 +237,13 @@ class _Relogio:
         self.agora += s
 
 
-class ClaudeCliEsperaTests(unittest.TestCase):
+class ClaudeCliEsperaTests(_StateIsolado):
     """O auto-update do Claude Code reinstala o pacote npm e o `claude` some do PATH
     por alguns segundos: o resumo que caía nessa janela era pulado em silêncio
     (2026-10-08). Com cli_wait, o resumo espera a CLI voltar."""
 
     def setUp(self):
+        super().setUp()
         self._real_run = subprocess.run
         self._real_cmd = util.claude_command
         self._real_time = ai.time
@@ -228,6 +257,7 @@ class ClaudeCliEsperaTests(unittest.TestCase):
         util.claude_command = self._real_cmd
         ai.time = self._real_time
         ai.last_error = None
+        super().tearDown()
 
     def _cli_volta_apos(self, polls):
         """claude_command() devolve None nas `polls` primeiras chamadas."""

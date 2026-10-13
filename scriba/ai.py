@@ -173,11 +173,27 @@ def _claude_cli(cfg, system_prompt, user_payload, *, timeout, cwd, hidden_window
             last_error = ERR_LOGGED_OUT
             print(f"resumo: claude CLI não está logada - rode `claude` e faça /login "
                   f"(retornou {proc.returncode})")
+            _auth_mark(True)
         else:
             tail = combined.strip().splitlines()
             print(f"resumo: claude retornou {proc.returncode}" + (f" ({tail[-1]})" if tail else ""))
         return None
+    _auth_mark(False)
     return proc.stdout.strip()
+
+
+def _auth_mark(logged_out: bool) -> None:
+    """Avisa o app principal do resultado de uma chamada real (o resumo roda em
+    subprocesso): o banner de deslogado da capa lê esse marcador. Nunca levanta."""
+    try:
+        from . import claude_auth
+
+        if logged_out:
+            claude_auth.mark_logged_out()
+        else:
+            claude_auth.clear_mark()
+    except Exception:
+        pass
 
 
 def _looks_logged_out(text: str) -> bool:

@@ -770,6 +770,14 @@ def apply(app, theme: Theme | None = None) -> None:
     t = theme or active()
     app.setFont(qfont(t))
     app.setStyleSheet(qss(t))
+    # links de QLabel (<a href>) pintam com o papel Link da PALETA, que o QSS não
+    # alcança: sem isto, "abrir" das pendências saía azul-escuro no tema escuro
+    from PySide6.QtGui import QColor, QPalette
+
+    pal = app.palette()
+    pal.setColor(QPalette.Link, QColor(t.accent))
+    pal.setColor(QPalette.LinkVisited, QColor(t.accent))
+    app.setPalette(pal)
     # ícone default de TODA janela top-level (wizard, Notas, Config…): apply() é o
     # chokepoint comum aos entry points (main, cli, harnesses) — sem isto, janela que
     # não chama setWindowIcon próprio abre com o ícone genérico do SO

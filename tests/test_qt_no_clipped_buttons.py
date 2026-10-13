@@ -151,6 +151,7 @@ class NoClippedButtonsTests(unittest.TestCase):
 
         win = MainWindow(_App())
         win.show_update("0.9.0")   # mostra a barra de update (com o botão)
+        win._claude_wrap.show()    # e o banner de claude deslogado (com o botão)
         bad = _sweep(win, [(520, 560), (560, 620)])
         self.assertEqual(bad, [], "botões cortados na capa: " + "; ".join(bad))
 
