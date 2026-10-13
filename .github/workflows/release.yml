@@ -20,8 +20,8 @@ jobs:
   installer-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Instalar deps do projeto + PyInstaller
@@ -65,7 +65,7 @@ jobs:
         run: gh release upload "${{ github.event.release.tag_name }}" (Get-ChildItem installer\windows\out\* | ForEach-Object FullName) --clobber
       - name: Artefato do run (workflow_dispatch)
         if: github.event_name != 'release'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: instalador-windows
           path: installer/windows/out/*
@@ -75,8 +75,8 @@ jobs:
     # por isso o DMG nasce aqui e não na máquina do dev (#143)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Instalar deps do projeto + PyInstaller
@@ -111,7 +111,7 @@ jobs:
         run: gh release upload "${{ github.event.release.tag_name }}" installer/macos/out/* --clobber
       - name: Artefato do run (workflow_dispatch)
         if: github.event_name != 'release'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: instalador-macos
           path: installer/macos/out/*
