@@ -65,6 +65,24 @@ class CleanMeetingTitleTests(unittest.TestCase):
             "Daily do projeto — Contoso — fulano@contoso.com")
 
 
+class TeamsCallWindowTests(unittest.TestCase):
+    """Títulos reais do ms-teams.exe (2026-10-08): só a janela da call conta."""
+
+    def test_janela_da_call(self):
+        for raw in ("Papo Studio — Contoso — fulano@contoso.com",
+                    "Meeting join — Papo Studio — Contoso — fulano@contoso.com",
+                    "Contoso — fulano@contoso.com — Pinned window",
+                    "Pessoa A, Pessoa B — Contoso — fulano@contoso.com",
+                    "Sharing control bar | Contoso | fulano@contoso.com"):
+            self.assertTrue(detector._is_teams_call_window(raw), raw)
+
+    def test_janela_principal_e_chat_nao_sao_call(self):
+        for raw in ("Chat | Pessoa A | Contoso | fulano@contoso.com | Microsoft Teams",
+                    "(3) Calendário | Contoso | fulano@contoso.com | Microsoft Teams",
+                    "Microsoft Teams", ""):
+            self.assertFalse(detector._is_teams_call_window(raw), raw)
+
+
 class MesmaReuniaoPeloTituloTests(unittest.TestCase):
     """#177: em call ad hoc o título do Teams É a lista de participantes, então
     "mudou o título" não significa "outra reunião"."""
@@ -143,6 +161,11 @@ class DetectorStateMachineTests(unittest.TestCase):
         pt = mock.patch.object(detector, "capture_meeting_title", lambda cfg: self.title)
         pt.start()
         self.addCleanup(pt.stop)
+        # janela de call do Teams fake: sem isto os testes leriam janelas reais
+        self.window_open = False
+        pw = mock.patch.object(detector, "teams_call_window_open", lambda: self.window_open)
+        pw.start()
+        self.addCleanup(pw.stop)
         self.events: list[tuple] = []
         self.sessions: dict[str, tuple[int, int]] = {}
         self.recording = True  # is_recording fake (#38); True = não rearma
@@ -322,6 +345,89 @@ class DetectorStateMachineTests(unittest.TestCase):
         self.assertIn("limite de segurança de 1h", "\n".join(cm.output))
         self.assertIn(("ended",), self.events)
 
+    # -------- Teams solta o mic com o usuário calado/mudo (2026-10-08) --------
+
+    def test_mic_livre_com_janela_da_call_aberta_nao_encerra(self):
+        # o incidente: só o Pedro falava, o Teams fechou a captura e o detector
+        # encerrou a gravação. Com a janela da call aberta, a call continua.
+        self._make()
+        self._poll({TEAMS: (_BASE, 0)})
+        self.window_open = True
+        with self.assertLogs("scriba.detector", "INFO") as cm:
+            self._poll({TEAMS: (_BASE, _BASE + 100 * _FT)})
+        self.assertIn("mic livre (Teams), mas a janela da call segue aberta", "\n".join(cm.output))
+        for _ in range(30):  # 1 min calado: nem GRACE nem fim
+            self._poll({TEAMS: (_BASE, _BASE + 100 * _FT)}, advance=2.0)
+        self.assertIs(self.det.state, CallState.RECORDING)
+        self.assertEqual(self.events, [("started", True)])
+
+    def test_mic_volta_depois_do_silencio_e_a_mesma_call(self):
+        # gap de 10 min >> split_gap_seconds: sem a janela, viraria call nova
+        self._make()
+        self._poll({TEAMS: (_BASE, 0)})
+        self.window_open = True
+        self._poll({TEAMS: (_BASE, _BASE + 100 * _FT)})
+        new_start = _BASE + 700 * _FT
+        with self.assertLogs("scriba.detector", "INFO") as cm:
+            self._poll({TEAMS: (new_start, 0)}, advance=600.0)
+        self.assertIn("mic voltou (Teams) - mesma call", "\n".join(cm.output))
+        self.assertIs(self.det.state, CallState.RECORDING)
+        self.assertEqual(self.det._session_start, new_start)
+        self.assertEqual(self.events, [("started", True)])
+        # e o próximo poll com o mic aberto não vê "ciclo invisível"
+        self._poll({TEAMS: (new_start, 0)}, advance=2.0)
+        self.assertEqual(self.events, [("started", True)])
+
+    def test_janela_da_call_fecha_com_mic_livre_encerra(self):
+        self._make()
+        self._poll({TEAMS: (_BASE, 0)})
+        self.window_open = True
+        self._poll({TEAMS: (_BASE, _BASE + 100 * _FT)}, advance=2.0)
+        self.window_open = False  # saiu da call
+        self._poll({TEAMS: (_BASE, _BASE + 100 * _FT)}, advance=2.0)
+        self.assertIs(self.det.state, CallState.GRACE)
+        self._poll({TEAMS: (_BASE, _BASE + 100 * _FT)}, advance=9.0)
+        self.assertIs(self.det.state, CallState.IDLE)
+        self.assertEqual(self.events, [("started", True), ("grace",), ("ended",)])
+
+    def test_janela_vista_so_no_fim_do_grace_retoma(self):
+        # enumeração de janelas falhou ao entrar no GRACE (prazo, #114)
+        self._make()
+        self._poll({TEAMS: (_BASE, 0)})
+        self._poll({TEAMS: (_BASE, _BASE + 100 * _FT)})
+        self.assertIs(self.det.state, CallState.GRACE)
+        self.window_open = True
+        self._poll({TEAMS: (_BASE, _BASE + 100 * _FT)}, advance=9.0)
+        self.assertIs(self.det.state, CallState.RECORDING)
+        self.assertEqual(self.events, [("started", True), ("grace",), ("resume",)])
+
+    def test_janela_do_teams_nao_segura_call_do_zoom(self):
+        self._make()
+        self._poll({ZOOM: (_BASE, 0)})
+        self.window_open = True
+        self._poll({ZOOM: (_BASE, _BASE + 100 * _FT)})
+        self.assertIs(self.det.state, CallState.GRACE)
+
+    def test_mic_livre_com_janela_respeita_max_call_hours(self):
+        self._make(max_call_hours=1.0)
+        self._poll({TEAMS: (_BASE, 0)})
+        self.window_open = True
+        self._poll({TEAMS: (_BASE, _BASE + 100 * _FT)}, advance=2.0)
+        self._poll({TEAMS: (_BASE, _BASE + 100 * _FT)}, advance=3600.0)
+        self.assertIs(self.det.state, CallState.IDLE)
+        self.assertIn(("ended",), self.events)
+
+    def test_outro_app_assume_apos_silencio_divide(self):
+        # mic do Teams livre (segurado pela janela) e o Zoom abre o mic: call nova
+        self._make()
+        self._poll({TEAMS: (_BASE, 0)})
+        self.window_open = True
+        self._poll({TEAMS: (_BASE, _BASE + 100 * _FT)}, advance=2.0)
+        self._poll({TEAMS: (_BASE, _BASE + 100 * _FT), ZOOM: (_BASE + 200 * _FT, 0)}, advance=2.0)
+        self.assertEqual(self.det._session_sub, ZOOM)
+        self.assertIn(("ended",), self.events)
+        self.assertEqual(len(self._starts()), 2)
+
     # -------- rate-limit do log de exceções do loop --------
 
     def test_excecao_no_poll_logada_uma_vez_por_minuto(self):
@@ -489,7 +595,9 @@ class DetectorStateMachineTests(unittest.TestCase):
         self._make()
         self._poll({TEAMS: (_BASE, 0)})
         self.recording = True
-        self._poll({TEAMS: (_BASE + 50 * _FT, 0)})  # ciclo invisível
+        with self.assertLogs("scriba.detector", "WARNING") as cm:
+            self._poll({TEAMS: (_BASE + 50 * _FT, 0)})  # ciclo invisível
+        self.assertIn("ciclo de sessão invisível", "\n".join(cm.output))
         self.assertEqual(len(self._starts()), 1)     # sem rearme: só o start inicial
 
 

@@ -121,8 +121,18 @@ class ProcessLogVivoTest(unittest.TestCase):
                 self.assertIn("estagio: transcrevendo",
                               log.read_text(encoding="utf-8", errors="replace"))
             finally:
-                proc.kill()
-                proc.wait(timeout=10)
+                _mata_arvore(proc)
+
+
+def _mata_arvore(proc: subprocess.Popen) -> None:
+    """Mata o filho E os netos. No Windows, o python.exe de um venv é um launcher
+    que roda o interpretador real como neto: proc.kill() só derruba o launcher, e
+    o neto segue vivo segurando o process.log (o tempdir não apaga)."""
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    proc.kill()
+    proc.wait(timeout=10)
 
 
 class StdoutUtf8Tests(unittest.TestCase):

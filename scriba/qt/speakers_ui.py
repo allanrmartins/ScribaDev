@@ -165,10 +165,20 @@ class AskNumSpeakers(QWidget):
         if self._done:
             return
         self._done = True
+        self._stop_timers()
         self.close()
         self._on_result(value)
 
+    def _stop_timers(self) -> None:
+        """Janela respondida/fechada não conta nem se re-afirma no topo. Timer
+        rodando num widget que o Python descarta derruba o processo no PySide6
+        6.12 (#209)."""
+        for t in (getattr(self, "_timer", None), self._keep):
+            if t is not None:
+                t.stop()
+
     def closeEvent(self, event) -> None:
+        self._stop_timers()
         # fechar no X = automático (uma vez só)
         if not self._done:
             self._done = True
