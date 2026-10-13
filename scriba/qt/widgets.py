@@ -460,6 +460,41 @@ class WrapLabel(QLabel):
         self.setMinimumHeight(self.heightForWidth(max(1, self.width())))
 
 
+class ElidedLabel(QLabel):
+    """QLabel de UMA linha que, no aperto, corta com reticências em vez de sobrar
+    por baixo dos vizinhos. O QLabel comum não encolhe abaixo do texto: na capa
+    estreita, o build ("v1.4.22 · +2 · hash (modificado)") passava sob o botão
+    Notas. O texto inteiro fica no tooltip."""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self._full = text
+        self.setToolTip(text)
+
+    def setText(self, text: str) -> None:  # noqa: N802 (API do Qt)
+        self._full = text
+        self.setToolTip(text)
+        self._elide()
+
+    def full_text(self) -> str:
+        return self._full
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        h = super().sizeHint().height()
+        return QSize(self.fontMetrics().horizontalAdvance(self._full) + 2, h)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(0, super().minimumSizeHint().height())
+
+    def resizeEvent(self, e) -> None:
+        super().resizeEvent(e)
+        self._elide()
+
+    def _elide(self) -> None:
+        shown = self.fontMetrics().elidedText(self._full, Qt.ElideRight, max(0, self.width()))
+        QLabel.setText(self, shown)
+
+
 # == campo com placeholder ====================================================
 
 def make_entry(placeholder: str = "", parent=None) -> QLineEdit:

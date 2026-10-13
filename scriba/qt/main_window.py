@@ -239,7 +239,7 @@ class MainWindow(QWidget):
         title = QLabel("ScribaDev")
         title.setStyleSheet(f"font-size:{theme.zpt(16)}pt; font-weight:bold;")
         head.addWidget(title)
-        ver = QLabel(updates.build_string())
+        ver = widgets.ElidedLabel(updates.build_string())   # estreita: "…", não sobrepõe
         ver.setProperty("role", "muted")
         ver.setStyleSheet(f"font-size:{theme.zpt(9)}pt;")
         head.addWidget(ver, 0, Qt.AlignBottom)
