@@ -146,6 +146,38 @@ class MainWindowTests(unittest.TestCase):
         self.assertFalse(win._update_bar.isHidden())
         self.assertIn("0.7.0", win._update_lbl.text())
 
+    def test_banner_claude_deslogado_segue_o_estado_do_app(self):
+        win = self._win()
+        win.show()
+        self.addCleanup(win.close)
+        win._tick()
+        self.assertTrue(win._claude_wrap.isHidden())   # logado: sem banner, sem vão
+        win.app.claude_logged_out = True
+        win._tick()
+        self.assertFalse(win._claude_wrap.isHidden())
+        # o word joiner (U+2060) segura "/login" numa linha só
+        self.assertIn("/login", win._claude_lbl.text().replace("⁠", ""))
+        win.app.claude_logged_out = False               # fez /login: some sozinho
+        win._tick()
+        self.assertTrue(win._claude_wrap.isHidden())
+
+    def test_banner_claude_verificar_chama_checagem_manual(self):
+        win = self._win()
+        calls = []
+        win.app.check_claude_auth_now = lambda: calls.append(1)
+        win._claude_btn.click()
+        self.assertEqual(calls, [1])
+        self.assertFalse(win._claude_btn.isEnabled())  # evita clique repetido
+        win._claude_recheck_done()
+        self.assertTrue(win._claude_btn.isEnabled())
+
+    def test_banner_claude_reaplica_tema(self):
+        from scriba.qt import theme
+
+        win = self._win()
+        win.restyle_theme()
+        self.assertIn(theme.active().rec, win._claude_bar.styleSheet())
+
     def test_x_esconde_nao_fecha(self):
         win = self._win()
         win.setVisible(True)

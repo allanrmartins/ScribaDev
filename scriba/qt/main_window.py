@@ -203,6 +203,7 @@ class MainWindow(QWidget):
 
         self._build_header(root)
         self._build_update_bar(root)
+        self._build_claude_bar(root)
         self._build_call_card(root)
         self._build_stats(root)
 
@@ -274,6 +275,46 @@ class MainWindow(QWidget):
         self._update_bar.hide()
         root.addWidget(self._update_bar)
         root.addSpacing(8)
+
+    def _build_claude_bar(self, root) -> None:
+        """Banner vermelho de claude CLI deslogado: sem login, nenhuma reunião ganha
+        resumo. Mostrado/escondido pelo _tick a partir de app.claude_logged_out."""
+        self._claude_bar = QFrame()
+        self._claude_bar.setObjectName("claudeBar")
+        cb = QHBoxLayout(self._claude_bar)
+        cb.setContentsMargins(12, 8, 12, 8)
+        # o Qt quebra a linha depois de "/" (e ignora <nobr>): o word joiner U+2060
+        # segura o "/login" inteiro
+        self._claude_lbl = widgets.WrapLabel(
+            "Claude CLI deslogado: o resumo das reuniões está indisponível. Rode "
+            "claude no terminal e faça /\u2060login.")
+        self._claude_btn = widgets.ModernButton("Verificar de novo", self._claude_recheck)
+        cb.addWidget(self._claude_lbl, 1)
+        cb.addWidget(self._claude_btn)
+        # o respiro abaixo vai junto com o banner: escondido, a capa não ganha vão
+        self._claude_wrap = QWidget()
+        wl = QVBoxLayout(self._claude_wrap)
+        wl.setContentsMargins(0, 0, 0, 8)
+        wl.addWidget(self._claude_bar)
+        self._claude_wrap.hide()
+        root.addWidget(self._claude_wrap)
+        self._style_claude_bar()
+
+    def _style_claude_bar(self) -> None:
+        t = theme.active()
+        self._claude_bar.setStyleSheet(
+            f"QFrame#claudeBar {{ background:{t.rec}; border-radius:{t.radius + 2}px; }}")
+        self._claude_lbl.setStyleSheet(f"color:{t.on_accent}; font-weight:bold;")
+
+    def _claude_recheck(self) -> None:
+        self._claude_btn.setText("Verificando…")
+        self._claude_btn.setEnabled(False)
+        QTimer.singleShot(8000, self._claude_recheck_done)
+        self.app.check_claude_auth_now()
+
+    def _claude_recheck_done(self) -> None:
+        self._claude_btn.setText("Verificar de novo")
+        self._claude_btn.setEnabled(True)
 
     def _build_call_card(self, root) -> None:
         self._card = QFrame()
@@ -426,6 +467,7 @@ class MainWindow(QWidget):
         Chamado por theme._restyle_top_levels via o contrato `restyle_theme`. (#70)"""
         self._apply_theme()
         self._style_call_card()
+        self._style_claude_bar()
         if self._home_data is not None:
             self._render_home(self._home_data)
         if self._live_cache:
@@ -524,6 +566,9 @@ class MainWindow(QWidget):
         news = getattr(self.app, "update_news", None)
         if news and self._update_bar.isHidden():
             self.show_update(news)
+        logged_out = bool(getattr(self.app, "claude_logged_out", False))
+        if logged_out == self._claude_wrap.isHidden():
+            self._claude_wrap.setVisible(logged_out)
 
     def _set_call_kind(self, kind: str) -> None:
         if kind != self._call_state_kind:

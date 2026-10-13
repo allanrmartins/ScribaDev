@@ -119,6 +119,7 @@ class ScribaApp:
         self.main_win = None
         self.timesheet_win = None  # janela de Apontamentos (#118/#124)
         self.update_news = None  # versão nova detectada (#19); a capa exibe o aviso
+        self.claude_logged_out = False  # claude CLI deslogado: banner vermelho na capa
         self.hotkey = None
         self.hotkey_split = None  # #38: atalho "nova call" (dividir a gravação)
         self.detector: Detector | None = None
@@ -698,6 +699,59 @@ class ScribaApp:
         self.cfg = load()
         self._setup_hotkey()
         log.info("configuração recarregada")
+        # resumo ligado/desligado ou provider trocado: o banner reavalia na hora
+        self._claude_auth_check(force=True)
+
+    # ------------------------------------------------------ login do claude CLI --
+
+    def _claude_auth_loop(self) -> None:
+        """Checa o login do claude CLI (diário, ou a cada tick enquanto deslogado)
+        e reagenda. Só tem efeito com o resumo ligado no provider claude."""
+        from . import claude_auth
+
+        self._claude_auth_check()
+        if self._app is not None and not self.stop_event.is_set():
+            self._after(claude_auth.TICK_S * 1000, self._claude_auth_loop)
+
+    def check_claude_auth_now(self) -> None:
+        """Botão "Verificar de novo" do banner: chamada real, sem gate diário."""
+        self._claude_auth_check(real=True)
+
+    def _claude_auth_check(self, *, force: bool = False, real: bool = False) -> None:
+        def work() -> None:
+            from . import claude_auth
+
+            try:
+                if not claude_auth.applies(self.cfg):
+                    logged = True   # sem resumo no claude: nada a avisar
+                else:
+                    # deslogado: re-checa a cada tick para o banner sumir após o /login
+                    logged = claude_auth.check(force=force or self.claude_logged_out, real=real)
+            except Exception:
+                log.exception("checagem do login do claude CLI falhou")
+                return
+            if logged is not None:
+                self.ui(lambda: self._on_claude_auth(logged))
+
+        threading.Thread(target=work, daemon=True, name="claudeauth").start()
+
+    def _on_claude_auth(self, logged_in: bool) -> None:
+        from . import claude_auth
+
+        was_out = self.claude_logged_out
+        self.claude_logged_out = not logged_in
+        if logged_in:
+            if was_out:
+                log.info("claude CLI logado de novo - resumos voltam a sair")
+                claude_auth.reset_toast()
+            return
+        if not was_out:
+            log.warning("claude CLI deslogado - o resumo das reuniões está indisponível")
+        if claude_auth.should_toast():
+            claude_auth.toasted()
+            self._toast("Claude CLI deslogado",
+                        "O resumo das reuniões está indisponível. Rode claude no "
+                        "terminal e faça /login para voltar a ter resumos.")
 
     # -------------------------------------------------------------- hotkey --
 
@@ -1419,6 +1473,7 @@ class ScribaApp:
         self._after(9000, self._check_updates_boot)    # aviso de nova versão (#19)
         self._after(12000, self._timesheet_boot)       # sugestões + backup diário (#123)
         self._after(15000, self._repair_shortcuts_boot)  # ícone dos atalhos (#192)
+        self._after(20000, self._claude_auth_loop)     # login do claude CLI (resumo)
 
         if not self.start_hidden:
             self.show_main()  # lançamento manual (atalho): abre a janela na frente
