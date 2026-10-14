@@ -429,12 +429,14 @@ def _teams_call_name(raw: str) -> str | None:
 
     if _is_aux_window(t):  # vista compacta, barra de compartilhamento (#177)
         return nome(content[1:])
-    if pinned:
-        return nome(content)
     if content and content[0].casefold() == "meeting join":
         return nome(content[1:])
     if len(content) == 1 and content[0].casefold() not in _TITLE_NAV_PARTS:
         return nome(content)
+    if pinned and not content:  # call fixada no topo sem o nome da reunião
+        return ""
+    # chat fixado ("Chat | Fulano | ... | Pinned window") não é call: tratar como
+    # call deixaria a gravação aberta até o limite de horas
     return None
 
 

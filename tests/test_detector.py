@@ -97,6 +97,8 @@ class TeamsCallWindowTests(unittest.TestCase):
                     "Chat | Projeto FM|SAP (External)" + self._SUF,
                     "(3) Calendário" + self._SUF,
                     "Activity" + self._SUF,
+                    # janela fixada só conta quando é a da call, não um chat fixado
+                    "Chat | Pessoa A" + self._SUF + " | Pinned window",
                     "Microsoft Teams", "", "   "):
             self.assertFalse(detector._is_teams_call_window(raw), raw)
 
