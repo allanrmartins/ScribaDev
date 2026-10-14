@@ -363,6 +363,9 @@ Supported since **v1.4.0** (macOS 14.2+, Apple Silicon), contributed by [@dineia
 - **Audio never leaves your machine** — recording and transcription are 100% local.
 - With `[summary] enabled = true`, the transcript **text** is sent to Anthropic through Claude Code (the account/subscription you already use). Disable it for a fully offline flow.
 - Recordings and transcripts live in `C:\temp\scribadev\gravacoes` (configurable), away from synced folders — and are **deleted automatically** after the retention window (default 30 days; `0` keeps forever); config and logs in `%LOCALAPPDATA%\ScribaDev`. Only the final `.md` goes to `%LOCALAPPDATA%\ScribaDev\Notas`.
+- With **Teams desktop** (Windows), during the call ScribaDev reads the meeting window through Windows accessibility to see **who unmuted** and suggest that speaker count at the end of the call.
+  Read-only, call window only; names stay in the recording's local `meta.json` and never reach the log.
+  Turn it off with `[detection] teams_participants = false`.
 
 ## Legal notice
 

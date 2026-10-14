@@ -364,6 +364,9 @@ Suporte a partir da **v1.4.0** (macOS 14.2+, Apple Silicon), contribuição do [
 - O **áudio nunca sai da sua máquina** — gravação e transcrição são 100% locais.
 - Com `[summary] enabled = true`, o **texto** da transcrição é enviado à Anthropic via Claude Code (a mesma conta/assinatura que você já usa). Desabilite para um fluxo 100% offline.
 - Gravações e transcrições ficam em `C:\temp\scribadev\gravacoes` (configurável), fora de pastas sincronizadas — e são **apagadas automaticamente** após o prazo de retenção (padrão 30 dias; `0` mantém para sempre); config e logs em `%LOCALAPPDATA%\ScribaDev`. Só o `.md` final vai para `%LOCALAPPDATA%\ScribaDev\Notas`.
+- No **Teams desktop** (Windows), durante a call o ScribaDev lê a janela da reunião pela acessibilidade do Windows para saber **quem abriu o microfone** e sugerir esse número de vozes no fim da call.
+  Só leitura, só a janela da call; os nomes ficam no `meta.json` local da gravação e nunca vão para o log.
+  Desligue com `[detection] teams_participants = false`.
 
 ## Aviso legal
 

@@ -124,8 +124,9 @@ def descendant_names(hwnd: int, control_types: set[int],
                      stop: threading.Event | None = None) -> list[str]:
     """Names não-vazios dos descendentes da janela com ControlType em `control_types`.
 
-    Restringir o tipo também restringe o que é lido: na janela da call, o chat da
-    reunião vem em outros tipos de elemento e nem chega a ser pedido.
+    O Name só é pedido aos elementos do tipo filtrado. Com o chat da reunião aberto
+    dentro da janela da call, mensagens podem vir como Group e são lidas também:
+    quem chama extrai só o que reconhece e descarta o resto em memória.
     """
     win = _window(hwnd)
     array = ctypes.c_void_p()
