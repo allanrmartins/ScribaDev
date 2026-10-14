@@ -66,21 +66,64 @@ class CleanMeetingTitleTests(unittest.TestCase):
 
 
 class TeamsCallWindowTests(unittest.TestCase):
-    """Títulos reais do ms-teams.exe (2026-10-08): só a janela da call conta."""
+    """Formato dos títulos CRUS do ms-teams.exe medido numa call real (2026-10-14).
 
-    def test_janela_da_call(self):
-        for raw in ("Papo Studio — Contoso — fulano@contoso.com",
-                    "Meeting join — Papo Studio — Contoso — fulano@contoso.com",
-                    "Contoso — fulano@contoso.com — Pinned window",
-                    "Pessoa A, Pessoa B — Contoso — fulano@contoso.com",
-                    "Sharing control bar | Contoso | fulano@contoso.com"):
+    As fixtures da v1.4.22 usavam o título já limpo (" — "), que não existe na
+    janela: a janela da call nunca era reconhecida e o mic livre encerrava a call."""
+
+    _SUF = " | Contoso | fulano@contoso.com | Microsoft Teams"
+
+    def test_janela_da_call_traz_o_nome_da_reuniao(self):
+        self.assertEqual(detector._teams_call_name("Daily do projeto" + self._SUF), "Daily do projeto")
+        # call ad hoc: o título é a lista de participantes
+        self.assertEqual(detector._teams_call_name("Pessoa A, Pessoa B" + self._SUF), "Pessoa A, Pessoa B")
+
+    def test_janelas_que_so_existem_na_call(self):
+        casos = {
+            "Meeting join | Daily do projeto" + self._SUF: "Daily do projeto",
+            "Meeting join | Microsoft Teams meeting" + self._SUF: "",
+            "Meeting compact view | Daily do projeto" + self._SUF: "Daily do projeto",
+            "Contoso | fulano@contoso.com | Microsoft Teams | Pinned window": "",
+            "Sharing control bar | Contoso | fulano@contoso.com": "",
+        }
+        for raw, nome in casos.items():
+            self.assertEqual(detector._teams_call_name(raw), nome, raw)
             self.assertTrue(detector._is_teams_call_window(raw), raw)
 
     def test_janela_principal_e_chat_nao_sao_call(self):
-        for raw in ("Chat | Pessoa A | Contoso | fulano@contoso.com | Microsoft Teams",
-                    "(3) Calendário | Contoso | fulano@contoso.com | Microsoft Teams",
-                    "Microsoft Teams", ""):
+        for raw in ("Contoso | fulano@contoso.com | Microsoft Teams",
+                    "Chat | Pessoa A" + self._SUF,
+                    # "|" sem espaços faz parte do nome do chat, não separa segmento
+                    "Chat | Projeto FM|SAP (External)" + self._SUF,
+                    "(3) Calendário" + self._SUF,
+                    "Activity" + self._SUF,
+                    "Microsoft Teams", "", "   "):
             self.assertFalse(detector._is_teams_call_window(raw), raw)
+
+    def test_titulo_vem_da_janela_da_call_e_nao_do_chat_aberto(self):
+        """Trocar de chat na janela principal mudava o título estável no meio da
+        call ("possível nova call sem ciclo de mic", 8 vezes numa call de 84 min)."""
+        call = "Daily do projeto" + self._SUF
+        for principal in ("Chat | Pessoa A" + self._SUF, "Chat | Pessoa B" + self._SUF):
+            self.assertEqual(detector._teams_call_title([principal, call]), "Daily do projeto")
+
+    def test_sala_de_espera_nao_vira_nome_do_chat(self):
+        """Na entrada só existiam a sala de espera e o chat aberto: o meta ganhava o
+        nome errado e o título estável (que acha o certo depois) não o corrige."""
+        titles = ["Meeting join | Microsoft Teams meeting" + self._SUF, "Chat | Pessoa A" + self._SUF]
+        self.assertEqual(detector._teams_call_title(titles), "")
+
+    def test_sem_janela_de_call(self):
+        self.assertIsNone(detector._teams_call_title(["Chat | Pessoa A" + self._SUF, "Microsoft Teams"]))
+
+    def test_capture_meeting_title_prefere_a_janela_da_call(self):
+        janelas = {"ms-teams.exe": ["Chat | Pessoa A" + self._SUF, "Daily do projeto" + self._SUF]}
+
+        def fake_titles(exes, *a, **k):
+            return [t for e in exes for t in janelas.get(e, [])]
+
+        with mock.patch("scriba.wintitles.window_titles", fake_titles):
+            self.assertEqual(detector.capture_meeting_title(Detection(browsers="")), "Daily do projeto")
 
 
 class MesmaReuniaoPeloTituloTests(unittest.TestCase):
