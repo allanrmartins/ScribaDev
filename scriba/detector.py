@@ -303,12 +303,15 @@ _TITLE_APP_SUFFIXES = (
 )
 _TITLE_NAV_PARTS = {
     "chat", "atividade", "activity", "equipes", "teams", "calendário", "calendar",
-    "arquivos", "chamadas", "comunidades", "feed",
+    "arquivos", "files", "chamadas", "calls", "comunidades", "communities", "feed",
+    "aplicativos", "apps", "pessoas", "people", "copilot", "onedrive", "planner",
 }
 _TITLE_GENERIC = {
     "microsoft teams", "teams", "zoom", "zoom meeting", "zoom workplace", "meet",
     "google meet", "microsoft edge", "google chrome", "mozilla firefox", "brave",
     "opera", "vivaldi", "reunião", "meeting", "",
+    # sala de espera do Teams sem o nome da reunião ("Meeting join | Microsoft Teams meeting")
+    "microsoft teams meeting", "reunião do microsoft teams",
 }
 # Janelas AUXILIARES do Teams: existem durante a call (barra de compartilhamento,
 # vista compacta) e têm título próprio, que não é o nome da reunião (#177). Elas
@@ -389,18 +392,57 @@ def mesma_reuniao_pelo_titulo(antes: str, depois: str) -> bool:
     return bool(_nomes_do_nucleo(a) & _nomes_do_nucleo(d))
 
 
-def _is_teams_call_window(raw: str) -> bool:
-    """O título é de uma janela que só existe durante uma call do Teams (ms-teams.exe)?
+def _teams_call_name(raw: str) -> str | None:
+    """Nome da reunião se o título é de uma janela de call do Teams (ms-teams.exe);
+    "" se é janela de call sem nome útil; None se não é janela de call.
 
-    A janela principal e os chats destacados usam "|" ("Chat | Fulano | Contoso |
-    conta | Microsoft Teams"). A janela da call usa " — " sem "|" ("Daily — Contoso
-    — conta", "Meeting join — ...", "... — Pinned window"), e as auxiliares (#177)
-    só aparecem com a call aberta.
+    Títulos crus medidos numa call real (2026-10-14), todos no mesmo formato
+    "<conteúdo> | <organização> | <conta> | Microsoft Teams":
+      call:        "Daily | Contoso | conta | Microsoft Teams"
+      sala de espera: "Meeting join | Microsoft Teams meeting | Contoso | conta | ..."
+      vista compacta: "Meeting compact view | Daily | Contoso | conta | ..."
+      janela fixada:  "Contoso | conta | Microsoft Teams | Pinned window"
+      principal:   "Contoso | conta | Microsoft Teams", "Chat | Fulano | Contoso | ..."
+    A janela da call é a única com exatamente UM segmento de conteúdo que não é
+    seção do app (Chat, Calendário...). O separador é " | " com espaços: nome de chat
+    pode ter "|" no meio ("Projeto FM|SAP"). Formato não reconhecido = None.
     """
     t = re.sub(r"^\(\d+\)\s*", "", (raw or "").strip())
-    if _is_aux_window(t):
-        return True
-    return "|" not in t and " — " in t
+    if not t:
+        return None
+    parts = [p.strip() for p in t.split(" | ")]
+    pinned = parts[-1].casefold() == "pinned window"
+    if pinned:
+        parts = parts[:-1]
+    if parts and parts[-1].casefold() == "microsoft teams":
+        parts = parts[:-1]
+    # conteúdo = o que vem antes de "<organização> | <conta>"
+    conta = next((i for i, p in enumerate(parts) if "@" in p), None)
+    if conta is not None:
+        content = parts[:max(conta - 1, 0)]
+    else:
+        content = parts[:-1]  # sem conta à vista: o último segmento é a organização
+    content = [p for p in content if p]
+
+    def nome(segs: list[str]) -> str:
+        return segs[0] if segs and segs[0].casefold() not in _TITLE_GENERIC else ""
+
+    if _is_aux_window(t):  # vista compacta, barra de compartilhamento (#177)
+        return nome(content[1:])
+    if content and content[0].casefold() == "meeting join":
+        return nome(content[1:])
+    if len(content) == 1 and content[0].casefold() not in _TITLE_NAV_PARTS:
+        return nome(content)
+    if pinned and not content:  # call fixada no topo sem o nome da reunião
+        return ""
+    # chat fixado ("Chat | Fulano | ... | Pinned window") não é call: tratar como
+    # call deixaria a gravação aberta até o limite de horas
+    return None
+
+
+def _is_teams_call_window(raw: str) -> bool:
+    """O título é de uma janela que só existe durante uma call do Teams (ms-teams.exe)?"""
+    return _teams_call_name(raw) is not None
 
 
 def teams_call_window_open() -> bool:
@@ -414,6 +456,24 @@ def teams_call_window_open() -> bool:
         return any(_is_teams_call_window(t) for t in window_titles({"ms-teams.exe"}))
     except Exception:
         return False
+
+
+def _teams_call_title(titles: list[str]) -> str | None:
+    """Nome da reunião tirado da janela de CALL do Teams; "" se há janela de call mas
+    nenhuma traz o nome (sala de espera genérica); None se não há janela de call.
+
+    A janela principal mostra o que o usuário estiver vendo (o chat de alguém, o
+    calendário): ler o título dela fazia o nome da reunião mudar a cada clique no
+    Teams, com aviso de "possível nova call" no log.
+    """
+    found = None
+    for t in titles:
+        name = _teams_call_name(t)
+        if name:
+            return name
+        if name is not None:
+            found = ""
+    return found
 
 
 def capture_meeting_title(cfg: Detection) -> str:
@@ -434,6 +494,12 @@ def capture_meeting_title(cfg: Detection) -> str:
                     name = _clean_meeting_title(t)
                     if name:
                         return name
+        call = _teams_call_title(window_titles({"ms-teams.exe"}))
+        if call is not None:
+            # janela de call achada: vale ela, mesmo sem nome ainda (a sala de espera
+            # vira "" e o título estável preenche o meta depois). Cair na janela
+            # principal aqui gravava o chat aberto como nome da reunião.
+            return call
         for exes in ({"ms-teams.exe", "teams.exe"}, {"zoom.exe"}):
             for t in window_titles(exes):
                 name = _clean_meeting_title(t)
