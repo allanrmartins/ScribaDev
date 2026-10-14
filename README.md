@@ -201,6 +201,7 @@ Na primeira execução, o **Assistente de perfil** abre sozinho: você descreve 
 | `scribadev summarize <pasta>` | (re)gera o resumo e o notas.md |
 | `scribadev process <pasta>` | tudo de uma vez: transcreve + resume + exporta |
 | `scribadev detect` | debug: mostra as transições de detecção em tempo real |
+| `scribadev teams` | debug: mostra ao vivo quem abriu o microfone na call do Teams (a sugestão do nº de vozes no fim da call) |
 | `scribadev wizard` | assistente de perfil: gera o prompt.md e as hotwords da sua profissão |
 | `scribadev autostart on\|off` | atalho na pasta Inicializar do Windows |
 | `scribadev shortcut` | (re)cria os atalhos na Área de Trabalho e no menu Iniciar |

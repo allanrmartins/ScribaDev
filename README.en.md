@@ -201,6 +201,7 @@ On first run, the **profile assistant** opens by itself: describe your role, are
 | `scribadev summarize <folder>` | (re)generate the summary and notas.md |
 | `scribadev process <folder>` | everything at once: transcribe + summarize + export |
 | `scribadev detect` | debug: print detection state transitions live |
+| `scribadev teams` | debug: show live who unmuted in the Teams call (the speaker-count suggestion at the end of the call) |
 | `scribadev wizard` | profile assistant: generates prompt.md and hotwords for your role |
 | `scribadev autostart on\|off` | shortcut in the Windows Startup folder |
 | `scribadev shortcut` | (re)create the Desktop and Start Menu shortcuts |

@@ -105,6 +105,7 @@ class ScribaApp:
         # chegou no meio da montagem, executado assim que ela termina.
         self._rec_starting = False
         self._pending_stop: dict | None = None
+        self._roster = None  # teamsroster.RosterWatch da gravação ativa (quem abriu o mic)
         self.call_active = False  # call do Teams em andamento (a pílula segue a call)
         self._app = None  # QApplication (criado em run())
         self._pump = None  # UiPump que drena a ui_queue na thread da GUI
@@ -279,6 +280,7 @@ class ScribaApp:
                 if rec is not None:
                     self.rec = rec
                     self.rec_source = source
+                    self._roster = self._start_roster()
         if pending is not None:
             # a call terminou enquanto a gravação nascia: encerra pelo fluxo normal
             log.info("stop chegou durante o início da gravação — encerrando já")
@@ -301,6 +303,7 @@ class ScribaApp:
         """
         with self.rec_lock:
             rec, source = self.rec, self.rec_source
+            roster, self._roster = self._roster, None
             self.rec = None
             if rec is None and self._rec_starting:
                 # gravação ainda nascendo (#114): registra a intenção — o
@@ -311,6 +314,7 @@ class ScribaApp:
             return
         if self.tray:
             self.tray.set_recording(False, self.status_text())
+        roster_result = roster.stop() if roster is not None else None
 
         duration = rec.duration_seconds()
         if discard:
@@ -331,6 +335,9 @@ class ScribaApp:
             return
         rec.stop(status="recorded")
         log.info("gravação encerrada (%.0fs): %s", duration, rec.folder.name)
+        if roster_result:
+            self._save_meta_fields(rec.folder, {"teams_speakers": roster_result["speakers"],
+                                                "teams_total": roster_result.get("total")})
         self._toast("Transcrevendo...", f"{rec.folder.name} ({max(1, int(duration // 60))} min)")
         # com a call ainda ativa, a pílula espera um novo ⏺; senão, ela fica
         # visível mostrando o progresso do processamento
@@ -371,6 +378,18 @@ class ScribaApp:
         except Exception:
             return False
 
+    def _meta_teams_speakers(self, folder) -> list[str] | None:
+        """Quem abriu o mic na call do Teams (teamsroster), se a gravação tem isso."""
+        import json
+        from pathlib import Path
+
+        try:
+            meta = json.loads((Path(folder) / "meta.json").read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        names = meta.get("teams_speakers")
+        return [str(n) for n in names] if isinstance(names, list) else None
+
     def _ask_speakers_then_enqueue(self, folder) -> None:
         """(thread de UI) Abre a janela e enfileira a reunião quando ela resolver."""
         from .qt.speakers_ui import ask_num_speakers
@@ -387,6 +406,7 @@ class ScribaApp:
                 done,
                 last_value=last if isinstance(last, int) else None,
                 timeout_seconds=int(self.cfg.diarization.ask_speakers_timeout or 0),
+                teams_speakers=self._meta_teams_speakers(folder),
             )
         except Exception:
             log.exception("janela de nº de participantes falhou — enfileirando direto")
@@ -394,17 +414,38 @@ class ScribaApp:
 
     def _save_num_speakers(self, folder, n: int) -> None:
         """Grava num_speakers no meta.json (o subprocesso de processamento o lê)."""
+        if self._save_meta_fields(folder, {"num_speakers": int(n)}):
+            log.info("nº de participantes informado (%d): %s", n, getattr(folder, "name", folder))
+
+    def _save_meta_fields(self, folder, fields: dict) -> bool:
+        """Mescla `fields` no meta.json da gravação (None = não grava a chave)."""
         import json
         from pathlib import Path
 
         meta_path = Path(folder) / "meta.json"
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            meta["num_speakers"] = int(n)
+            meta.update({k: v for k, v in fields.items() if v is not None})
             util.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
-            log.info("nº de participantes informado (%d): %s", n, getattr(folder, "name", folder))
+            return True
         except Exception:
-            log.exception("não consegui gravar num_speakers no meta de %s", getattr(folder, "name", folder))
+            log.exception("não consegui gravar %s no meta de %s", ", ".join(fields),
+                          getattr(folder, "name", folder))
+            return False
+
+    def _start_roster(self):
+        """Começa a observar quem abre o mic na janela da call do Teams (só Windows,
+        desligável em detection.teams_participants). Sem janela de call, só amostra
+        o vazio e não grava nada."""
+        if sys.platform != "win32" or not getattr(self.cfg.detection, "teams_participants", True):
+            return None
+        try:
+            from .teamsroster import RosterWatch
+
+            return RosterWatch().start()
+        except Exception:
+            log.exception("observador de participantes do Teams não iniciou")
+            return None
 
     def _on_title(self, title: str) -> None:
         """Título estável capturado durante a gravação (#35): preenche meeting_title

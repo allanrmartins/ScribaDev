@@ -53,12 +53,13 @@ if sys.platform == "win32":
         finally:
             _kernel32.CloseHandle(handle)
 
-    def _enum_titles(exe_names: set[str]) -> list[str]:
-        """Enumeração crua (pode bloquear — só chamar via window_titles).
+    def _enum_windows(exe_names: set[str]) -> list[tuple[int, str]]:
+        """Enumeração crua (pode bloquear — só chamar via window_titles/windows):
+        (hwnd, título) das janelas visíveis com título.
 
         exe_names: basenames minúsculos com extensão (ex.: {"chrome.exe"}).
         """
-        titles: list[str] = []
+        found: list[tuple[int, str]] = []
         exe_cache: dict[int, str] = {}
 
         @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -78,11 +79,14 @@ if sys.platform == "win32":
                 buf = ctypes.create_unicode_buffer(length + 1)
                 _user32.GetWindowTextW(hwnd, buf, length + 1)
                 if buf.value:
-                    titles.append(buf.value)
+                    found.append((int(hwnd), buf.value))
             return True
 
         _user32.EnumWindows(_on_window, 0)
-        return titles
+        return found
+
+    def _enum_titles(exe_names: set[str]) -> list[str]:
+        return [title for _hwnd, title in _enum_windows(exe_names)]
 
 elif sys.platform == "darwin":
     def _enum_titles(exe_names: set[str]) -> list[str]:
@@ -106,6 +110,18 @@ def window_titles(exe_names: set[str], timeout_s: float = _ENUM_TIMEOUT_S) -> li
     e abandona a thread — quem chama segue sem título, nunca congela. Falha da
     enumeração também vira [] (título é cosmético, jamais derruba a detecção).
     """
+    return _with_deadline(lambda: _enum_titles(exe_names), timeout_s)
+
+
+def windows(exe_names: set[str], timeout_s: float = _ENUM_TIMEOUT_S) -> list[tuple[int, str]]:
+    """(hwnd, título) das janelas top-level visíveis dos executáveis dados, com o
+    mesmo prazo de `window_titles`. Só no Windows; nos outros SOs, []."""
+    if sys.platform != "win32":
+        return []
+    return _with_deadline(lambda: _enum_windows(exe_names), timeout_s)
+
+
+def _with_deadline(enum, timeout_s: float) -> list:
     with _stuck_lock:
         _stuck[:] = [t for t in _stuck if t.is_alive()]
         if _stuck:
@@ -113,11 +129,11 @@ def window_titles(exe_names: set[str], timeout_s: float = _ENUM_TIMEOUT_S) -> li
             # empilhar outra — o window manager segue travado
             return []
 
-    box: dict[str, list[str]] = {}
+    box: dict[str, list] = {}
 
     def _work() -> None:
         try:
-            box["titles"] = _enum_titles(exe_names)
+            box["found"] = enum()
         except Exception:
             log.debug("enumeração de janelas falhou", exc_info=True)
 
@@ -130,4 +146,4 @@ def window_titles(exe_names: set[str], timeout_s: float = _ENUM_TIMEOUT_S) -> li
         log.warning("enumeração de janelas não respondeu em %.1fs — seguindo sem títulos (#114)",
                     timeout_s)
         return []
-    return box.get("titles", [])
+    return box.get("found", [])
