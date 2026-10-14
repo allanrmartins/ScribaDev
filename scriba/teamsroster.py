@@ -147,6 +147,11 @@ class RosterWatch:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._sample_seconds = sample_seconds
+        # diagnóstico sem nomes: janela de call achada mas nada reconhecido (formato
+        # novo do Teams, outro idioma) tem que aparecer no log, senão é invisível
+        self._reads = 0        # leituras com janela de call
+        self._most_texts = 0   # maior nº de textos lidos numa leitura
+        self._errors: dict[str, int] = {}
 
     def start(self) -> "RosterWatch":
         if sys.platform == "win32":
@@ -158,7 +163,13 @@ class RosterWatch:
         self._stop.set()
         with self._lock:
             t = self.tracker
+            if self._errors:
+                log.warning("Teams: leituras da janela falharam: %s",
+                            ", ".join(f"{k} x{v}" for k, v in self._errors.items()))
             if not t.samples:
+                if self._reads:
+                    log.info("Teams: %d leitura(s) da janela da call (até %d textos), nenhum "
+                             "participante reconhecido - sem sugestão", self._reads, self._most_texts)
                 return None
             speakers = t.speakers()
             log.info("Teams: %d amostra(s) da call, %d pessoa(s) abriram o mic, total %s",
@@ -175,8 +186,11 @@ class RosterWatch:
         while not self._stop.is_set():
             try:
                 self._sample(uia_win, wintitles, _is_teams_call_window)
-            except Exception:
+            except Exception as e:
                 log.debug("amostra da janela do Teams falhou", exc_info=True)
+                with self._lock:
+                    k = type(e).__name__
+                    self._errors[k] = self._errors.get(k, 0) + 1
             self._stop.wait(self._sample_seconds)
 
     def _sample(self, uia_win, wintitles, is_call_window) -> None:
@@ -200,6 +214,8 @@ class RosterWatch:
         if self._stop.is_set():
             return
         with self._lock:
+            self._reads += 1
+            self._most_texts = max(self._most_texts, len(texts))
             self.tracker.feed(texts, time.monotonic())
 
 

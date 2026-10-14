@@ -153,6 +153,34 @@ class RosterWatchTests(unittest.TestCase):
         self.assertEqual(w.tracker.self_name, "Ana Lima")
         self.assertEqual(w.tracker.samples, 1)
 
+    def test_janela_lida_sem_nada_reconhecido_aparece_no_log_sem_nomes(self):
+        """Formato novo do Teams (ou outro idioma) não pode ser invisível em produção,
+        e o log não pode levar nome de ninguém (vai no "Reportar erro")."""
+        class FakeUia:
+            @staticmethod
+            def names_under(*a, **k):
+                return []
+
+            @staticmethod
+            def descendant_names(hwnd, control_types, stop=None):
+                return ["Ana Lima, formato desconhecido", "Bruno Reis"]
+
+        class FakeTitles:
+            @staticmethod
+            def windows(exes):
+                return [(2, "Daily | Contoso | conta@contoso.com | Microsoft Teams")]
+
+        from scriba.detector import _is_teams_call_window
+
+        w = RosterWatch()
+        w._sample(FakeUia, FakeTitles, _is_teams_call_window)
+        with self.assertLogs("scriba.teamsroster", "INFO") as cm:
+            self.assertIsNone(w.stop())
+        joined = "\n".join(cm.output)
+        self.assertIn("1 leitura(s) da janela da call (até 2 textos)", joined)
+        self.assertNotIn("Ana", joined)
+        self.assertNotIn("Bruno", joined)
+
     def test_sem_janela_de_call_nao_le_nada(self):
         class FakeUia:
             @staticmethod
