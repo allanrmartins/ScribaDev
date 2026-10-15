@@ -6,12 +6,15 @@ call real em 2026-10-14), com nomes fictícios.
 
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scriba import teamsroster  # noqa: E402
-from scriba.teamsroster import RosterTracker, RosterWatch, parse, parse_profile, parse_total  # noqa: E402
+from scriba.teamsroster import (  # noqa: E402
+    RosterTracker, RosterWatch, one_on_one_peer, parse, parse_profile, parse_total,
+)
 
 _CTX = ", Context menu is available"
 
@@ -180,6 +183,58 @@ class RosterWatchTests(unittest.TestCase):
         self.assertIn("1 leitura(s) da janela da call (até 2 textos)", joined)
         self.assertNotIn("Ana", joined)
         self.assertNotIn("Bruno", joined)
+
+    def _amostra_1a1(self, titulo: str, nomes: list[str], vezes: int = 4) -> RosterWatch:
+        class FakeUia:
+            @staticmethod
+            def names_under(*a, **k):
+                return []
+
+            @staticmethod
+            def descendant_names(hwnd, control_types, stop=None):
+                return nomes
+
+        class FakeTitles:
+            @staticmethod
+            def windows(exes):
+                return [(2, titulo)]
+
+        from scriba.detector import _is_teams_call_window
+
+        w = RosterWatch()
+        for i in range(vezes):
+            with mock.patch("scriba.teamsroster.time.monotonic", return_value=i * 5.0):
+                w._sample(FakeUia, FakeTitles, _is_teams_call_window)
+        return w
+
+    # textos reais de uma ligação 1:1 (2026-10-15), com nomes fictícios: o outro lado
+    # não tem bloco de vídeo nem estado, só o nome solto e os botões de ligação
+    _LIGACAO = ["Calling controls", "Bruno Reis", "Myself video, Ana Lima, Unmuted, Has context menu",
+                "Mute mic", "Leave", "Dial pad", "Hold", "Transfer", "Consult", "Elapsed time 02:00"]
+
+    def test_ligacao_1a1_sugere_o_outro_lado(self):
+        w = self._amostra_1a1("Bruno Reis | Contoso | conta@contoso.com | Microsoft Teams", self._LIGACAO)
+        self.assertEqual(w.stop(), {"speakers": ["Bruno Reis"]})
+
+    def test_reuniao_com_nome_unico_sem_botoes_de_ligacao_nao_vira_1a1(self):
+        """Título de reunião também é um segmento só: sem Hold/Transfer, não é ligação."""
+        nomes = [n for n in self._LIGACAO if n not in ("Hold", "Transfer", "Consult")]
+        w = self._amostra_1a1("Daily | Contoso | conta@contoso.com | Microsoft Teams", nomes)
+        self.assertIsNone(w.stop())
+
+    def test_vista_compacta_e_barra_de_compartilhar_sozinhas_nao_dao_nome(self):
+        """Sem os botões de ligação na janela, nada é inventado a partir do título."""
+        for titulo in ("Meeting compact view | Bruno Reis | Contoso | conta@contoso.com | Microsoft Teams",
+                       "Sharing control bar | Contoso | conta@contoso.com | Microsoft Teams"):
+            w = self._amostra_1a1(titulo, ["Calling controls", "Stop sharing", "Bruno Reis"])
+            self.assertIsNone(w.stop(), titulo)
+
+    def test_one_on_one_peer(self):
+        self.assertEqual(one_on_one_peer("Bruno Reis", ["Hold"]), "Bruno Reis")
+        self.assertIsNone(one_on_one_peer("Bruno Reis, Carla Dias", ["Hold"]))  # ad hoc em grupo
+        self.assertIsNone(one_on_one_peer("", ["Hold"]))   # janela de call sem nome
+        self.assertIsNone(one_on_one_peer(None, ["Hold"]))
+        self.assertIsNone(one_on_one_peer("Bruno Reis", ["Leave", "Mute mic"]))
 
     def test_sem_janela_de_call_nao_le_nada(self):
         class FakeUia:

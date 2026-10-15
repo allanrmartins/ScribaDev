@@ -10,6 +10,8 @@ A janela da call expõe isso na árvore de acessibilidade (ver uia_win), em ingl
   painel People:   "Fulano, Muted" / "Fulano External unfamiliar, Unmuted"
   quem fala:       "Fulano is speaking" (visto com a vista compacta aberta)
   perfil:          "Profile picture of Fulano." (avatar da janela principal)
+  ligação 1:1:     só o nome do outro lado no título + botões "Hold"/"Transfer"
+                   (sem bloco de vídeo nem estado de mudo - 2026-10-15)
 Teams em outro idioma não casa nada: sem sugestão, o fluxo de sempre.
 
 Privacidade: os nomes ficam só no meta.json local da gravação; o scriba.log recebe
@@ -41,9 +43,11 @@ _PROFILE = re.compile(r"^Profile picture of (?P<name>.+?)\.?$")
 _EXTERNAL = re.compile(r"\s+External(?: unfamiliar)?$")
 _BOT = re.compile(r"notetaker|\bbot\b", re.IGNORECASE)
 _RANK = {"muted": 0, "open": 1, "speaking": 2}
+# Botões que só a ligação 1:1 tem (ausentes em reunião e em call ad hoc em grupo).
+_ONE_ON_ONE_CONTROLS = frozenset({"Hold", "Transfer", "Consult"})
 
 # Onde os sinais moram na janela da call (ControlType do UI Automation).
-_CONTROL_TYPES = (50011, 50024, 50026)  # MenuItem, TreeItem, Group
+_CONTROL_TYPES = (50000, 50011, 50024, 50026, 50031)  # Button, MenuItem, TreeItem, Group, SplitButton
 
 
 def _person(raw: str) -> str:
@@ -70,6 +74,21 @@ def parse(text: str) -> tuple[str, str] | None:
     return None
 
 
+def one_on_one_peer(call_name: str | None, texts: list[str]) -> str | None:
+    """A outra pessoa de uma ligação 1:1, ou None se a janela não é de ligação 1:1.
+
+    Na 1:1 o Teams não desenha bloco de vídeo nem painel do outro lado, sem sinal
+    de mudo/fala: o nome dele só aparece no título da janela. Os botões de ligação
+    (Hold/Transfer/Consult) separam a 1:1 de uma reunião cujo título também é um
+    nome só. Call ad hoc em grupo lista os nomes com vírgula e tem blocos de vídeo.
+    """
+    if not call_name or "," in call_name:
+        return None
+    if not _ONE_ON_ONE_CONTROLS.intersection(texts):
+        return None
+    return call_name
+
+
 def parse_total(text: str) -> int | None:
     """Total do cabeçalho do painel People ("In this meeting, 56 total")."""
     m = _TOTAL.match((text or "").strip())
@@ -94,10 +113,12 @@ class RosterTracker:
         self._speaking: set[str] = set()
         self._last: float | None = None
 
-    def feed(self, texts: list[str], now: float) -> None:
+    def feed(self, texts: list[str], now: float, peers: tuple[str, ...] = ()) -> None:
+        """`peers`: gente na call sem sinal de mudo (o outro lado da ligação 1:1) -
+        conta como mic aberto, porque numa conversa a dois o outro lado fala."""
         step = 0.0 if self._last is None else min(max(now - self._last, 0.0), _MAX_STEP)
         self._last = now
-        state: dict[str, str] = {}
+        state: dict[str, str] = {name: "open" for name in peers}
         for t in texts:
             total = parse_total(t)
             if total is not None:
@@ -195,12 +216,13 @@ class RosterWatch:
 
     def _sample(self, uia_win, wintitles, is_call_window) -> None:
         wins = wintitles.windows({"ms-teams.exe"})
-        calls = [h for h, t in wins if is_call_window(t)]
+        calls = [(h, t) for h, t in wins if is_call_window(t)]
         if not calls:
             return
         if self.tracker.self_name is None:
+            call_hwnds = {h for h, _ in calls}
             for h, t in wins:
-                if h in calls:
+                if h in call_hwnds:
                     continue
                 for n in uia_win.names_under(h, "idna-me-control-avatar-trigger", self._stop):
                     name = parse_profile(n)
@@ -208,15 +230,22 @@ class RosterWatch:
                         with self._lock:
                             self.tracker.self_name = name
                         break
+        from .detector import _teams_call_name
+
         texts: list[str] = []
-        for h in calls:
-            texts += uia_win.descendant_names(h, set(_CONTROL_TYPES), self._stop)
+        peers: set[str] = set()
+        for h, t in calls:
+            names = uia_win.descendant_names(h, set(_CONTROL_TYPES), self._stop)
+            texts += names
+            peer = one_on_one_peer(_teams_call_name(t), names)
+            if peer:
+                peers.add(peer)
         if self._stop.is_set():
             return
         with self._lock:
             self._reads += 1
             self._most_texts = max(self._most_texts, len(texts))
-            self.tracker.feed(texts, time.monotonic())
+            self.tracker.feed(texts, time.monotonic(), tuple(sorted(peers)))
 
 
 def debug_loop() -> int:
