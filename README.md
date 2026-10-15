@@ -201,6 +201,7 @@ Na primeira execução, o **Assistente de perfil** abre sozinho: você descreve 
 | `scribadev summarize <pasta>` | (re)gera o resumo e o notas.md |
 | `scribadev process <pasta>` | tudo de uma vez: transcreve + resume + exporta |
 | `scribadev detect` | debug: mostra as transições de detecção em tempo real |
+| `scribadev teams` | debug: mostra ao vivo quem abriu o microfone na call do Teams (a sugestão do nº de vozes no fim da call) |
 | `scribadev wizard` | assistente de perfil: gera o prompt.md e as hotwords da sua profissão |
 | `scribadev autostart on\|off` | atalho na pasta Inicializar do Windows |
 | `scribadev shortcut` | (re)cria os atalhos na Área de Trabalho e no menu Iniciar |
@@ -363,6 +364,9 @@ Suporte a partir da **v1.4.0** (macOS 14.2+, Apple Silicon), contribuição do [
 - O **áudio nunca sai da sua máquina** — gravação e transcrição são 100% locais.
 - Com `[summary] enabled = true`, o **texto** da transcrição é enviado à Anthropic via Claude Code (a mesma conta/assinatura que você já usa). Desabilite para um fluxo 100% offline.
 - Gravações e transcrições ficam em `C:\temp\scribadev\gravacoes` (configurável), fora de pastas sincronizadas — e são **apagadas automaticamente** após o prazo de retenção (padrão 30 dias; `0` mantém para sempre); config e logs em `%LOCALAPPDATA%\ScribaDev`. Só o `.md` final vai para `%LOCALAPPDATA%\ScribaDev\Notas`.
+- No **Teams desktop** (Windows), durante a call o ScribaDev lê a janela da reunião pela acessibilidade do Windows para saber **quem abriu o microfone** e sugerir esse número de vozes no fim da call.
+  Só leitura, só a janela da call; os nomes ficam no `meta.json` local da gravação e nunca vão para o log.
+  Desligue com `[detection] teams_participants = false`.
 
 ## Aviso legal
 

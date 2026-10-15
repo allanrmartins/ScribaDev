@@ -75,6 +75,22 @@ def voice_label_state(folder) -> str:
     return "pending" if (has_unresolved and not any_labeled) else "done"
 
 
+def teams_speakers_text(names: list[str] | None, max_names: int = 6) -> str:
+    """Linha que diz de onde veio o número sugerido (quem abriu o mic no Teams).
+
+    Sem a origem à vista, um número pronto parece certeza - e travar a diarização
+    no número errado piora a separação de vozes."""
+    if names is None:
+        return ""
+    if not names:
+        return "No Teams, ninguém além de você abriu o microfone nesta call."
+    shown = ", ".join(names[:max_names])
+    if len(names) > max_names:
+        shown += f" e mais {len(names) - max_names}"
+    quem = "pessoa abriu" if len(names) == 1 else "pessoas abriram"
+    return f"No Teams, {len(names)} {quem} o microfone nesta call: {shown}."
+
+
 def _center_on_screen(win: QWidget, div_y: int = 3) -> None:
     win.adjustSize()
     scr = win.screen().availableGeometry() if win.screen() else None
@@ -91,7 +107,7 @@ class AskNumSpeakers(QWidget):
     """Janela "Quantas vozes?" — chama on_result(int|None) EXATAMENTE uma vez."""
 
     def __init__(self, on_result: Callable[[int | None], None], last_value: int | None = None,
-                 timeout_seconds: int = 90):
+                 timeout_seconds: int = 90, teams_speakers: list[str] | None = None):
         super().__init__()
         self._on_result = on_result
         self._done = False
@@ -111,6 +127,14 @@ class AskNumSpeakers(QWidget):
                      "participantes na transcrição.")
         sub.setProperty("role", "muted"); sub.setWordWrap(True); sub.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
         lay.addWidget(sub)
+
+        origem = teams_speakers_text(teams_speakers)
+        if origem:
+            src = QLabel(origem); src.setWordWrap(True)
+            src.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
+            lay.addWidget(src)
+        if teams_speakers:
+            last_value = len(teams_speakers)
 
         self._entry = QLineEdit(str(last_value) if last_value and last_value >= 1 else "")
         self._entry.setPlaceholderText("ex.: 3")
@@ -195,9 +219,10 @@ class AskNumSpeakers(QWidget):
 
 
 def ask_num_speakers(on_result: Callable[[int | None], None], last_value: int | None = None,
-                     timeout_seconds: int = 90) -> AskNumSpeakers:
+                     timeout_seconds: int = 90,
+                     teams_speakers: list[str] | None = None) -> AskNumSpeakers:
     """Abre a janela (não-bloqueante) e devolve a instância (o chamador guarda a ref)."""
-    win = AskNumSpeakers(on_result, last_value, timeout_seconds)
+    win = AskNumSpeakers(on_result, last_value, timeout_seconds, teams_speakers)
     win.show()
     return win
 

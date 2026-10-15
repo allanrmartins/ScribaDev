@@ -215,6 +215,8 @@ class Scrubber:
             self.add(meta.get(key), kind)
         for p in meta.get("participants") or ():
             self.add(p.get("name") if isinstance(p, dict) else p, "pessoa")
+        for p in meta.get("teams_speakers") or ():  # quem abriu o mic no Teams (teamsroster)
+            self.add(p, "pessoa")
 
     def _load_db(self, path, queries) -> None:
         path = Path(path)
