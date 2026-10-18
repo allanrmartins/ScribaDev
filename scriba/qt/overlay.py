@@ -338,7 +338,7 @@ class RecordingPill(QWidget):
     # -- participantes (#13) -------------------------------------------------
 
     def reset_speakers(self, suggested: int) -> None:
-        """Nova gravação: sugere o último valor (cinza) até o usuário ajustar/confirmar."""
+        """Nova gravação: sugere `suggested` (cinza) até o usuário ajustar/confirmar."""
         self._spk = max(1, int(suggested) if suggested else 1)
         self._spk_committed = False
         self.update()

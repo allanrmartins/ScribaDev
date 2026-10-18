@@ -397,14 +397,11 @@ class ScribaApp:
         def done(n: int | None) -> None:
             if n is not None:
                 self._save_num_speakers(folder, n)
-                util.update_state(last_num_speakers=int(n))
             self.jobs.put(folder)
 
         try:
-            last = util.read_state().get("last_num_speakers")
             ask_num_speakers(
                 done,
-                last_value=last if isinstance(last, int) else None,
                 timeout_seconds=int(self.cfg.diarization.ask_speakers_timeout or 0),
                 teams_speakers=self._meta_teams_speakers(folder),
             )
@@ -475,7 +472,6 @@ class ScribaApp:
             rec = self.rec
         if rec is not None:
             self._save_num_speakers(rec.folder, n)
-            util.update_state(last_num_speakers=int(n))
 
     # ------------------------------------------------------------- janelas --
 
@@ -866,7 +862,7 @@ class ScribaApp:
             return
         pill = self._ensure_pill()
         pill.set_mode("recording")
-        pill.reset_speakers(util.read_state().get("last_num_speakers") or 0)  # #13: sugere o último
+        pill.reset_speakers(1)  # #13: sugere 1 (o caso mais comum), não o nº da call anterior
         pill.show()
         self._tick_pill()
 

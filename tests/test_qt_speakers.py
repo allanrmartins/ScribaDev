@@ -35,10 +35,22 @@ class SpeakersTests(unittest.TestCase):
         from scriba.qt.speakers_ui import AskNumSpeakers
 
         got = []
-        w = AskNumSpeakers(got.append, last_value=None, timeout_seconds=0)
+        w = AskNumSpeakers(got.append, timeout_seconds=0)
         w._entry.setText("3")
         w._confirm()
         self.assertEqual(got, [3])
+
+    def test_ask_sugere_1_sem_teams_e_a_contagem_com_teams(self):
+        # sem o Teams, o nº da call anterior (ex.: 5) só atrapalhava; o caso comum é 1
+        from scriba.qt.speakers_ui import AskNumSpeakers
+
+        w = AskNumSpeakers(lambda _v: None, timeout_seconds=0)
+        self.assertEqual(w._entry.text(), "1")
+        self.assertEqual(w._confirm_btn.text(), "Confirmar 1")
+        w._finish(None)
+        w = AskNumSpeakers(lambda _v: None, timeout_seconds=0, teams_speakers=["Ana", "Bruno"])
+        self.assertEqual(w._entry.text(), "2")
+        w._finish(None)
 
     def test_ask_nao_sei_e_zero(self):
         from scriba.qt.speakers_ui import AskNumSpeakers

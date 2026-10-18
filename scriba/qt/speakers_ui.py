@@ -106,8 +106,8 @@ def _center_on_screen(win: QWidget, div_y: int = 3) -> None:
 class AskNumSpeakers(QWidget):
     """Janela "Quantas vozes?" — chama on_result(int|None) EXATAMENTE uma vez."""
 
-    def __init__(self, on_result: Callable[[int | None], None], last_value: int | None = None,
-                 timeout_seconds: int = 90, teams_speakers: list[str] | None = None):
+    def __init__(self, on_result: Callable[[int | None], None], timeout_seconds: int = 90,
+                 teams_speakers: list[str] | None = None):
         super().__init__()
         self._on_result = on_result
         self._done = False
@@ -133,10 +133,9 @@ class AskNumSpeakers(QWidget):
             src = QLabel(origem); src.setWordWrap(True)
             src.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
             lay.addWidget(src)
-        if teams_speakers:
-            last_value = len(teams_speakers)
-
-        self._entry = QLineEdit(str(last_value) if last_value and last_value >= 1 else "")
+        # sugestão: quantos o Teams viu abrir o mic; sem isso, 1 (o caso mais comum é
+        # uma pessoa só além de você - mais fácil de confirmar que o nº da call anterior)
+        self._entry = QLineEdit(str(len(teams_speakers) if teams_speakers else 1))
         self._entry.setPlaceholderText("ex.: 3")
         self._entry.setValidator(QRegularExpressionValidator(QRegularExpression(r"\d{0,3}")))
         self._entry.setAlignment(Qt.AlignCenter)
@@ -218,11 +217,10 @@ class AskNumSpeakers(QWidget):
         self._entry.selectAll()
 
 
-def ask_num_speakers(on_result: Callable[[int | None], None], last_value: int | None = None,
-                     timeout_seconds: int = 90,
+def ask_num_speakers(on_result: Callable[[int | None], None], timeout_seconds: int = 90,
                      teams_speakers: list[str] | None = None) -> AskNumSpeakers:
     """Abre a janela (não-bloqueante) e devolve a instância (o chamador guarda a ref)."""
-    win = AskNumSpeakers(on_result, last_value, timeout_seconds, teams_speakers)
+    win = AskNumSpeakers(on_result, timeout_seconds, teams_speakers)
     win.show()
     return win
 
@@ -410,7 +408,7 @@ def main() -> int:
         "Ana": {"auto": True}, "Participante 2": {}, "Participante 3": {},
     }), encoding="utf-8")
 
-    ask = ask_num_speakers(lambda n: log.info("num_speakers = %r", n), last_value=2, timeout_seconds=30)  # noqa: F841
+    ask = ask_num_speakers(lambda n: log.info("num_speakers = %r", n), timeout_seconds=30)  # noqa: F841
     dlg = label_speakers_dialog(folder, on_saved=lambda: log.info("rotulado"),  # noqa: F841
                                 guesses={"Participante 2": "Bruno"})
     return app.exec()
