@@ -11,14 +11,16 @@ description: >-
 
 # Consultar a base de reuniões do ScribaDev
 
-O ScribaDev grava e transcreve reuniões e mantém um índice de busca local em `%LOCALAPPDATA%\ScribaDev\index.db`.
+O ScribaDev grava e transcreve reuniões e mantém um índice de busca local em `%LOCALAPPDATA%\ScribaDev\index.db` no Windows e em `~/Library/Application Support/ScribaDev/index.db` no macOS.
 O índice é derivado das pastas de gravação (fonte da verdade: `meta.json` + `notas.md` de cada reunião) e cobre título, cliente, participantes, resumo E transcrição completa (FTS5).
 Tudo é local da máquina de quem roda: cada contribuidor consulta as próprias reuniões.
 
 ## Como invocar a CLI
 
-1. Preferir o comando `scribadev` (a instalação padrão via `setup.ps1` o coloca no PATH).
-2. Se não estiver no PATH, usar o Python do venv da instalação: `& "$env:LOCALAPPDATA\ScribaDev\venv\Scripts\python.exe" -m scriba.cli <comando>`.
+1. Preferir o comando `scribadev` (a instalação padrão via `setup.ps1` no Windows ou `setup.sh` no macOS o coloca no PATH).
+2. Se não estiver no PATH, usar o executável do venv da instalação:
+   - Windows (PowerShell): `& "$env:LOCALAPPDATA\ScribaDev\venv\Scripts\python.exe" -m scriba.cli <comando>`.
+   - macOS: `"$HOME/Library/Application Support/ScribaDev/venv/bin/scribadev" <comando>`.
 3. Último recurso (checkout do repo sem instalação): `python -m scriba.cli <comando>` a partir da raiz do repo (os comandos `search`/`show`/`reindex` só usam stdlib).
 
 Se `search` devolver `[]` e a pessoa tem reuniões gravadas, rodar `scribadev reindex` uma vez e buscar de novo.
