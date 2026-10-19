@@ -35,6 +35,11 @@ dependencies = [
     # do make_transcriber; sem ele o local cai no faster-whisper CPU normalmente
     "mlx-whisper ; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "faster-whisper==1.2.1",
+    # PyAV 19 (2026-09) removeu o `metadata_errors` do av.open, que o decode_audio do
+    # faster-whisper 1.2.1 ainda passa: TypeError em toda decodificação (no Windows a
+    # transcrição inteira; no mac, o recorte de fala do vadcut). Tirar o teto quando
+    # um faster-whisper novo deixar de passar o argumento (teste em test_vadcut.py).
+    "av>=11,<19",
     "ctranslate2~=4.8",
     # pystray/Pillow saíram em 2026-08 (#104): a bandeja é QSystemTrayIcon desde o
     # corte para Qt (#53) e nada mais importava os dois em runtime (o pystray, LGPL,

@@ -104,6 +104,26 @@ class ConcatTests(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_NUMPY and _HAS_FW, "faster_whisper/numpy não instalados")
+class LoadAudioTests(unittest.TestCase):
+    def test_decodifica_wav_pelo_pyav(self):
+        """O decode_audio do faster-whisper passa `metadata_errors` ao av.open, que o
+        PyAV 19 removeu: o VAD caía no áudio inteiro (mac) e a transcrição do
+        faster-whisper quebrava (Windows). Falha aqui = combinação incompatível."""
+        import tempfile
+        import wave
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "mudo.wav"
+            with wave.open(str(path), "wb") as w:
+                w.setnchannels(2)
+                w.setsampwidth(2)
+                w.setframerate(48000)
+                w.writeframes(b"\x00\x00" * 2 * 48000)  # 1 s estéreo a 48 kHz
+            audio = vadcut.load_audio(path)
+        self.assertAlmostEqual(len(audio), SR, delta=SR // 100)
+
+
+@unittest.skipUnless(_HAS_NUMPY and _HAS_FW, "faster_whisper/numpy não instalados")
 class SileroTests(unittest.TestCase):
     def test_silencio_nao_tem_fala(self):
         """O caso que dispara a alucinação: 30 s mudos. O Silero real não acha fala
