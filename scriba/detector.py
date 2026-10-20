@@ -440,6 +440,28 @@ def _teams_call_name(raw: str) -> str | None:
     return None
 
 
+# Janelas do Teams do Mac que não são de call nem trazem nome (medido em 2026-10-20).
+_TEAMS_MAC_NAO_CALL = {"window", "microsoft teams", "microsoft teams notification"}
+
+
+def _teams_call_name_mac(raw: str) -> str | None:
+    """Mesmo contrato de `_teams_call_name`, no formato do Teams do macOS.
+
+    Títulos medidos numa call real (2026-10-20, Teams novo no macOS 26):
+      call:      "<assunto da reunião>"   (sem sufixo de organização/conta/app)
+      principal: "Chat | Fulano"          ("<seção> | <contexto>")
+      auxiliar:  "Window"
+    A janela da call é a única com UM segmento só que não é genérico. A principal
+    sempre traz " | ": lê-la como nome gravava o chat aberto na ata (#217 no Mac).
+    """
+    t = re.sub(r"^\(\d+\)\s*", "", (raw or "").strip())
+    if not t or " | " in t or t.casefold() in _TEAMS_MAC_NAO_CALL:
+        return None
+    if _is_aux_window(t):
+        return ""
+    return "" if t.casefold() in _TITLE_GENERIC else t
+
+
 def _is_teams_call_window(raw: str) -> bool:
     """O título é de uma janela que só existe durante uma call do Teams (ms-teams.exe)?"""
     return _teams_call_name(raw) is not None
@@ -466,9 +488,10 @@ def _teams_call_title(titles: list[str]) -> str | None:
     calendário): ler o título dela fazia o nome da reunião mudar a cada clique no
     Teams, com aviso de "possível nova call" no log.
     """
+    parse = _teams_call_name_mac if sys.platform == "darwin" else _teams_call_name
     found = None
     for t in titles:
-        name = _teams_call_name(t)
+        name = parse(t)
         if name:
             return name
         if name is not None:
@@ -500,7 +523,12 @@ def capture_meeting_title(cfg: Detection) -> str:
             # vira "" e o título estável preenche o meta depois). Cair na janela
             # principal aqui gravava o chat aberto como nome da reunião.
             return call
-        for exes in ({"ms-teams.exe", "teams.exe"}, {"zoom.exe"}):
+        # no Mac o Teams é UM app só (ms-teams e teams caem no mesmo bundle): sem a
+        # janela da call, qualquer janela dele é a principal - o chat aberto não é nome
+        fallback = [{"zoom.exe"}]
+        if sys.platform != "darwin":
+            fallback.insert(0, {"ms-teams.exe", "teams.exe"})
+        for exes in fallback:
             for t in window_titles(exes):
                 name = _clean_meeting_title(t)
                 if name:
