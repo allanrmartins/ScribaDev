@@ -148,6 +148,7 @@ def main(argv: list[str] | None = None) -> int:
     p_probe = sub.add_parser("audioprobe", help=argparse.SUPPRESS)
     p_probe.add_argument("mode", nargs="?", default="", choices=("", "list"))
     sub.add_parser("detect", help="modo debug: imprime as transições de estado da detecção")
+    sub.add_parser("teams", help="modo debug: mostra ao vivo quem abriu o mic na call do Teams")
     sub.add_parser("wizard", help="assistente de perfil: gera o prompt.md e as hotwords")
 
     p_doc = sub.add_parser("doctor", help="diagnóstico do ambiente")
@@ -258,6 +259,10 @@ def main(argv: list[str] | None = None) -> int:
         from .detector import debug_loop
 
         return debug_loop()
+    if args.cmd == "teams":
+        from .teamsroster import debug_loop as teams_debug_loop
+
+        return teams_debug_loop()
     if args.cmd == "wizard":
         return cmd_wizard()
     if args.cmd == "record":

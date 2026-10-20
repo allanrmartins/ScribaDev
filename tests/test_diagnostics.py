@@ -62,6 +62,16 @@ class ScrubberTests(unittest.TestCase):
         self.assertEqual(out.count("[cliente-1]"), 2)   # MESMO token, correlacionável
         self.assertIn("[pessoa-1]", out)
 
+    def test_quem_abriu_o_mic_no_teams_sai_ofuscado(self):
+        """teams_speakers (teamsroster) guarda nomes completos no meta.json - que vai
+        no zip da reunião com falha."""
+        s = dg.Scrubber()
+        s.add_meta({"teams_speakers": ["Ana Lima", "Bruno Reis"]})
+        out = s.scrub('"teams_speakers": ["Ana Lima", "Bruno Reis"]')
+        self.assertNotIn("Ana Lima", out)
+        self.assertNotIn("Bruno Reis", out)
+        self.assertIn("[pessoa-", out)
+
     def test_valor_longo_ganha_do_curto_e_borda_de_palavra(self):
         s = dg.Scrubber()
         s.add("Coruripe", "cliente")

@@ -88,6 +88,10 @@ split_gap_seconds = 3
 min_call_seconds = 30    # gravações mais curtas são descartadas (pré-join, teste de mic)
 max_call_hours = 4       # parada de segurança
 auto_record = true       # gravar sozinho ao detectar a call; desligado, a pílula espera o ⏺
+# Teams desktop (por ora só no Windows): durante a call, lê a janela da reunião
+# (acessibilidade) p/ saber quem abriu o microfone e sugerir esse nº ao fim da call.
+# Só leitura; os nomes ficam no meta.json local da gravação.
+teams_participants = true
 
 [audio]
 mic_device = ""          # vazio = {_H["padrao_mic"]}; senão, parte do nome (veja: scribadev devices)
@@ -200,6 +204,7 @@ class Detection:
     min_call_seconds: float = 30.0
     max_call_hours: float = 4.0
     auto_record: bool = True
+    teams_participants: bool = True
 
 
 @dataclass(frozen=True)
@@ -415,6 +420,7 @@ split_gap_seconds = {_n(d.split_gap_seconds)}    # gap p/ dividir calls consecut
 min_call_seconds = {_n(d.min_call_seconds)}    # gravações mais curtas são descartadas (pré-join, teste de mic)
 max_call_hours = {_n(d.max_call_hours)}       # parada de segurança
 auto_record = {_b(d.auto_record)}       # gravar sozinho ao detectar a call; desligado, a pílula espera o ⏺
+teams_participants = {_b(d.teams_participants)}   # Teams: quem abriu o mic na call sugere o nº de vozes
 
 [audio]
 mic_device = {_s(a.mic_device)}          # vazio = {_H["padrao_mic"]} (veja: scribadev devices)
