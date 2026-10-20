@@ -174,6 +174,19 @@ class PerfilEPesquisaTests(_AppDir):
         self.assertEqual(out, "OData, Kubernetes, VL02N, React, Fiori")
         self.assertTrue(complete.call_args.kwargs["web_search"])
 
+    def test_perfil_sap_pede_transacoes_e_tabelas_de_varios_modulos(self):
+        """No SAP, transação não é de um perfil só: o dev ABAP usa VL02N e J1B1N no dia a
+        dia. Medido: sem a orientação, "Dev ABAP" voltava com 0 transações funcionais."""
+        from scriba import ai, promptgen
+
+        enviados = []
+        with mock.patch.object(ai, "complete", side_effect=lambda s, p, **k: enviados.append(p) or "A, B, C, D, E"):
+            promptgen.suggest_jargon(promptgen.Profile(base="abap", stack="ABAP"))
+            promptgen.suggest_jargon(promptgen.Profile(base="dev", stack="React"))
+        self.assertIn("VL02N", enviados[0])
+        self.assertIn("J1B1N", enviados[0])
+        self.assertNotIn("CONTEXTO SAP", enviados[1])
+
     def test_assistente_pesquisa_jargao_antes_do_prompt(self):
         from scriba import promptgen
         from scriba.qt import wizard_ui

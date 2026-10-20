@@ -405,6 +405,20 @@ sem aspas e sem nenhum comentário.
 """
 
 
+# No SAP, transação não é de um perfil só: o desenvolvedor ABAP usa VL02N, J1B1N, MIGO no
+# dia a dia tanto quanto o funcional. Sem isto, um perfil "Dev ABAP" voltava só com
+# ferramentas de desenvolvimento (SE38, SE80, STMS) - medido: 0 transações funcionais.
+_JARGON_SAP_EXTRA = """
+CONTEXTO SAP: qualquer papel no SAP (desenvolvedor, funcional, gerente) usa no dia a dia \
+transações e tabelas de VÁRIOS módulos, não só as do próprio papel. Monte a lista misturando: \
+(1) ferramentas e objetos do papel; (2) TRANSAÇÕES funcionais mais usadas dos módulos \
+citados na área - ou, se nenhum módulo for citado, de SD, MM, FI e da localização Brasil \
+(nota fiscal: J1B1N, J1BNFE etc.) -, ex.: VA01, VL02N, VF01, MIGO, ME21N, FB60; (3) as \
+TABELAS centrais desses módulos, ex.: VBAK, LIKP, VBRK, MARA, EKKO, BKPF, J_1BNFDOC. \
+Cerca de metade da lista deve ser (2) e (3).
+"""
+
+
 def suggest_jargon(profile: Profile, timeout: int = 240) -> str | None:
     """Termos de jargão sugeridos por IA para o perfil ("a, b, c…"), ou None.
 
@@ -416,6 +430,8 @@ def suggest_jargon(profile: Profile, timeout: int = 240) -> str | None:
         area=profile.area or "(não informada)",
         stack=profile.stack or "(não informada)",
     )
+    if is_sap(profile):
+        payload += _JARGON_SAP_EXTRA
     from . import ai
 
     # busca na web pelo claude do próprio usuário (#227); sem web, a IA responde do
