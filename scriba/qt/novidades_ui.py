@@ -69,15 +69,13 @@ class NovidadesWindow(QWidget):
         col = QVBoxLayout(corpo)
         col.setContentsMargins(0, 0, 6, 0)
         col.setSpacing(12)
-        for i, versao in enumerate(versoes):
-            if len(versoes) > 1:
-                if i:
-                    col.addSpacing(8)
-                col.addWidget(_label(f"Versão {versao['versao']}", size=11, bold=True))
-            for d in versao["destaques"]:
-                col.addWidget(self._cartao(d, t))
-            self._lista(col, "Melhorias", versao["melhorias"], "muted")
-            self._lista(col, "Correções", versao["correcoes"], "muted")
+        # várias versões de uma vez: os DESTAQUES de todas vêm primeiro (o recurso grande de
+        # uma versão anterior não pode ficar enterrado sob as melhorias miúdas da mais nova),
+        # depois melhorias e correções de todas, da mais nova para a mais antiga
+        for d in (d for v in versoes for d in v["destaques"]):
+            col.addWidget(self._cartao(d, t))
+        self._lista(col, "Melhorias", [m for v in versoes for m in v["melhorias"]], "muted")
+        self._lista(col, "Correções", [c for v in versoes for c in v["correcoes"]], "muted")
         col.addStretch(1)
         scroll.setWidget(corpo)
         root.addWidget(scroll, 1)
