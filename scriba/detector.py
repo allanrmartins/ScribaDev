@@ -500,7 +500,11 @@ def capture_meeting_title(cfg: Detection) -> str:
             # vira "" e o título estável preenche o meta depois). Cair na janela
             # principal aqui gravava o chat aberto como nome da reunião.
             return call
-        for exes in ({"ms-teams.exe", "teams.exe"}, {"zoom.exe"}):
+        # Teams novo (ms-teams.exe) sem janela de call: a principal só traz o chat
+        # aberto ou "<organização> | <conta>". A call 1:1/ad hoc abre o mic segundos
+        # antes da janela existir, e o meta ficava com o nome da organização para
+        # sempre (o título estável não sobrescreve). Sem título, ele preenche depois.
+        for exes in ({"teams.exe"}, {"zoom.exe"}):
             for t in window_titles(exes):
                 name = _clean_meeting_title(t)
                 if name:

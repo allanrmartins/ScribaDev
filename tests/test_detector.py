@@ -127,6 +127,19 @@ class TeamsCallWindowTests(unittest.TestCase):
         with mock.patch("scriba.wintitles.window_titles", fake_titles):
             self.assertEqual(detector.capture_meeting_title(Detection(browsers="")), "Daily do projeto")
 
+    def test_sem_janela_de_call_o_titulo_fica_vazio(self):
+        """Call 1:1/ad hoc: o mic abre ~3 s antes da janela da call existir. Ler a
+        principal gravava "Contoso — conta" no meta, e o título estável (que acha o
+        nome certo depois) não sobrescreve título já gravado."""
+        for principal in (self._SUF.removeprefix(" | "), "Chat | Pessoa A" + self._SUF, "Microsoft Teams"):
+            janelas = {"ms-teams.exe": [principal]}
+
+            def fake_titles(exes, *a, **k):
+                return [t for e in exes for t in janelas.get(e, [])]
+
+            with mock.patch("scriba.wintitles.window_titles", fake_titles):
+                self.assertEqual(detector.capture_meeting_title(Detection(browsers="")), "", principal)
+
 
 class MesmaReuniaoPeloTituloTests(unittest.TestCase):
     """#177: em call ad hoc o título do Teams É a lista de participantes, então
