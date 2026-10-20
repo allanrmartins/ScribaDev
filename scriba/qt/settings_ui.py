@@ -296,9 +296,15 @@ class SettingsWindow(QWidget):
         outer = QVBoxLayout(page); outer.setContentsMargins(0, 0, 0, 0)
         scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QScrollArea.NoFrame)
         inner = QWidget()
-        form = QFormLayout(inner)
+        # formulário + mola: janela maior que o conteúdo deixa a sobra no FIM da aba, em
+        # vez de esticar linhas e grupos (buracos sob as dicas ao maximizar)
+        col = QVBoxLayout(inner); col.setContentsMargins(0, 0, 0, 0)
+        holder = QWidget()
+        form = QFormLayout(holder)
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         form.setLabelAlignment(Qt.AlignLeft)
+        col.addWidget(holder)
+        col.addStretch(1)
         scroll.setWidget(inner)
         outer.addWidget(scroll)
         self._tabs.addTab(page, title)
@@ -428,7 +434,8 @@ class SettingsWindow(QWidget):
         self._check(dz, "Ativar diarização", "diarization", "enabled")
         self._text(dz, "Token Hugging Face", "diarization", "hf_token", secret=True,
                    placeholder="hf_… (cole seu token)",
-                   tooltip="Gere em hf.co/settings/tokens (grátis). Cifrado com DPAPI ao salvar.")
+                   tooltip="Gere em hf.co/settings/tokens (grátis). Guardado cifrado ao salvar "
+                           "(Keychain no macOS, DPAPI no Windows).")
         self._int(dz, "Máx. de vozes", "diarization", "max_speakers", 0, 50, hint="0 = automático")
         self._int(dz, "Mín. de vozes", "diarization", "min_speakers", 0, 50, hint="0 = automático")
         self._check(dz, "Perguntar nº de participantes ao fim", "diarization", "ask_speakers")
@@ -451,9 +458,9 @@ class SettingsWindow(QWidget):
 
     def _build_transcription_tab(self) -> None:
         f = self._tab("Transcrição")
-        self._choice(f, "Motor", "whisper", "engine", _STT_ENGINES)
-        self._list_choice(f, "Modelo", "whisper", "model", _WHISPER_MODELS)
-        self._choice(f, "Dispositivo", "whisper", "device", _WHISPER_DEVICES)
+        motor = self._choice(f, "Motor", "whisper", "engine", _STT_ENGINES)
+        modelo = self._list_choice(f, "Modelo", "whisper", "model", _WHISPER_MODELS)
+        dispositivo = self._choice(f, "Dispositivo", "whisper", "device", _WHISPER_DEVICES)
         self._choice(f, "Idioma", "whisper", "language", _WHISPER_LANGS)
         self._bigtext(f, "Vocabulário (hotwords)", "whisper", "hotwords", rows=4,
                       placeholder="Termos, siglas e nomes próprios que aparecem nas suas reuniões e "
@@ -471,6 +478,7 @@ class SettingsWindow(QWidget):
                     hint="transcreve só os trechos com fala; desligar só para depurar")
         self._int(av, "VAD silêncio mín. (ms)", "whisper", "vad_min_silence_ms", 0, 5000, hint="0 = padrão")
         self._float(av, "VAD limiar (0..1)", "whisper", "vad_threshold", 0.0, 1.0, 0.05, hint="0 = padrão")
+        ap = None
         if sys.platform == "darwin":
             ap = self._group(f, "Apple (só com motor = Apple)")
             self._check(ap, "Transcrever ao vivo", "whisper", "live",
@@ -479,8 +487,26 @@ class SettingsWindow(QWidget):
         self._text(cl, "Endpoint", "whisper", "cloud_base_url", placeholder="vazio = Groq",
                    tooltip="URL do serviço compatível com OpenAI. Vazio usa a Groq.")
         self._text(cl, "Chave da API", "whisper", "cloud_api_key", secret=True,
-                   placeholder="cole a chave da API", tooltip="Cifrada com DPAPI ao salvar.")
+                   placeholder="cole a chave da API",
+                   tooltip="Guardada cifrada ao salvar (Keychain no macOS, DPAPI no Windows).")
         self._text(cl, "Modelo (nuvem)", "whisper", "cloud_model", placeholder="ex.: whisper-large-v3")
+        # cada controle só vale com o seu motor: os outros ficam esmaecidos (o Whisper,
+        # com a Apple escolhida, segue como reserva se o motor da Apple falhar)
+        whisper = [modelo, dispositivo, av.parentWidget()]
+        por_motor = {"apple": [ap.parentWidget()] if ap else [], "cloud": [cl.parentWidget()]}
+
+        def _sync_motor(_=None) -> None:
+            engine = motor.currentData() or "local"
+            for w in whisper:
+                w.setEnabled(engine in ("local", "mlx"))
+                w.setToolTip("Reserva: usado só se o motor da Apple falhar."
+                             if engine == "apple" else "")
+            for nome, ws in por_motor.items():
+                for w in ws:
+                    w.setEnabled(engine == nome)
+
+        motor.currentIndexChanged.connect(_sync_motor)
+        _sync_motor()
 
     def _build_ia_tab(self) -> None:
         f = self._tab("IA")
@@ -497,7 +523,8 @@ class SettingsWindow(QWidget):
         self._text(op, "Endpoint", "summary", "openai_base_url", placeholder="inclua /v1 no final",
                    tooltip="URL base do provedor compatível com OpenAI, terminando em /v1.")
         self._text(op, "Chave da API", "summary", "openai_api_key", secret=True,
-                   placeholder="cole a chave da API", tooltip="Cifrada com DPAPI ao salvar.")
+                   placeholder="cole a chave da API",
+                   tooltip="Guardada cifrada ao salvar (Keychain no macOS, DPAPI no Windows).")
 
         pr = self._group(f, "Prompt do resumo (prompt.md)")
         actions = QWidget(); ar = QHBoxLayout(actions); ar.setContentsMargins(0, 0, 0, 0)

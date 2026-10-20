@@ -61,6 +61,36 @@ class SettingsTests(unittest.TestCase):
                 return w, kind
         raise KeyError((section, attr))
 
+    def test_controles_de_cada_motor_so_ativos_com_ele(self):
+        """Motor Apple: Modelo/Dispositivo/Avançado (Whisper) esmaecidos como reserva e
+        o grupo Nuvem também; trocar p/ o Whisper reativa e esmaece Apple/Nuvem."""
+        from scriba.qt.settings_ui import SettingsWindow
+
+        win = SettingsWindow(self._app())
+        motor, _ = self._field(win, "whisper", "engine")
+        modelo = next(w for w, s, a, k, c in win._fields if (s, a) == ("whisper", "model"))
+        batch, _ = self._field(win, "whisper", "batch_size")
+        nuvem, _ = self._field(win, "whisper", "cloud_base_url")
+
+        def escolhe(valor):
+            motor.setCurrentIndex(motor.findData(valor))
+
+        escolhe("cloud")
+        self.assertFalse(modelo.isEnabled())
+        self.assertTrue(nuvem.isEnabled())
+        escolhe("local")
+        self.assertTrue(modelo.isEnabled())
+        self.assertTrue(batch.isEnabled())
+        self.assertFalse(nuvem.isEnabled())
+        if motor.findData("apple") >= 0:   # só no Mac
+            escolhe("apple")
+            self.assertFalse(modelo.isEnabled())
+            self.assertFalse(batch.isEnabled())
+            self.assertIn("Reserva", modelo.toolTip())
+            ao_vivo, _ = self._field(win, "whisper", "live")
+            self.assertTrue(ao_vivo.isEnabled())
+        win.close()
+
     def test_timesheet_tab_dormente_mostra_destaque(self):
         """#126: módulo dormente = cartão de ativação em destaque e aba marcada."""
         from scriba.qt.settings_ui import SettingsWindow
