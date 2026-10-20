@@ -72,7 +72,9 @@ _pkg_datas = [
 import sys as _sys
 
 _sys.path.insert(0, str(REPO / "installer"))
+_sys.path.insert(0, SPECPATH)
 import speclib  # noqa: E402
+from bundle_info import PERMISSION_PLIST  # noqa: E402  (frases de uso, fonte única)
 
 # stdlib INTEIRA no bundle (#187) — mesmo racional do spec Windows: os addons
 # (torch/pyannote, fora da análise estática) importam stdlib em runtime, e
@@ -154,13 +156,6 @@ app = BUNDLE(
         # PyInstaller (o info_plist do .spec é mesclado por cima) e não depende da
         # ordem dos EXEs no COLLECT.
         "LSBackgroundOnly": False,
-        # CATapDescription (process tap do áudio do sistema) é macOS 14.2+
-        "LSMinimumSystemVersion": "14.2",
-        "NSMicrophoneUsageDescription":
-            "O ScribaDev grava o seu microfone durante as reuniões para "
-            "transcrever o que você disse. O áudio nunca sai do seu Mac.",
-        "NSAudioCaptureUsageDescription":
-            "O ScribaDev captura o áudio das reuniões (Teams, Zoom, navegador) "
-            "para transcrever o que os participantes disseram. Nada sai do seu Mac.",
+        **PERMISSION_PLIST,   # frases de uso + macOS mínimo (bundle_info.py)
     },
 )

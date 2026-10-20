@@ -614,6 +614,38 @@ class TestAutostartMac(unittest.TestCase):
                 self.assertEqual(autostart.set_autostart(True), 1)
         self.assertIn("setup.sh", p.call_args[0][0])
 
+    def test_rodando_de_um_app_abre_o_app_e_nao_o_python(self):
+        """Lançador do modo código-fonte (SCRIBADEV_APP_BUNDLE) ou app do DMG
+        (congelado): o LaunchAgent abre o .APP via LaunchServices - aberto pelo
+        executável cru, o macOS negava o áudio do sistema em silêncio."""
+        import os
+        import plistlib
+        import tempfile
+        from pathlib import Path
+
+        from scriba import autostart
+
+        with tempfile.TemporaryDirectory() as tmp:
+            app = Path(tmp) / "ScribaDev Dev.app"
+            (app / "Contents" / "MacOS").mkdir(parents=True)
+            plist = Path(tmp) / "Library" / "LaunchAgents" / "dev.scribadev.tray.plist"
+            esperado = ["/usr/bin/open", "-a", str(app), "--args", "--minimized"]
+            with _darwin(), mock.patch.object(Path, "home", return_value=Path(tmp)), \
+                    mock.patch("builtins.print"):
+                with mock.patch.dict(os.environ, {"SCRIBADEV_APP_BUNDLE": str(app)}):
+                    self.assertEqual(autostart.set_autostart(True), 0)
+                self.assertEqual(plistlib.loads(plist.read_bytes())["ProgramArguments"], esperado)
+                # congelado: o .app sai do caminho do executável
+                exe = app / "Contents" / "MacOS" / "ScribaDevApp"
+                exe.touch()
+                with mock.patch.dict(os.environ, {}, clear=False) as env, \
+                        mock.patch.object(sys, "frozen", True, create=True), \
+                        mock.patch.object(sys, "executable", str(exe)):
+                    env.pop("SCRIBADEV_APP_BUNDLE", None)
+                    self.assertEqual(autostart.set_autostart(True), 0)
+                self.assertEqual(plistlib.loads(plist.read_bytes())["ProgramArguments"],
+                                 ["/usr/bin/open", "-a", str(app.resolve()), "--args", "--minimized"])
+
     def test_label_por_so(self):
         from scriba import autostart
 

@@ -84,6 +84,9 @@ Rodando de terminal/venv, o macOS atribui os pedidos ao app do TERMINAL — e ne
    e nome da reunião na ata. Sem ela, Teams/Zoom desktop funcionam 100%.
 
 A solução definitiva (prompts atribuídos ao "ScribaDev") é o bundle `.app` — M8.
+No modo código-fonte ela já existe: o `setup.sh` cria o **ScribaDev Dev.app** (`installer/macos/make_source_app.py`), um lançador com as mesmas frases de uso do app do DMG (`installer/macos/bundle_info.py`) que só faz `exec` do Python do venv.
+Abrindo por ele, os pedidos saem em nome do "ScribaDev" e nada disso precisa ser feito à mão para o terminal.
+O "Iniciar com o sistema" também abre o `.app` (`open -a`), e não o Python cru.
 
 ## Setup num Mac (resumo; `./setup.sh` faz tudo)
 
@@ -91,7 +94,7 @@ A solução definitiva (prompts atribuídos ao "ScribaDev") é o bundle `.app` �
 brew install ffmpeg python@3.12   # 3.12–3.14; validado com 3.14
 ./setup.sh                        # venv em ~/Library/Application Support/ScribaDev/venv
 scribadev doctor                  # deve terminar "Tudo pronto"
-scribadev run                     # bandeja; autostart: scribadev autostart on
+open -a "ScribaDev Dev"            # bandeja (o lançador criado pelo setup.sh); autostart pelo menu
 ```
 
 Gotcha de config: o 1º boot gera o config.toml completo — EDITE a chave na seção
