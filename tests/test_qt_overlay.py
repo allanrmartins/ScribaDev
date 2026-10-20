@@ -55,6 +55,24 @@ class PosAndFormatTests(unittest.TestCase):
         self.assertEqual(cy, g.y() + 20)
         self.assertNotEqual((cx, cy), overlay._default_pos())
 
+    def test_default_pos_no_mac_e_no_topo_e_nos_outros_na_base(self):
+        """macOS: centro-superior, logo abaixo da barra de menus. Windows/Linux:
+        centro-inferior, como sempre foi (#23)."""
+        from unittest import mock
+
+        from PySide6.QtWidgets import QApplication
+
+        from scriba.qt import overlay
+
+        QApplication.instance() or QApplication([])
+        g = QApplication.primaryScreen().availableGeometry()
+        centro = g.x() + (g.width() - overlay._W) // 2
+        with mock.patch.object(sys, "platform", "darwin"):
+            self.assertEqual(overlay._default_pos(), (centro, g.y() + overlay._EDGE_GAP_Y))
+        with mock.patch.object(sys, "platform", "win32"):
+            self.assertEqual(overlay._default_pos(),
+                             (centro, g.y() + g.height() - overlay._H - overlay._EDGE_GAP_Y))
+
 
 @unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")
 class PillSmokeTests(unittest.TestCase):
@@ -86,6 +104,22 @@ class PillSmokeTests(unittest.TestCase):
         ):
             setup()
             pill.repaint()  # exercita cada ramo do paintEvent
+
+    def test_pilula_nao_some_quando_outro_app_esta_na_frente(self):
+        """macOS: sem o atributo, o NSPanel do Qt.Tool se esconde ao desativar o
+        app - e durante a call o app ativo é o Teams (a pílula nunca aparecia)."""
+        from PySide6.QtCore import Qt
+
+        self.assertTrue(self._pill().testAttribute(Qt.WA_MacAlwaysShowToolWindow))
+
+    def test_show_assenta_na_posicao_pedida(self):
+        """macOS: o 1º show de janela sem moldura nascia 20 px acima do pedido; o
+        show() reaplica a posição depois de a janela nativa existir."""
+        pill = self._pill()
+        pill._last_pos = (120, 140)
+        pill.show()
+        self.assertEqual((pill.x(), pill.y()), (120, 140))
+        pill.hide()
 
     def test_restyle_theme_repinta_sem_erro(self):
         pill = self._pill()

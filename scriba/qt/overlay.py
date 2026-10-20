@@ -16,7 +16,7 @@ import logging
 import time
 from typing import Callable
 
-from PySide6.QtCore import QRect, QRectF, Qt, QTimer
+from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QApplication, QWidget
 
@@ -27,7 +27,7 @@ log = logging.getLogger("scriba.qt.overlay")
 
 _W, _H, _R = 304, 44, 21          # dimensões da pílula (idênticas ao tkinter)
 _CY = _H // 2
-_EDGE_GAP_Y = 8                    # margem da base da tela na posição-padrão
+_EDGE_GAP_Y = 8                    # margem da borda da tela na posição-padrão
 _POS_KEY = "overlay_pos"           # px LÓGICOS do Qt (decisão do #45); a pílula é dona
 
 # Regiões clicáveis (retângulo generoso atrás de cada glifo — trackpad-friendly).
@@ -69,9 +69,16 @@ def _clamp_to_screens(x: int, y: int) -> tuple[int, int]:
 
 
 def _default_pos() -> tuple[int, int]:
-    """Centro-inferior do monitor primário (#23), em coordenadas lógicas."""
+    """Centro-inferior do monitor primário (#23), em coordenadas lógicas. No macOS,
+    centro-SUPERIOR, logo abaixo da barra de menus: é para lá que o olho vai no
+    Mac (no rodapé ela disputava espaço com o Dock e passava despercebida)."""
+    import sys
+
     g = QApplication.primaryScreen().availableGeometry()
-    return g.x() + (g.width() - _W) // 2, g.y() + g.height() - _H - _EDGE_GAP_Y
+    x = g.x() + (g.width() - _W) // 2
+    if sys.platform == "darwin":
+        return x, g.y() + _EDGE_GAP_Y
+    return x, g.y() + g.height() - _H - _EDGE_GAP_Y
 
 
 def _load_pos() -> tuple[int, int] | None:
@@ -137,6 +144,10 @@ class RecordingPill(QWidget):
         self._svg_cache: dict = {}   # (nome, cor) -> QSvgRenderer, p/ os ícones dos controles (#67)
 
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        # macOS: Qt.Tool vira NSPanel com hidesOnDeactivate - a pílula SUMIA sempre
+        # que outro app estava na frente, isto é, a call inteira (o Teams é o app
+        # ativo). Sem isso ela só existia p/ o WindowServer, nunca na tela.
+        self.setAttribute(Qt.WA_MacAlwaysShowToolWindow)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setWindowOpacity(0.96)
         self.setFixedSize(_W, _H)
@@ -437,6 +448,10 @@ class RecordingPill(QWidget):
         self.move(x, y)
         self._shown = True
         super().show()
+        # macOS: o 1º show de janela sem moldura nasce 20 px ACIMA do pedido (e nunca
+        # acima da barra de menus); com a janela nativa já criada, o move acerta
+        if self.pos() != QPoint(x, y):
+            self.move(x, y)
         widgets.raise_without_activation(self)   # nunca rouba o foco (ver _ensure_visible)
         widgets.exclude_from_capture(self)  # reaplica (defensivo)
         self._ensure_visible()
