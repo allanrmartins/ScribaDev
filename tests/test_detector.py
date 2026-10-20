@@ -73,6 +73,12 @@ class TeamsCallWindowTests(unittest.TestCase):
 
     _SUF = " | Contoso | fulano@contoso.com | Microsoft Teams"
 
+    def setUp(self):
+        # formato do Windows: a escolha da regra é pela plataforma (o Mac tem a dele)
+        patcher = mock.patch.object(sys, "platform", "win32")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_janela_da_call_traz_o_nome_da_reuniao(self):
         self.assertEqual(detector._teams_call_name("Daily do projeto" + self._SUF), "Daily do projeto")
         # call ad hoc: o título é a lista de participantes
@@ -126,6 +132,40 @@ class TeamsCallWindowTests(unittest.TestCase):
 
         with mock.patch("scriba.wintitles.window_titles", fake_titles):
             self.assertEqual(detector.capture_meeting_title(Detection(browsers="")), "Daily do projeto")
+
+
+class TeamsCallWindowMacTests(unittest.TestCase):
+    """Formato dos títulos do Teams novo no macOS, medido numa call real (2026-10-20):
+    a call tem só o assunto; a principal é "<seção> | <contexto>"; e há uma "Window"."""
+
+    CALL = "Cliente X - Adequação ao leiaute novo (NT 2026.010) - Dúvidas"
+    PRINCIPAL = "Chat | Pessoa A"
+
+    def setUp(self):
+        patcher = mock.patch.object(sys, "platform", "darwin")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_janela_da_call_e_o_assunto(self):
+        self.assertEqual(detector._teams_call_title([self.PRINCIPAL, self.CALL, "Window"]), self.CALL)
+
+    def test_principal_e_auxiliar_nao_sao_call(self):
+        for raw in (self.PRINCIPAL, "Calendar | Calendar", "Window", "Microsoft Teams", "", "   "):
+            self.assertIsNone(detector._teams_call_name_mac(raw), raw)
+        self.assertIsNone(detector._teams_call_title([self.PRINCIPAL, "Window"]))
+
+    def test_sem_janela_da_call_nao_usa_o_chat_aberto_como_nome(self):
+        """O plano B lia qualquer janela do Teams: no Mac, a principal ("Chat |
+        Pessoa A") virava o nome da reunião - o #217 no Mac."""
+        janelas = {"ms-teams.exe": [self.PRINCIPAL, "Window"], "teams.exe": [self.PRINCIPAL, "Window"]}
+
+        def fake_titles(exes, *a, **k):
+            return [t for e in exes for t in janelas.get(e, [])]
+
+        with mock.patch("scriba.wintitles.window_titles", fake_titles):
+            self.assertEqual(detector.capture_meeting_title(Detection(browsers="")), "")
+            janelas["ms-teams.exe"].append(self.CALL)
+            self.assertEqual(detector.capture_meeting_title(Detection(browsers="")), self.CALL)
 
 
 class MesmaReuniaoPeloTituloTests(unittest.TestCase):
