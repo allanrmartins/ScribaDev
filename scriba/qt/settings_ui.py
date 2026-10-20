@@ -519,6 +519,13 @@ class SettingsWindow(QWidget):
         motor.currentIndexChanged.connect(_sync_motor)
         _sync_motor()
 
+    def select_tab(self, titulo: str) -> None:
+        """Vai para a aba pelo título (o "Experimentar" da tela de novidades, #228)."""
+        for i in range(self._tabs.count()):
+            if self._tabs.tabText(i).startswith(titulo):
+                self._tabs.setCurrentIndex(i)
+                return
+
     def _build_learned_terms(self, form) -> None:
         """Vocabulário que aprende (#227): sugestões tiradas das reuniões (2+ reuniões) p/
         aceitar ou ignorar, e os já aceitos p/ remover. Age na hora (dado à parte do
@@ -1000,6 +1007,7 @@ class SettingsWindow(QWidget):
         lic.setProperty("role", "muted"); lay.addWidget(lic)
 
         upd = QHBoxLayout()
+        upd.addWidget(widgets.ModernButton("O que há de novo", lambda: self.app.show_novidades()))
         upd.addWidget(widgets.ModernButton("Verificar atualizações", self._check_updates_about))
         self._about_update_btn = widgets.ModernButton("Atualizar agora", self._do_update_about, kind="primary")
         self._about_update_btn.setVisible(False)
