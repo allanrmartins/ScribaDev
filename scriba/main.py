@@ -1141,6 +1141,7 @@ class ScribaApp:
             return
         export_path = title = None
         deferred = False
+        sugeridos: list = []
         try:
             done_meta = json.loads(meta_path.read_text(encoding="utf-8"))
             # sucesso fecha o episódio de watchdog (#186): sem o carimbo, uma
@@ -1151,6 +1152,7 @@ class ScribaApp:
             export_path = done_meta.get("export_path")
             title = done_meta.get("title")
             deferred = bool(done_meta.get("diarization_deferred"))
+            sugeridos = done_meta.get("vocab_suggested") or []
             if done_meta.get("diarization_error"):
                 self._warn_diarization_error(folder, done_meta["diarization_error"])
         except Exception:
@@ -1159,6 +1161,11 @@ class ScribaApp:
             log.info("na bateria: %s saiu sem separar vozes - separo ao ligar na tomada", folder.name)
             self._toast("Nota pronta, vozes depois",
                         "Na bateria a separação de vozes fica para quando ligar na tomada.")
+        if sugeridos:
+            # vocabulário que aprende (#227): termos que acabaram de virar sugestão
+            log.info("vocabulário: termos novos para revisar: %s", ", ".join(sugeridos))
+            self._toast("Termos novos para o vocabulário",
+                        f"{', '.join(sugeridos[:5])} - revise em Configurações → Transcrição.")
         if export_path and self.notifier:
             try:
                 self.notifier.notes_ready(Path(export_path))

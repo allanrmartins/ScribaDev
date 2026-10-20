@@ -238,8 +238,9 @@ class Whisper:
     # inventado que chega à ata. False = áudio inteiro ao modelo (só p/ depurar).
     vad_filter: bool = True
     hotwords: str = ""
-    # Corrige na transcrição a grafia dos termos do vocabulário ("S 80" -> SE80) e o "Z"
-    # do SAP; vale p/ qualquer motor, essencial no da Apple (que ignora o vocabulário)
+    # Corrige na transcrição a grafia dos termos do vocabulário ("S 80" -> SE80; e o "Z"
+    # de objeto customizado, se o vocabulário for de SAP); vale p/ qualquer motor,
+    # essencial no da Apple (que ignora o vocabulário)
     vocab_fix: bool = True
     engine: str = "local"              # local (Whisper) | apple (macOS 26+) | cloud (Groq/OpenAI-compat STT)
     # Só com engine=apple: transcreve DURANTE a call; ao fim só faltam vozes + resumo (#222)

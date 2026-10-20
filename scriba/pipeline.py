@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import time
 from pathlib import Path
@@ -33,13 +34,15 @@ def _fix_vocabulary(turns: list, hotwords: str, meta: dict) -> None:
     certas. Nunca derruba a transcrição: falha aqui só pula a correção."""
     from collections import Counter
 
-    from . import vocab_fix
+    from . import promptgen, vocab_fix, vocab_learn
 
     try:
-        termos = vocab_fix.parse_terms(hotwords)
+        termos = vocab_learn.all_terms(hotwords)   # digitado + aprendidos aceitos (#227)
+        perfil = promptgen.load_profile()           # regra do "Z" só p/ perfil SAP
+        sap = promptgen.is_sap(perfil) if perfil is not None else None
         feitas: Counter = Counter()
         for t in turns:
-            t.text, trocas = vocab_fix.corrigir(t.text, termos)
+            t.text, trocas = vocab_fix.corrigir(t.text, termos, sap=sap)
             feitas.update((c.original.strip(".,;:!?"), c.termo) for c in trocas)
     except Exception as e:
         print(f"AVISO: correção do vocabulário falhou ({e}); transcrição sem correção")
@@ -88,7 +91,13 @@ def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: Transc
     _set_status(meta, meta_path, "transcribing")
 
     cfg = load()
-    tr = transcriber or make_transcriber(cfg.whisper, force_cpu=force_cpu)
+    if transcriber is None:
+        # o Whisper também recebe os termos aprendidos e aceitos (#227) no prompt
+        from . import vocab_learn
+
+        whisper = dataclasses.replace(cfg.whisper, hotwords=vocab_learn.whisper_hotwords(cfg.whisper.hotwords))
+        transcriber = make_transcriber(whisper, force_cpu=force_cpu)
+    tr = transcriber
     device = tr.ensure_loaded()
     if (cfg.whisper.engine or "local").strip().lower() == "cloud":
         print(f"transcrição na nuvem: {cfg.whisper.cloud_model}")

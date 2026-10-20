@@ -109,6 +109,7 @@ def _sobra_exata(janela, alvos) -> bool:
     return any(cand == a for _, a in alvos)
 
 
+# Só p/ quem usa SAP (vocabulário com SAP/ABAP - ver `usa_sap`):
 # "Z" isolado no SAP = objeto customizado (tabela Z, programa Z, tela Z). Os motores já
 # escrevem "Z" (medido: Whisper e Apple), mas "z" minúsculo solto e "zê"/"zé" logo
 # depois de um objeto também aparecem. "Zé" sozinho é nome de gente: só nesse contexto.
@@ -118,6 +119,12 @@ _OBJETOS_SAP = (r"tabelas?|programas?|programinhas?|telas?|transaç(?:ão|ões)|
                 r"elementos?|domínios?|bapis?|badis?|enhancements?|exits?|fórmulas?")
 _Z_DEPOIS_DE_OBJETO = re.compile(rf"(?i)\b({_OBJETOS_SAP})\s+(?:zê|zé|zeta|z)(?![\w-])")
 _Z_SOLTO = re.compile(r"(?<![\w-])z(?![\w-])")
+
+
+def usa_sap(termos: list[str]) -> bool:
+    """O vocabulário é de quem trabalha com SAP? A regra do "Z" só faz sentido aí: nem
+    todo usuário é de SAP, e para os outros um "z" solto é só uma letra."""
+    return any(_norm(t) in ("sap", "abap") for t in termos)
 
 
 def _corrigir_z(texto: str) -> tuple[str, list[Correcao]]:
@@ -137,11 +144,15 @@ def _corrigir_z(texto: str) -> tuple[str, list[Correcao]]:
     return texto, feitas
 
 
-def corrigir(texto: str, termos: list[str]) -> tuple[str, list[Correcao]]:
-    """Texto com os termos corrigidos + o que foi trocado (p/ o log da reunião)."""
+def corrigir(texto: str, termos: list[str], sap: bool | None = None) -> tuple[str, list[Correcao]]:
+    """Texto com os termos corrigidos + o que foi trocado (p/ o log da reunião).
+    `sap`: o perfil do usuário é de SAP (liga a regra do "Z"); None = deduz pelo
+    vocabulário (quem nunca rodou o assistente de perfil)."""
     if not texto:
         return texto, []
-    texto, feitas_z = _corrigir_z(texto)
+    if sap is None:
+        sap = usa_sap(termos)
+    texto, feitas_z = _corrigir_z(texto) if sap else (texto, [])
     if not termos:
         return texto, feitas_z
     alvos = {_norm(t): t for t in termos if _norm(t)}

@@ -47,6 +47,7 @@ def complete(
     hidden_window: bool = False,
     model: str | None = None,
     cli_wait: float = 0,
+    web_search: bool = False,
 ) -> str | None:
     """Roda o provider de IA configurado sobre (system_prompt, user_payload).
 
@@ -57,6 +58,8 @@ def complete(
     `cli_wait`: segundos que o provider claude espera a CLI reaparecer (ausente
     ou no meio de uma atualização) antes de desistir. Só o resumo, que roda em
     segundo plano, usa; quem tem usuário esperando (chat, wizard) fica no 0.
+    `web_search`: libera SÓ a busca na web (provider claude) - o assistente de perfil
+    pesquisa o jargão da área do usuário (#227). Os providers HTTP ignoram.
     """
     import dataclasses
 
@@ -76,7 +79,7 @@ def complete(
     if provider != "claude":
         print(f"IA: provider '{provider}' desconhecido — usando o claude CLI")
     return _claude_cli(cfg, system_prompt, user_payload, timeout=timeout, cwd=cwd,
-                       hidden_window=hidden_window, cli_wait=cli_wait)
+                       hidden_window=hidden_window, cli_wait=cli_wait, web_search=web_search)
 
 
 # ----------------------------------------------------------- provider: claude --
@@ -105,7 +108,8 @@ def _mid_update(text: str) -> bool:
     return "cannot find module" in (text or "").lower() or util.claude_command() is None
 
 
-def _claude_cli(cfg, system_prompt, user_payload, *, timeout, cwd, hidden_window, cli_wait=0):
+def _claude_cli(cfg, system_prompt, user_payload, *, timeout, cwd, hidden_window, cli_wait=0,
+                web_search=False):
     global last_error
     cmd = _wait_for_cli(cli_wait)
     if cmd is None:
@@ -116,7 +120,8 @@ def _claude_cli(cfg, system_prompt, user_payload, *, timeout, cwd, hidden_window
         "-p",
         # 1 linha no argv: o shim .cmd do npm + cmd.exe truncam args com quebras
         "--system-prompt", " ".join(system_prompt.split()),
-        "--tools", "",
+        # sem ferramentas; com web_search, só a busca (e pré-aprovada: -p não pergunta)
+        *(("--tools", "WebSearch", "--allowedTools", "WebSearch") if web_search else ("--tools", "")),
         "--no-session-persistence",
         "--model", cfg.model,
         "--output-format", "text",

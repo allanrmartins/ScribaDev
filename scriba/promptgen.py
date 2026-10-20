@@ -391,6 +391,9 @@ trabalho do perfil abaixo — siglas, ferramentas, transações, artefatos, mét
 típicas da área. Os termos vão guiar um reconhecedor de voz (Whisper) durante a transcrição \
 das reuniões: prefira palavras e expressões curtas, como são ditas em voz alta, mantendo \
 nomes técnicos no idioma original e o resto em português do Brasil.
+Se puder, PESQUISE NA WEB os termos e siglas mais usados na stack/área informada e confirme \
+a GRAFIA OFICIAL de cada um (maiúsculas, números: ex. VL02N, OData, Kubernetes) - priorize \
+o que é específico da stack informada, não termos genéricos de qualquer profissão.
 
 PERFIL:
 - Profissão/papel: {role}
@@ -402,7 +405,21 @@ sem aspas e sem nenhum comentário.
 """
 
 
-def suggest_jargon(profile: Profile, timeout: int = 120) -> str | None:
+# No SAP, transação não é de um perfil só: o desenvolvedor ABAP usa VL02N, J1B1N, MIGO no
+# dia a dia tanto quanto o funcional. Sem isto, um perfil "Dev ABAP" voltava só com
+# ferramentas de desenvolvimento (SE38, SE80, STMS) - medido: 0 transações funcionais.
+_JARGON_SAP_EXTRA = """
+CONTEXTO SAP: qualquer papel no SAP (desenvolvedor, funcional, gerente) usa no dia a dia \
+transações e tabelas de VÁRIOS módulos, não só as do próprio papel. Monte a lista misturando: \
+(1) ferramentas e objetos do papel; (2) TRANSAÇÕES funcionais mais usadas dos módulos \
+citados na área - ou, se nenhum módulo for citado, de SD, MM, FI e da localização Brasil \
+(nota fiscal: J1B1N, J1BNFE etc.) -, ex.: VA01, VL02N, VF01, MIGO, ME21N, FB60; (3) as \
+TABELAS centrais desses módulos, ex.: VBAK, LIKP, VBRK, MARA, EKKO, BKPF, J_1BNFDOC. \
+Cerca de metade da lista deve ser (2) e (3).
+"""
+
+
+def suggest_jargon(profile: Profile, timeout: int = 240) -> str | None:
     """Termos de jargão sugeridos por IA para o perfil ("a, b, c…"), ou None.
 
     O usuário raramente sabe listar o próprio vocabulário de cabeça — a IA conhece
@@ -413,10 +430,18 @@ def suggest_jargon(profile: Profile, timeout: int = 120) -> str | None:
         area=profile.area or "(não informada)",
         stack=profile.stack or "(não informada)",
     )
-    out = _call_claude(payload, timeout)
+    if is_sap(profile):
+        payload += _JARGON_SAP_EXTRA
+    from . import ai
+
+    # busca na web pelo claude do próprio usuário (#227); sem web, a IA responde do
+    # conhecimento dela, como antes
+    out = ai.complete(_META_SYSTEM, payload, timeout=timeout, cwd=util.APP_DIR,
+                      hidden_window=True, web_search=True)
     if not out:
         return None
-    # tolera quebras de linha/numeração que escaparem; dedup preservando a ordem
+    # tolera quebras de linha/numeração/linha de fontes que escaparem; dedup preservando a ordem
+    out = out.split("Sources:")[0]
     terms: list[str] = []
     for raw in re.split(r"[,\n;]+", out):
         term = re.sub(r"^\s*[\d\-•*.]+\s*", "", raw).strip().strip('"').strip()
@@ -502,6 +527,15 @@ def wizard_done() -> bool:
 
 def mark_wizard_done() -> None:
     _mark_state_flag("wizard_done")
+
+
+def is_sap(profile: Profile | None) -> bool:
+    """O perfil é do mundo SAP? Liga as regras próprias do SAP (o "Z" de objeto
+    customizado) - nem todo usuário é de SAP (#227)."""
+    if profile is None:
+        return False
+    texto = f"{profile.area} {profile.stack} {profile.jargon} {profile.role}".lower()
+    return profile.base == "abap" or bool(re.search(r"\b(sap|abap|s/4hana)\b", texto))
 
 
 def save_profile(profile: Profile) -> None:

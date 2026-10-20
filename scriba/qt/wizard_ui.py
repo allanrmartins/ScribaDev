@@ -56,7 +56,7 @@ def _ai_fail_msg(generic: str) -> str:
 
 
 class WizardWindow(QWidget):
-    _prompt_ready = Signal(object)   # (prompt, hotwords) | None
+    _prompt_ready = Signal(object)   # (prompt, hotwords, jargão pesquisado) | None
     _jargon_ready = Signal(object)   # str | None
 
     def __init__(self, app=None, on_applied=None, standalone=False):
@@ -219,16 +219,21 @@ class WizardWindow(QWidget):
         profile = self._profile()
         self._set_busy(True)
         self._ai_btn.setText("Gerando…")
-        self._status.setText("Gerando com IA… isso leva por volta de um minuto.")
-        threading.Thread(target=lambda: self._prompt_ready.emit(_safe(promptgen.ai_prompt, profile)),
+        sem_jargao = not profile.jargon and bool(profile.stack or profile.area or profile.role)
+        self._status.setText("Pesquisando o jargão da sua área e gerando com IA… leva uns minutos."
+                             if sem_jargao else "Gerando com IA… isso leva por volta de um minuto.")
+        threading.Thread(target=lambda: self._prompt_ready.emit(_safe(_ai_with_jargon, profile, sem_jargao)),
                          daemon=True, name="wizard-ai").start()
 
     def _on_prompt(self, outcome) -> None:
         self._set_busy(False)
         self._ai_btn.setText("Gerar com IA (recomendado)")
         if outcome:
-            prompt, hotwords = outcome
-            self._show_result(prompt, hotwords, "gerado por IA e validado")
+            prompt, hotwords, jargao = outcome
+            if jargao and not self._jargon.toPlainText().strip():
+                self._jargon.setPlainText(jargao)   # o usuário revisa o que a pesquisa trouxe
+            self._show_result(prompt, hotwords, "gerado por IA e validado" +
+                              (", com o jargão pesquisado na web" if jargao else ""))
         else:
             self._status.setText(_ai_fail_msg(
                 'Não consegui gerar com IA agora (provedor indisponível ou resposta '
@@ -337,6 +342,20 @@ class WizardWindow(QWidget):
             return
         event.ignore()
         self.hide()
+
+
+def _ai_with_jargon(profile, pesquisar_jargao: bool):
+    """(prompt, hotwords, jargão pesquisado|"") ou None. Sem jargão informado, o Claude
+    do usuário pesquisa na web os termos da stack/área (#227) e eles entram no perfil
+    antes do prompt: o vocabulário inicial já nasce com a grafia oficial; as reuniões
+    refinam depois (termos aprendidos)."""
+    import dataclasses
+
+    jargao = (promptgen.suggest_jargon(profile) or "") if pesquisar_jargao else ""
+    if jargao:
+        profile = dataclasses.replace(profile, jargon=jargao)
+    out = promptgen.ai_prompt(profile)
+    return (*out, jargao) if out else None
 
 
 def _safe(fn, *a):
