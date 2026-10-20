@@ -3,14 +3,20 @@
 O app roda do venv editável (fechar e abrir já pega o código novo do repo, como no
 Windows), mas precisa nascer dentro de um .app: é o bundle que carrega as frases de
 uso do Info.plist, e rodando cru do venv o macOS nega o áudio do sistema EM
-SILÊNCIO (a call grava só a sua voz). O executável do bundle é um script que só
-faz `exec` do Python do venv - o processo segue atribuído ao bundle.
+SILÊNCIO (a call grava só a sua voz).
+
+O executável do bundle HOSPEDA o Python do venv (source_launcher.c, embedding) em vez
+de chamar o python3: chamando, o processo se reexecuta como Python.app e a
+Acessibilidade (títulos das janelas = nome da reunião) passava a ser checada contra o
+Python, não contra o ScribaDev. Sem compilador (Command Line Tools), cai para um
+script que chama o python3 - microfone e áudio do sistema funcionam, os títulos não.
 
 Uso: python3 installer/macos/make_source_app.py <venv> [destino.app]
 """
 
 from __future__ import annotations
 
+import json
 import os
 import plistlib
 import shutil
@@ -27,7 +33,7 @@ from bundle_info import PERMISSION_PLIST  # noqa: E402
 APP_NAME = "ScribaDev Dev.app"
 BUNDLE_ID = "dev.scribadev.source"   # != do DMG (dev.scribadev): permissões separadas
 
-_LAUNCHER = """#!/bin/bash
+_SCRIPT_FALLBACK = """#!/bin/bash
 # Lançador do ScribaDev em modo código-fonte (gerado por installer/macos/make_source_app.py).
 # SCRIBADEV_APP_BUNDLE: o autostart abre ESTE .app (via `open -a`), não o Python cru.
 export SCRIBADEV_APP_BUNDLE="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -55,6 +61,30 @@ def _icns(out: Path) -> None:
         subprocess.run(["iconutil", "-c", "icns", str(iconset), "-o", str(out)], check=True)
 
 
+def _compile_launcher(venv: Path, out: Path) -> bool:
+    """Compila o source_launcher.c contra o Python do venv. False sem compilador."""
+    import shlex
+
+    python = venv / "bin" / "python3"
+    try:
+        info = subprocess.run(
+            [str(python), "-c", "import sys, sysconfig; print(sys.base_prefix); "
+                                "print(sysconfig.get_config_var('LDVERSION'))"],
+            check=True, capture_output=True, text=True).stdout.split("\n")
+        cfg = Path(info[0]) / "bin" / f"python{info[1]}-config"
+        flags = subprocess.run([str(cfg), "--embed", "--cflags", "--ldflags"],
+                               check=True, capture_output=True, text=True).stdout
+        subprocess.run(["xcrun", "clang", "-O2", "-o", str(out), str(HERE / "source_launcher.c"),
+                        f"-DVENV_PYTHON={json.dumps(str(python))}", *shlex.split(flags)],
+                       check=True, capture_output=True, text=True)
+        return True
+    except (OSError, IndexError, subprocess.CalledProcessError) as e:
+        detalhe = getattr(e, "stderr", "") or str(e)
+        print(f"AVISO: lançador nativo não compilou ({detalhe.strip()[:200]}); usando script - "
+              "os títulos das janelas (nome da reunião) não vão funcionar")
+        return False
+
+
 def build(venv: Path, dest: Path) -> Path:
     python = venv / "bin" / "python3"
     if not python.exists():
@@ -66,8 +96,9 @@ def build(venv: Path, dest: Path) -> Path:
     macos.mkdir(parents=True)
     res.mkdir()
     exe = macos / "ScribaDev"
-    exe.write_text(_LAUNCHER.format(python=_sh_quote(str(python))), encoding="utf-8")
-    exe.chmod(0o755)
+    if not _compile_launcher(venv, exe):
+        exe.write_text(_SCRIPT_FALLBACK.format(python=_sh_quote(str(python))), encoding="utf-8")
+        exe.chmod(0o755)
     _icns(res / "scriba.icns")
     info = {
         "CFBundleIdentifier": BUNDLE_ID,
