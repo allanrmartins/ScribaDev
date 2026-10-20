@@ -34,13 +34,15 @@ def _fix_vocabulary(turns: list, hotwords: str, meta: dict) -> None:
     certas. Nunca derruba a transcrição: falha aqui só pula a correção."""
     from collections import Counter
 
-    from . import vocab_fix, vocab_learn
+    from . import promptgen, vocab_fix, vocab_learn
 
     try:
         termos = vocab_learn.all_terms(hotwords)   # digitado + aprendidos aceitos (#227)
+        perfil = promptgen.load_profile()           # regra do "Z" só p/ perfil SAP
+        sap = promptgen.is_sap(perfil) if perfil is not None else None
         feitas: Counter = Counter()
         for t in turns:
-            t.text, trocas = vocab_fix.corrigir(t.text, termos)
+            t.text, trocas = vocab_fix.corrigir(t.text, termos, sap=sap)
             feitas.update((c.original.strip(".,;:!?"), c.termo) for c in trocas)
     except Exception as e:
         print(f"AVISO: correção do vocabulário falhou ({e}); transcrição sem correção")

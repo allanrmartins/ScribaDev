@@ -144,11 +144,15 @@ def _corrigir_z(texto: str) -> tuple[str, list[Correcao]]:
     return texto, feitas
 
 
-def corrigir(texto: str, termos: list[str]) -> tuple[str, list[Correcao]]:
-    """Texto com os termos corrigidos + o que foi trocado (p/ o log da reunião)."""
+def corrigir(texto: str, termos: list[str], sap: bool | None = None) -> tuple[str, list[Correcao]]:
+    """Texto com os termos corrigidos + o que foi trocado (p/ o log da reunião).
+    `sap`: o perfil do usuário é de SAP (liga a regra do "Z"); None = deduz pelo
+    vocabulário (quem nunca rodou o assistente de perfil)."""
     if not texto:
         return texto, []
-    texto, feitas_z = _corrigir_z(texto) if usa_sap(termos) else (texto, [])
+    if sap is None:
+        sap = usa_sap(termos)
+    texto, feitas_z = _corrigir_z(texto) if sap else (texto, [])
     if not termos:
         return texto, feitas_z
     alvos = {_norm(t): t for t in termos if _norm(t)}

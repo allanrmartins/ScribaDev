@@ -125,6 +125,74 @@ class ResumoAprendeTests(_AppDir):
         self.assertNotIn("vocab_suggested", json.loads((pastas[0] / "meta.json").read_text(encoding="utf-8")))
 
 
+class PerfilEPesquisaTests(_AppDir):
+    """Fase 3 (#227): o perfil do assistente decide o modo SAP e o jargão inicial é
+    pesquisado na web pelo Claude do próprio usuário."""
+
+    def test_perfil_sap(self):
+        from scriba.promptgen import Profile, is_sap
+
+        self.assertTrue(is_sap(Profile(base="abap")))
+        self.assertTrue(is_sap(Profile(base="functional", area="SAP SD")))
+        self.assertTrue(is_sap(Profile(base="dev", stack="ABAP, Fiori")))
+        self.assertFalse(is_sap(Profile(base="dev", stack="Python, React, Kubernetes")))
+        self.assertFalse(is_sap(Profile(base="pm", area="saúde")))   # "sap" só como palavra
+        self.assertFalse(is_sap(None))
+
+    def test_regra_do_z_segue_o_perfil(self):
+        from scriba import vocab_fix
+
+        self.assertEqual(vocab_fix.corrigir("a tabela zê", ["Python"], sap=True)[0], "a tabela Z")
+        self.assertEqual(vocab_fix.corrigir("a tabela zê", ["ABAP"], sap=False)[0], "a tabela zê")
+
+    def test_claude_com_busca_libera_so_a_web(self):
+        from scriba import ai, config
+
+        cfg = config.load().summary
+        chamadas = []
+
+        def fake_run(cmd, **k):
+            chamadas.append(cmd)
+            return mock.Mock(returncode=0, stdout="ok", stderr="")
+
+        with mock.patch.object(ai, "_wait_for_cli", return_value=["claude"]), \
+                mock.patch("subprocess.run", side_effect=fake_run):
+            ai._claude_cli(cfg, "sys", "oi", timeout=5, cwd=None, hidden_window=True, web_search=True)
+            ai._claude_cli(cfg, "sys", "oi", timeout=5, cwd=None, hidden_window=True)
+        com, sem = chamadas
+        self.assertEqual(com[com.index("--tools") + 1], "WebSearch")
+        self.assertEqual(com[com.index("--allowedTools") + 1], "WebSearch")
+        self.assertEqual(sem[sem.index("--tools") + 1], "")
+        self.assertNotIn("--allowedTools", sem)
+
+    def test_jargao_pesquisado_sem_a_linha_de_fontes(self):
+        from scriba import ai, promptgen
+
+        resposta = "OData, Kubernetes, VL02N, React, Fiori\n\nSources:\n- [x](https://exemplo)"
+        with mock.patch.object(ai, "complete", return_value=resposta) as complete:
+            out = promptgen.suggest_jargon(promptgen.Profile(base="dev", stack="React"))
+        self.assertEqual(out, "OData, Kubernetes, VL02N, React, Fiori")
+        self.assertTrue(complete.call_args.kwargs["web_search"])
+
+    def test_assistente_pesquisa_jargao_antes_do_prompt(self):
+        from scriba import promptgen
+        from scriba.qt import wizard_ui
+
+        vistos = []
+
+        def fake_prompt(profile):
+            vistos.append(profile.jargon)
+            return ("PROMPT", "HOT")
+
+        perfil = promptgen.Profile(base="dev", stack="Go, gRPC")
+        with mock.patch.object(promptgen, "suggest_jargon", return_value="gRPC, protobuf, goroutine") as sj, \
+                mock.patch.object(promptgen, "ai_prompt", side_effect=fake_prompt):
+            self.assertEqual(wizard_ui._ai_with_jargon(perfil, True), ("PROMPT", "HOT", "gRPC, protobuf, goroutine"))
+            self.assertEqual(wizard_ui._ai_with_jargon(perfil, False), ("PROMPT", "HOT", ""))
+        sj.assert_called_once()   # com jargão já informado, não pesquisa
+        self.assertEqual(vistos, ["gRPC, protobuf, goroutine", ""])
+
+
 @unittest.skipUnless(__import__("importlib").util.find_spec("PySide6"), "PySide6 ausente")
 class TelaTests(_AppDir):
     def test_adicionar_pela_tela(self):
