@@ -21,6 +21,18 @@ TODOS = (MAC, WIN)
 
 NOVIDADES: list[dict] = [
     {
+        "versao": "1.4.27",
+        "data": "20/10/2026",
+        "destaques": [],
+        "melhorias": [
+            {"texto": "Esta tela: depois de cada atualização o ScribaDev mostra o que mudou e onde "
+                      "experimentar", "so": TODOS},
+            {"texto": "O aviso de versão nova chega só quando ela traz algo para o seu sistema",
+             "so": TODOS},
+        ],
+        "correcoes": [],
+    },
+    {
         "versao": "1.4.26",
         "data": "20/10/2026",
         "destaques": [
