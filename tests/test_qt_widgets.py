@@ -190,8 +190,31 @@ class FocoNoMacTests(unittest.TestCase):
             def winId(self):
                 return 0
 
+            def isMinimized(self):
+                return False
+
         widgets.bring_to_front(FakeWidget())
         self.assertEqual(chamou, ["raise", "activate"])
+
+    def test_bring_to_front_tira_janela_minimizada_do_dock(self):
+        """Janela minimizada no Dock: clicar em "Notas" chamava show()+raise_() e nada
+        aparecia. Agora ela volta - e, se estava maximizada, volta maximizada."""
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QWidget
+
+        from scriba.qt import widgets
+
+        for extra in (Qt.WindowState.WindowNoState, Qt.WindowState.WindowMaximized):
+            w = QWidget()
+            w.show()
+            w.setWindowState(extra | Qt.WindowState.WindowMinimized)
+            self.assertTrue(w.isMinimized())
+            widgets.bring_to_front(w)
+            self.assertFalse(w.isMinimized())
+            self.assertEqual(bool(w.windowState() & Qt.WindowState.WindowMaximized),
+                             extra == Qt.WindowState.WindowMaximized)
+            w.close()
+            w.deleteLater()
 
 
 class _ReprocessApp:

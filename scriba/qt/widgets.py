@@ -195,9 +195,16 @@ def bring_to_front(widget) -> None:
     (QT_MAC_SET_RAISE_PROCESS=0) justamente porque ele também disparava a reboque
     do `show()` da pílula e roubava o foco durante a gravação. Aqui a ativação é
     intencional, então é explícita.
+
+    Janela MINIMIZADA (no Dock/barra de tarefas) volta primeiro: `show()` e `raise_()`
+    não a tiram de lá, e o clique em "Notas" parecia não abrir nada. Só o bit de
+    minimizado sai do estado, então uma janela maximizada volta maximizada.
     """
     import sys
 
+    if widget.isMinimized():
+        widget.setWindowState((widget.windowState() & ~Qt.WindowState.WindowMinimized)
+                              | Qt.WindowState.WindowActive)
     widget.raise_()
     widget.activateWindow()
     if sys.platform != "darwin":
