@@ -114,6 +114,7 @@ class ScribaApp:
         self.settings = None
         self.notes_win = None
         self.action_hub = None   # hub de pendências (#78), instância única
+        self.novidades_win = None  # "O que há de novo" (#228)
         self._voices_missing_toasted = False  # aviso de vozes sem componentes: 1x por sessão
         self.wizard_win = None
         self.log_win = None
@@ -497,16 +498,56 @@ class ScribaApp:
             except Exception:
                 log.exception("refresh da capa pós-processamento falhou")
 
-    def show_settings(self) -> None:
-        """Abre a janela de Configurações (chamável de qualquer thread)."""
-        self.ui(self._open_settings_ui)
+    def show_settings(self, aba: str | None = None) -> None:
+        """Abre a janela de Configurações (chamável de qualquer thread), opcionalmente
+        já numa aba (o "Experimentar" da tela de novidades)."""
+        self.ui(lambda: self._open_settings_ui(aba))
 
-    def _open_settings_ui(self) -> None:
+    def _open_settings_ui(self, aba: str | None = None) -> None:
         if self.settings is None:
             from .qt.settings_ui import SettingsWindow
 
             self.settings = SettingsWindow(self)
+        if aba:
+            self.settings.select_tab(aba)
         self.settings.show()
+
+    # ---- novidades (#228) -------------------------------------------------------
+
+    def show_novidades(self) -> None:
+        """Reabre "O que há de novo" (menu / aba Sobre): as últimas versões, deste SO."""
+        from . import __version__, novidades
+
+        self.ui(lambda: self._open_novidades_ui(novidades.pendentes(__version__, None)[:3]))
+
+    def _open_novidades_ui(self, versoes: list) -> None:
+        if not versoes:
+            return
+        from .qt.novidades_ui import NovidadesWindow
+
+        self.novidades_win = NovidadesWindow(versoes, on_abrir=self.show_settings)
+        self.novidades_win.show()
+
+    def _check_novidades_boot(self) -> None:
+        """1ª abertura depois de um update: mostra o que há de novo desde a última
+        versão vista. Instalação nova não mostra (nada é "novo" para quem chegou agora).
+        Nunca por cima de uma call/gravação: espera e tenta de novo."""
+        from . import __version__, novidades
+
+        estado = util.read_state()
+        vista = estado.get("novidades_vistas")
+        if vista == __version__:
+            return
+        if self.is_recording() or self.call_active:
+            self._after(60_000, self._check_novidades_boot)
+            return
+        util.update_state(novidades_vistas=__version__)
+        if not estado.get("setup_wizard_done") and vista is None:
+            return   # instalação nova: marca como vista e segue
+        versoes = novidades.pendentes(__version__, vista)
+        if versoes:
+            log.info("novidades: mostrando %s", ", ".join(v["versao"] for v in versoes))
+            self._open_novidades_ui(versoes)
 
     def show_notes(self, note_path=None) -> None:
         """Abre a janela de Notas (chamável de qualquer thread). Se `note_path`
@@ -1569,6 +1610,7 @@ class ScribaApp:
         # migração one-time das notas p/ pasta local + índice de busca (#12) encadeado
         self._after(5000, self._migrate_export_dir_boot)
         self._after(9000, self._check_updates_boot)    # aviso de nova versão (#19)
+        self._after(6000, self._check_novidades_boot)  # o que há de novo após update (#228)
         self._after(12000, self._timesheet_boot)       # sugestões + backup diário (#123)
         self._after(15000, self._repair_shortcuts_boot)  # ícone dos atalhos (#192)
         self._after(20000, self._claude_auth_loop)     # login do claude CLI (resumo)

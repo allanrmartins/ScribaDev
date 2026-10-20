@@ -87,6 +87,7 @@ class Tray:
         self._act_timesheet = m.addAction("Apontamento de horas",
                                           lambda: self.app.show_timesheet())
         m.addAction("Log", lambda: self.app.show_log())
+        m.addAction("Novidades", lambda: self.app.show_novidades())
         m.addAction("Configurações", lambda: self.app.show_settings())
         self._theme_menu = self._build_theme_menu()
         m.addMenu(self._theme_menu)

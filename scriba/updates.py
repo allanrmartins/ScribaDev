@@ -103,16 +103,37 @@ def _http_json(url: str, timeout: float):
         return json.loads(r.read().decode("utf-8"))
 
 
+# Campos OPCIONAIS por SO (#228): um release só de Mac sobe só o "version_mac" e quem
+# está no Windows não é avisado. Sem o campo do SO, vale o "version" de sempre - que é
+# também o que as versões antigas do app leem (retrocompatível).
+_SO_KEYS = {"win32": "win", "darwin": "mac"}
+
+
+def _for_this_os(data: dict, platform: str | None = None) -> dict:
+    """O manifesto como ESTE sistema o enxerga: version_<so>/notes_<so> por cima dos
+    campos gerais quando existem e são válidos."""
+    so = _SO_KEYS.get(platform or sys.platform)
+    if not so:
+        return data
+    out = dict(data)
+    if _parse_ver(data.get(f"version_{so}")):
+        out["version"] = data[f"version_{so}"]
+    if data.get(f"notes_{so}"):
+        out["notes"] = data[f"notes_{so}"]
+    return out
+
+
 def latest_info(timeout: float = 4.0) -> dict | None:
-    """Manifesto público de versão: {'version': 'X.Y.Z', 'url': '<download>', 'notes'}.
-    None se indisponível (sem rede) ou malformado. Não levanta. O `?cb=` fura o cache de
-    CDN do raw do Gist (que servia a versão antiga por minutos), então o aviso é imediato."""
+    """Manifesto público de versão: {'version': 'X.Y.Z', 'url': '<download>', 'notes'},
+    já com a versão/notas DESTE sistema (ver `_for_this_os`). None se indisponível (sem
+    rede) ou malformado. Não levanta. O `?cb=` fura o cache de CDN do raw do Gist (que
+    servia a versão antiga por minutos), então o aviso é imediato."""
     import time
 
     try:
         data = _http_json(f"{MANIFEST_URL}?cb={int(time.time())}", timeout)
         if isinstance(data, dict) and _parse_ver(data.get("version")):
-            return data
+            return _for_this_os(data)
     except Exception as e:
         log.debug("manifesto de versão indisponível: %s", e)
     return None
