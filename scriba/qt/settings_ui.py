@@ -457,6 +457,8 @@ class SettingsWindow(QWidget):
                                   "de clientes, produtos e projetos, jargão da sua área.",
                       tooltip="Quanto mais específico do seu dia a dia, melhor a transcrição acerta "
                               "os termos difíceis. Pode escrever em várias linhas.")
+        self._check(f, "Corrigir termos na transcrição", "whisper", "vocab_fix",
+                    hint='acerta a grafia do vocabulário ("S 80" vira SE80) e o "Z" do SAP')
         av = self._group(f, "Avançado")
         self._int(av, "Batch size", "whisper", "batch_size", 0, 64, hint="0 desliga o lote")
         self._int(av, "Beam size", "whisper", "beam_size", 0, 10)
