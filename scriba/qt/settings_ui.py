@@ -550,12 +550,12 @@ class SettingsWindow(QWidget):
         sugestoes = vocab_learn.suggestions()
         for item in sugestoes:
             n = len(item["meetings"])
-            linha(f"<b>{item['term']}</b>  ·  em {n} reuniões",
+            linha(f"<b>{item['term']}</b> · em {n} reuniões",
                   ("Adicionar", muda(item["term"], vocab_learn.ACEITO)),
                   ("Ignorar", muda(item["term"], vocab_learn.RECUSADO)))
         aceitos = vocab_learn.accepted()
         for termo in aceitos:
-            linha(f"{termo}  ·  no vocabulário", ("Remover", muda(termo, vocab_learn.RECUSADO)))
+            linha(f"{termo} · no vocabulário", ("Remover", muda(termo, vocab_learn.RECUSADO)))
         if not sugestoes and not aceitos:
             vazio = QLabel("Os termos técnicos das suas reuniões aparecem aqui quando se repetem "
                            "em 2 ou mais reuniões; você decide quais entram no vocabulário.")
