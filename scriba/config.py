@@ -119,6 +119,7 @@ vad_filter = true
 # a sua área e chutar o jargão errado atrapalha mais que ajuda. Preencha com o seu,
 # ou deixe o "Assistente de perfil…" (Configurações → IA) montar a lista.
 hotwords = ""
+vocab_fix = true                   # corrige a grafia dos termos do vocabulário na transcrição ("S 80" -> SE80)
 {_H["engine"]}
 engine = "local"
 cloud_base_url = ""                # vazio = Groq (https://api.groq.com/openai/v1)
@@ -234,6 +235,9 @@ class Whisper:
     # inventado que chega à ata. False = áudio inteiro ao modelo (só p/ depurar).
     vad_filter: bool = True
     hotwords: str = ""
+    # Corrige na transcrição a grafia dos termos do vocabulário ("S 80" -> SE80) e o "Z"
+    # do SAP; vale p/ qualquer motor, essencial no da Apple (que ignora o vocabulário)
+    vocab_fix: bool = True
     engine: str = "local"              # local (faster-whisper) | cloud (Groq/OpenAI-compat STT)
     cloud_base_url: str = ""           # vazio = Groq (https://api.groq.com/openai/v1)
     cloud_api_key: str = ""            # só engine=cloud; chave BYO (cifrada com DPAPI ao gravar)
@@ -441,6 +445,7 @@ vad_threshold = {_n(w.vad_threshold)}        # limiar de detecção de voz (0..1
 vad_filter = {_b(w.vad_filter)}        # transcrever só trechos com fala (Silero); false = áudio inteiro (#202)
 # Vocabulário para guiar a transcrição (o jargão da sua área; vazio = sem viés):
 hotwords = {_s(w.hotwords)}
+vocab_fix = {_b(w.vocab_fix)}          # corrige a grafia dos termos do vocabulário na transcrição
 engine = {_s(w.engine)}          # {_H["engine_save"]}
 cloud_base_url = {_s(w.cloud_base_url)}   # vazio = Groq (.../openai/v1)
 cloud_api_key = {_s(_maybe_protect(w.cloud_api_key, "whisper.cloud_api_key"))}     # só engine=cloud; chave BYO, {_H["cifra_save"]}

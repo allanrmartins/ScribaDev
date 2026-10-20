@@ -27,6 +27,30 @@ def _set_status(meta: dict, meta_path: Path, status: str) -> None:
     idlewatch.beat()  # mudança de estágio é sinal de vida para a sentinela (#188)
 
 
+def _fix_vocabulary(turns: list, hotwords: str, meta: dict) -> None:
+    """Grafia dos termos do vocabulário na transcrição ("S 80" -> SE80, "enancement" ->
+    enhancement) e o "Z" do SAP - antes de gravar, p/ nota, busca e consultas saírem
+    certas. Nunca derruba a transcrição: falha aqui só pula a correção."""
+    from collections import Counter
+
+    from . import vocab_fix
+
+    try:
+        termos = vocab_fix.parse_terms(hotwords)
+        feitas: Counter = Counter()
+        for t in turns:
+            t.text, trocas = vocab_fix.corrigir(t.text, termos)
+            feitas.update((c.original.strip(".,;:!?"), c.termo) for c in trocas)
+    except Exception as e:
+        print(f"AVISO: correção do vocabulário falhou ({e}); transcrição sem correção")
+        return
+    if feitas:
+        exemplos = ", ".join(f"'{o}' -> {t}" + (f" ({n}x)" if n > 1 else "")
+                             for (o, t), n in feitas.most_common(8))
+        print(f"vocabulário: {sum(feitas.values())} termo(s) corrigido(s): {exemplos}")
+    meta["vocab_fixes"] = sum(feitas.values())
+
+
 def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: TranscriptionProvider | None = None,
                       num_speakers: int | None = None) -> int:
     folder = Path(folder)
@@ -146,6 +170,8 @@ def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: Transc
         return 1
 
     turns = merge_mod.merge(by_speaker)
+    if getattr(cfg.whisper, "vocab_fix", False):
+        _fix_vocabulary(turns, getattr(cfg.whisper, "hotwords", ""), meta)
     # escrita atômica do transcript.json: ponto crítico — são vários MB e a única
     # cópia da transcrição; write_text direto trunca o arquivo se o processo morrer
     # no meio (antivírus, kill), corrompendo a retomada em process_folder

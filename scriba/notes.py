@@ -362,6 +362,24 @@ _MAP_SYSTEM = (
 )
 
 
+def _vocabulary_block() -> str:
+    """Vocabulário do usuário p/ a IA escrever os termos certo na nota, mesmo onde a
+    transcrição errou (o motor da Apple ignora o vocabulário; o Whisper às vezes erra).
+    Vazio sem vocabulário."""
+    from . import vocab_fix
+
+    try:
+        termos = vocab_fix.parse_terms(load().whisper.hotwords)
+    except Exception:
+        return ""
+    if not termos:
+        return ""
+    return ("\n\n=== VOCABULÁRIO DO USUÁRIO (grafia correta) ===\n"
+            "A transcrição automática pode ter escrito estes termos errado (separados, com letra "
+            "trocada, foneticamente). Na nota, escreva-os exatamente assim quando o contexto deixar "
+            "claro que é o termo; não invente ocorrências: " + ", ".join(termos))
+
+
 def _summary_call(body: str, meeting: str, timeout: int, folder: Path, *, notes_mode: bool = False) -> str | None:
     """Chamada de resumo estruturado (single-shot OU reduce final): aplica TITLE_INSTRUCTION +
     prompt.md sobre `body`. `notes_mode=False` → `body` é a transcrição crua; `True` → são as
@@ -372,7 +390,7 @@ def _summary_call(body: str, meeting: str, timeout: int, folder: Path, *, notes_
     CREATE_NO_WINDOW dispararia o bug do Windows Terminal (ver promptgen._call_claude)."""
     from . import ai
 
-    payload = f"{TITLE_INSTRUCTION}{load_summary_prompt()}"
+    payload = f"{TITLE_INSTRUCTION}{load_summary_prompt()}{_vocabulary_block()}"
     if meeting:
         payload += f"\n\n=== NOME DA REUNIÃO (do título da janela; pista, pode estar incompleto) ===\n{meeting}"
     if notes_mode:
@@ -390,8 +408,9 @@ def _summarize_part(body: str, i: int, total: int, timeout: int, folder: Path) -
     from . import ai
 
     print(f"resumo: parte {i}/{total}…")
+    header = f"TRECHO {i}/{total} (ordem cronológica):{_vocabulary_block()}"
     for _ in (1, 2):
-        out = ai.complete(_MAP_SYSTEM, f"TRECHO {i}/{total} (ordem cronológica):\n\n{body}",
+        out = ai.complete(_MAP_SYSTEM, f"{header}\n\n{body}",
                           timeout=timeout, cwd=folder, hidden_window=False,
                           cli_wait=_SUMMARY_CLI_WAIT_S)
         if out:
