@@ -55,12 +55,14 @@ else:
         "dir_db": f"{_APP}/timesheet.db",
         "dir_apont": "~/Documents/ScribaDev/Apontamentos",
         "dir_backups": f"{_APP}/backups",
-        "engine": ("# Motor de transcrição: local (100% na máquina; no Apple Silicon usa MLX/Metal\n"
-                   '# sozinho; "mlx" força) ou cloud (endpoint OpenAI-compatível — opt-in explícito).'
+        "engine": ("# Motor de transcrição: local (Whisper, 100% na máquina; no Apple Silicon usa\n"
+                   '# MLX/Metal sozinho; "mlx" força), apple (motor de fala da Apple, macOS 26+,\n'
+                   "# 100% no Mac; permite transcrever ao vivo) ou cloud (endpoint OpenAI-compatível\n"
+                   "# — opt-in explícito)."
                    if _MAC else
                    "# Motor de transcrição: local (faster-whisper, 100% na máquina) ou cloud (envia o\n"
                    "# áudio a um endpoint OpenAI-compatível /audio/transcriptions — opt-in explícito)."),
-        "engine_save": ("local (MLX auto no Apple Silicon) | mlx | cloud (nuvem — opt-in)"
+        "engine_save": ("local (MLX auto no Apple Silicon) | mlx | apple (macOS 26+) | cloud (nuvem — opt-in)"
                         if _MAC else "local | cloud (envia o áudio à nuvem — opt-in)"),
     }
 
@@ -122,6 +124,7 @@ hotwords = ""
 vocab_fix = true                   # corrige a grafia dos termos do vocabulário na transcrição ("S 80" -> SE80)
 {_H["engine"]}
 engine = "local"
+live = false                       # só engine=apple: transcreve durante a call (ao fim, só vozes + resumo)
 cloud_base_url = ""                # vazio = Groq (https://api.groq.com/openai/v1)
 cloud_api_key = ""                 # só engine=cloud; chave BYO. Definida pela UI, {_H["cifra"]}.
 cloud_model = "whisper-large-v3-turbo"
@@ -238,7 +241,9 @@ class Whisper:
     # Corrige na transcrição a grafia dos termos do vocabulário ("S 80" -> SE80) e o "Z"
     # do SAP; vale p/ qualquer motor, essencial no da Apple (que ignora o vocabulário)
     vocab_fix: bool = True
-    engine: str = "local"              # local (faster-whisper) | cloud (Groq/OpenAI-compat STT)
+    engine: str = "local"              # local (Whisper) | apple (macOS 26+) | cloud (Groq/OpenAI-compat STT)
+    # Só com engine=apple: transcreve DURANTE a call; ao fim só faltam vozes + resumo (#222)
+    live: bool = False
     cloud_base_url: str = ""           # vazio = Groq (https://api.groq.com/openai/v1)
     cloud_api_key: str = ""            # só engine=cloud; chave BYO (cifrada com DPAPI ao gravar)
     cloud_model: str = "whisper-large-v3-turbo"
@@ -447,6 +452,7 @@ vad_filter = {_b(w.vad_filter)}        # transcrever só trechos com fala (Siler
 hotwords = {_s(w.hotwords)}
 vocab_fix = {_b(w.vocab_fix)}          # corrige a grafia dos termos do vocabulário na transcrição
 engine = {_s(w.engine)}          # {_H["engine_save"]}
+live = {_b(w.live)}                  # só engine=apple: transcreve durante a call
 cloud_base_url = {_s(w.cloud_base_url)}   # vazio = Groq (.../openai/v1)
 cloud_api_key = {_s(_maybe_protect(w.cloud_api_key, "whisper.cloud_api_key"))}     # só engine=cloud; chave BYO, {_H["cifra_save"]}
 cloud_model = {_s(w.cloud_model)}

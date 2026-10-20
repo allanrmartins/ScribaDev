@@ -303,6 +303,7 @@ class ScribaApp:
             self.stop_recording(**pending)
             return
         log.info("gravação iniciada (%s): %s", source, rec.folder.name)
+        self._start_live_transcription(rec)
         self._toast("Gravando reunião", "O áudio está sendo capturado localmente.")
         if self.tray:
             self.tray.set_recording(True, self.status_text())
@@ -310,6 +311,29 @@ class ScribaApp:
         self.ui(self._show_pill)
         # O modelo só é carregado quando a gravação terminar (em stop_recording):
         # nada de segurar a VRAM da GPU durante a call inteira.
+
+    def _start_live_transcription(self, rec) -> None:
+        """Motor da Apple + "ao vivo" ligado (#222): transcreve enquanto grava. Nunca
+        atrapalha a gravação - qualquer falha só deixa a transcrição para o fim."""
+        w = self.cfg.whisper
+        if (w.engine or "").strip().lower() != "apple" or not w.live:
+            return
+        try:
+            from .stt_apple import LiveSession, macos_suportado
+
+            if macos_suportado():
+                rec.live = LiveSession(rec.folder, w.language)
+        except Exception:
+            log.exception("transcrição ao vivo não subiu (segue só a gravação)")
+
+    def _end_live_transcription(self, rec, discard: bool = False) -> None:
+        live = getattr(rec, "live", None)
+        if live is None:
+            return
+        try:
+            live.kill() if discard else live.stop()
+        except Exception:
+            log.exception("falha ao encerrar a transcrição ao vivo")
 
     def stop_recording(self, discard: bool = False, keep: bool = False) -> None:
         """Encerra a gravação atual.
@@ -333,6 +357,7 @@ class ScribaApp:
         duration = rec.duration_seconds()
         if discard:
             rec.stop(status="discarded")
+            self._end_live_transcription(rec, discard=True)
             log.info("gravação descartada: %s", rec.folder.name)
             self._toast("Gravação descartada", rec.folder.name)
             self.ui(self._show_pill_idle if self.call_active else self._hide_pill)
@@ -340,6 +365,7 @@ class ScribaApp:
         min_secs = self.cfg.detection.min_call_seconds
         if source == "auto" and not keep and duration < min_secs:
             rec.stop(status="too_short")
+            self._end_live_transcription(rec, discard=True)
             log.info("gravação muito curta (%.0fs), ignorada: %s", duration, rec.folder.name)
             self._toast(
                 f"Gravação de {duration:.0f}s ignorada",
@@ -348,6 +374,7 @@ class ScribaApp:
             self.ui(self._show_pill_idle if self.call_active else self._hide_pill)
             return
         rec.stop(status="recorded")
+        self._end_live_transcription(rec)   # DEPOIS do stop: o WAV já tem o fim da fala
         log.info("gravação encerrada (%.0fs): %s", duration, rec.folder.name)
         self._toast("Transcrevendo...", f"{rec.folder.name} ({max(1, int(duration // 60))} min)")
         # com a call ainda ativa, a pílula espera um novo ⏺; senão, ela fica

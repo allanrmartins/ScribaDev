@@ -26,6 +26,8 @@ class DatasDoPacoteTests(unittest.TestCase):
 
     # dirs de recurso = os que têm arquivo não-.py e são lidos por util.resource_path
     RECURSOS = ("scriba/assets", "scriba/qt/icons")
+    # só no mac e com tratamento próprio: o spec empacota o binário compilado (#222)
+    RECURSOS_SO_MAC = ("scriba/apple_stt",)
 
     def test_specs_empacotam_todos_os_recursos(self):
         for spec in (MAC_SPEC, WIN_SPEC):
@@ -34,6 +36,11 @@ class DatasDoPacoteTests(unittest.TestCase):
                 with self.subTest(spec=spec.name, recurso=rec):
                     self.assertIn(f'"{rec}"', txt, f"{spec.name} não empacota {rec}")
 
+    def test_spec_mac_empacota_o_motor_da_apple(self):
+        txt = MAC_SPEC.read_text(encoding="utf-8")
+        for rec in self.RECURSOS_SO_MAC:
+            self.assertIn(f'"{rec}"', txt)
+
     def test_nenhum_dir_de_recurso_ficou_de_fora_da_lista(self):
         """Se alguém adicionar um novo dir de recursos no pacote, este teste avisa."""
         achados = {
@@ -41,7 +48,7 @@ class DatasDoPacoteTests(unittest.TestCase):
             for p in (REPO / "scriba").rglob("*")
             if p.is_file() and p.suffix != ".py" and "__pycache__" not in p.parts
         }
-        self.assertEqual(achados, set(self.RECURSOS),
+        self.assertEqual(achados, set(self.RECURSOS) | set(self.RECURSOS_SO_MAC),
                          "dir de recursos novo/removido — atualize RECURSOS e os .spec")
 
 
