@@ -114,6 +114,7 @@ class ScribaApp:
         self.settings = None
         self.notes_win = None
         self.action_hub = None   # hub de pendências (#78), instância única
+        self._voices_missing_toasted = False  # aviso de vozes sem componentes: 1x por sessão
         self.wizard_win = None
         self.log_win = None
         self.main_win = None
@@ -133,6 +134,23 @@ class ScribaApp:
             self.notifier = None
 
     # ------------------------------------------------------------- helpers --
+
+    def _warn_diarization_error(self, folder: Path, error: str) -> None:
+        """Diarização falhou mas o processamento seguiu (com "Participantes"): o erro
+        ficou no process.log da pasta — repete no scriba.log central p/ ficar visível
+        na janela de Log e no diagnóstico (pedido do Allan).
+
+        Vozes ligadas SEM os componentes instalados (setup que pulou o download, addons
+        apagado) também vira toast: só o log deixava toda reunião sair sem separar as
+        vozes, dias a fio, sem ninguém perceber. Uma vez por sessão, p/ não insistir a
+        cada call."""
+        log.warning("diarização não rodou em %s: %s (detalhes no process.log da pasta)",
+                    folder.name, error)
+        if "falta o extra" in error and not self._voices_missing_toasted:
+            self._voices_missing_toasted = True
+            self._toast("ScribaDev: separação de vozes não instalada",
+                        "As reuniões estão saindo sem separar quem falou. Baixe em "
+                        "Configurações → Sobre → Baixar componentes e depois reprocesse.")
 
     def _toast(self, title: str, body: str = "") -> None:
         """Toast SEMPRE em thread própria (#161): a entrega fala com o serviço de
@@ -1104,12 +1122,8 @@ class ScribaApp:
                     meta_path, json.dumps(done_meta, ensure_ascii=False, indent=2))
             export_path = done_meta.get("export_path")
             title = done_meta.get("title")
-            # diarização falhou mas o processamento seguiu (com "Participantes"): o erro
-            # ficou no process.log da pasta — repete no scriba.log central p/ ficar visível
-            # na janela de Log e no diagnóstico (pedido do Allan)
             if done_meta.get("diarization_error"):
-                log.warning("diarização não rodou em %s: %s (detalhes no process.log da pasta)",
-                            folder.name, done_meta["diarization_error"])
+                self._warn_diarization_error(folder, done_meta["diarization_error"])
         except Exception:
             log.exception("meta.json ilegível pós-processamento")
         if export_path and self.notifier:
