@@ -83,8 +83,12 @@ class ZDoSapTests(unittest.TestCase):
         for frase in ("é tudo Z mesmo", "o Zé falou", "fala com o zé", "a zmm_pedidos e a ZSM30"):
             self.assertEqual(fix(frase), frase, frase)
 
-    def test_vale_mesmo_sem_vocabulario(self):
-        self.assertEqual(vocab_fix.corrigir("a tabela zê", [])[0], "a tabela Z")
+    def test_so_vale_para_vocabulario_de_sap(self):
+        """Nem todo usuário é de SAP: para os outros, "z" solto é só uma letra."""
+        self.assertEqual(vocab_fix.corrigir("a tabela zê e o z", ["Python", "React"])[0],
+                         "a tabela zê e o z")
+        self.assertEqual(vocab_fix.corrigir("a tabela zê", [])[0], "a tabela zê")
+        self.assertEqual(vocab_fix.corrigir("a tabela zê", ["ABAP"])[0], "a tabela Z")
 
 
 class PipelineTests(unittest.TestCase):

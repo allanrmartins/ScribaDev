@@ -236,6 +236,16 @@ class _ThemeCard(QFrame):
             self._on_pick(self._value)
 
 
+def _clear_layout(lay) -> None:
+    """Esvazia um layout aninhado (as linhas da lista de termos aprendidos)."""
+    while lay.count():
+        item = lay.takeAt(0)
+        if item.widget():
+            item.widget().deleteLater()
+        elif item.layout():
+            _clear_layout(item.layout())
+
+
 class SettingsWindow(QWidget):
     _about_ready = Signal(object)     # marshaling da checagem de update (thread -> UI)
     _devices_ready = Signal(object)   # marshaling da enumeração de dispositivos (thread -> UI)
@@ -462,7 +472,8 @@ class SettingsWindow(QWidget):
                       tooltip="Quanto mais específico do seu dia a dia, melhor a transcrição acerta "
                               "os termos difíceis. Pode escrever em várias linhas.")
         self._check(f, "Corrigir termos na transcrição", "whisper", "vocab_fix",
-                    hint='acerta a grafia do vocabulário ("S 80" vira SE80) e o "Z" do SAP')
+                    hint='acerta na transcrição a grafia dos termos do vocabulário (ex.: "S 80" vira SE80)')
+        self._build_learned_terms(f)
         av = self._group(f, "Avançado")
         self._int(av, "Batch size", "whisper", "batch_size", 0, 64, hint="0 desliga o lote")
         self._int(av, "Beam size", "whisper", "beam_size", 0, 10)
@@ -481,6 +492,50 @@ class SettingsWindow(QWidget):
         self._text(cl, "Chave da API", "whisper", "cloud_api_key", secret=True,
                    placeholder="cole a chave da API", tooltip="Cifrada com DPAPI ao salvar.")
         self._text(cl, "Modelo (nuvem)", "whisper", "cloud_model", placeholder="ex.: whisper-large-v3")
+
+    def _build_learned_terms(self, form) -> None:
+        """Vocabulário que aprende (#227): sugestões tiradas das reuniões (2+ reuniões) p/
+        aceitar ou ignorar, e os já aceitos p/ remover. Age na hora (dado à parte do
+        config.toml) - não depende do Salvar."""
+        box = QGroupBox("Termos aprendidos com as reuniões")
+        self._learned_layout = QVBoxLayout(box)
+        form.addRow(box)
+        self._refresh_learned_terms()
+
+    def _refresh_learned_terms(self) -> None:
+        from .. import vocab_learn
+
+        lay = self._learned_layout
+        _clear_layout(lay)
+
+        def linha(texto: str, *botoes) -> None:
+            row = QHBoxLayout()
+            row.addWidget(QLabel(texto), 1)
+            for rotulo, acao in botoes:
+                row.addWidget(widgets.ModernButton(rotulo, acao))
+            lay.addLayout(row)
+
+        def muda(termo: str, status: str):
+            def _go() -> None:
+                vocab_learn.set_status(termo, status)
+                self._refresh_learned_terms()
+            return _go
+
+        sugestoes = vocab_learn.suggestions()
+        for item in sugestoes:
+            n = len(item["meetings"])
+            linha(f"<b>{item['term']}</b>  ·  em {n} reuniões",
+                  ("Adicionar", muda(item["term"], vocab_learn.ACEITO)),
+                  ("Ignorar", muda(item["term"], vocab_learn.RECUSADO)))
+        aceitos = vocab_learn.accepted()
+        for termo in aceitos:
+            linha(f"{termo}  ·  no vocabulário", ("Remover", muda(termo, vocab_learn.RECUSADO)))
+        if not sugestoes and not aceitos:
+            vazio = QLabel("Os termos técnicos das suas reuniões aparecem aqui quando se repetem "
+                           "em 2 ou mais reuniões; você decide quais entram no vocabulário.")
+            vazio.setWordWrap(True)
+            vazio.setProperty("role", "muted")
+            lay.addWidget(vazio)
 
     def _build_ia_tab(self) -> None:
         f = self._tab("IA")

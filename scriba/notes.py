@@ -262,6 +262,14 @@ TITLE_INSTRUCTION = (
     "reunião se refere — a empresa dona do sistema/projeto/chamado discutido (não a "
     "consultoria que presta o serviço, e não o fornecedor de software). Se a transcrição "
     "não permitir identificar o cliente com confiança, escreva exatamente `CLIENTE: ?`. "
+    "Na TERCEIRA linha, escreva exatamente `TERMOS: ` seguido dos IDENTIFICADORES técnicos "
+    "citados na reunião, separados por vírgula, na GRAFIA CORRETA (a transcrição pode tê-los "
+    "escrito errado): siglas, códigos, nomes próprios de sistemas, ferramentas, bibliotecas, "
+    "linguagens, produtos e tecnologias (ex.: SE80, ZPL, Kubernetes, React, OData). Só o "
+    "nome, 1 ou 2 palavras - NADA de palavras comuns, descrições ou frases (não: "
+    "\"código de barras\", \"programa ABAP\", \"tamanho da etiqueta\"). Até 15. NÃO "
+    "inclua nomes de pessoas nem de empresas. Se não houver, "
+    "escreva exatamente `TERMOS: -`. "
     "Se um NOME DA REUNIÃO (do título da janela) for fornecido adiante, use-o como pista "
     "forte para o TÍTULO e o CLIENTE — mas a transcrição prevalece se houver conflito. "
     "A partir da linha seguinte, siga as instruções abaixo normalmente.\n\n"
@@ -288,17 +296,27 @@ def _skippable_preamble(stripped: str) -> bool:
 
 
 def split_header(text: str) -> tuple[str, str | None, str | None]:
-    """Separa as linhas `TITULO:`/`CLIENTE:` do início da resposta do modelo.
+    """(resumo, título, cliente) - ver `split_header_terms`, que devolve também os termos."""
+    body, title, client, _terms = split_header_terms(text)
+    return body, title, client
+
+
+def split_header_terms(text: str) -> tuple[str, str | None, str | None, list[str]]:
+    """Separa as linhas `TITULO:`/`CLIENTE:`/`TERMOS:` do início da resposta do modelo.
 
     Tolera preâmbulo ANTES do header — linhas em branco, cercas de código
     (```` ```markdown ````) e aberturas conversacionais ("Aqui está:") — mas PARA
     no primeiro conteúdo substantivo: um `TITULO:`/`CLIENTE:` no meio do corpo
     (ex.: citação da transcrição) NÃO é consumido como header.
 
-    Retorna (resumo, título|None, cliente|None) — `CLIENTE: ?` vira None.
+    Retorna (resumo, título|None, cliente|None, termos) — `CLIENTE: ?` vira None e
+    `TERMOS: -` vira lista vazia (#227).
     """
+    from . import vocab_learn
+
     lines = text.split("\n")
     title = client = None
+    terms: list[str] | None = None
     last_header = -1          # índice da última linha consumida como header
     skip_budget = 4           # nº de linhas de preâmbulo/cerca toleradas antes do header
     i = 0
@@ -310,6 +328,11 @@ def split_header(text: str) -> tuple[str, str | None, str | None]:
         up = stripped.upper()
         if up.startswith("TITULO:") and title is None:
             title = stripped.split(":", 1)[1].strip().strip('"').strip() or None
+            last_header = i
+            i += 1
+            continue
+        if up.startswith("TERMOS:") and terms is None:
+            terms = vocab_learn.parse_terms_line(stripped.split(":", 1)[1])
             last_header = i
             i += 1
             continue
@@ -327,8 +350,8 @@ def split_header(text: str) -> tuple[str, str | None, str | None]:
             continue
         break  # conteúdo substantivo → encerra a busca por header
     if last_header < 0:
-        return text, None, None
-    return "\n".join(lines[last_header + 1:]).strip(), title, client
+        return text, None, None, []
+    return "\n".join(lines[last_header + 1:]).strip(), title, client, terms or []
 
 
 # Timeout do resumo ESCALADO pela duração da call: o resumo é geração-bound e cresce
@@ -366,10 +389,10 @@ def _vocabulary_block() -> str:
     """Vocabulário do usuário p/ a IA escrever os termos certo na nota, mesmo onde a
     transcrição errou (o motor da Apple ignora o vocabulário; o Whisper às vezes erra).
     Vazio sem vocabulário."""
-    from . import vocab_fix
+    from . import vocab_learn
 
     try:
-        termos = vocab_fix.parse_terms(load().whisper.hotwords)
+        termos = vocab_learn.all_terms(load().whisper.hotwords)
     except Exception:
         return ""
     if not termos:
@@ -509,7 +532,28 @@ def generate_summary(transcript_md: str, folder: Path) -> tuple[str | None, str 
 
     if not out:
         return None, None, None
-    return split_header(out)
+    body, title, client, terms = split_header_terms(out)
+    _learn_terms(folder, meta, terms)
+    return body, title, client
+
+
+def _learn_terms(folder: Path, meta: dict, terms: list[str]) -> None:
+    """Vocabulário que aprende (#227): registra os TERMOS desta reunião; os que acabaram
+    de virar sugestão vão p/ o meta, e o app avisa o usuário ao fim do processamento."""
+    from . import vocab_learn
+
+    if not terms:
+        return
+    novos = vocab_learn.record(meta.get("started_at") or folder.name, terms, load().whisper.hotwords)
+    if novos:
+        print(f"vocabulário: {len(novos)} termo(s) novo(s) para revisar: {', '.join(novos)}")
+        try:
+            meta_path = folder / "meta.json"
+            atual = json.loads(meta_path.read_text(encoding="utf-8"))
+            atual["vocab_suggested"] = novos
+            util.atomic_write_text(meta_path, json.dumps(atual, ensure_ascii=False, indent=2))
+        except (OSError, ValueError):
+            pass
 
 
 def _export_stem(meta: dict, folder: Path) -> str:
