@@ -902,7 +902,16 @@ def cmd_doctor(args) -> int:
             else:
                 kind = "mlx" if arm and mlx_disponivel() else "faster-whisper"
                 engine_cfg = "local"
-            if kind == "mlx":
+            if kind == "apple":
+                from . import stt_apple
+
+                ok, detalhe = stt_apple.check(cfg.whisper.language)
+                ao_vivo = " · ao vivo ligado" if cfg.whisper.live else ""
+                if ok:
+                    _print(_OK, "Motor da Apple", f"transcrição pelo motor de fala do macOS ({detalhe}){ao_vivo}")
+                else:
+                    _print(_WARN, "Motor da Apple", f"indisponível ({detalhe}) — a transcrição cai para o Whisper")
+            elif kind == "mlx":
                 _print(_OK, "GPU (Metal/MLX)", "transcrição local acelerada no Apple Silicon")
             elif kind == "cloud":
                 _print(_OK, "GPU (Metal/MLX)", "não se aplica: motor de transcrição = nuvem")

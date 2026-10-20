@@ -32,6 +32,17 @@ done
 iconutil -c icns "$ICONSET" -o "$HERE/build/scriba.icns"
 echo "== icns ok"
 
+# 1b) motor de fala da Apple (#222): o helper Swift vai compilado no bundle. Exige o
+#     SDK do macOS 26 (SpeechAnalyzer); sem ele o DMG sai sem o motor da Apple e o
+#     app usa o Whisper (o seletor avisa no doctor) - não derruba o build.
+mkdir -p "$HERE/build/apple_stt"
+if xcrun swiftc -O -o "$HERE/build/apple_stt/apple-stt" "$REPO/scriba/apple_stt/AppleSTT.swift"; then
+  echo "== motor da Apple ok"
+else
+  rm -f "$HERE/build/apple_stt/apple-stt"
+  echo "AVISO: motor da Apple não compilou (precisa do SDK do macOS 26); DMG sai sem ele"
+fi
+
 # 2) PyInstaller (.app com CLI dentro)
 "$PY" -m PyInstaller "$HERE/scribadev-mac.spec" --noconfirm \
   --workpath "$HERE/build/pyi" --distpath "$HERE/dist"

@@ -55,12 +55,14 @@ else:
         "dir_db": f"{_APP}/timesheet.db",
         "dir_apont": "~/Documents/ScribaDev/Apontamentos",
         "dir_backups": f"{_APP}/backups",
-        "engine": ("# Motor de transcrição: local (100% na máquina; no Apple Silicon usa MLX/Metal\n"
-                   '# sozinho; "mlx" força) ou cloud (endpoint OpenAI-compatível — opt-in explícito).'
+        "engine": ("# Motor de transcrição: local (Whisper, 100% na máquina; no Apple Silicon usa\n"
+                   '# MLX/Metal sozinho; "mlx" força), apple (motor de fala da Apple, macOS 26+,\n'
+                   "# 100% no Mac; permite transcrever ao vivo) ou cloud (endpoint OpenAI-compatível\n"
+                   "# — opt-in explícito)."
                    if _MAC else
                    "# Motor de transcrição: local (faster-whisper, 100% na máquina) ou cloud (envia o\n"
                    "# áudio a um endpoint OpenAI-compatível /audio/transcriptions — opt-in explícito)."),
-        "engine_save": ("local (MLX auto no Apple Silicon) | mlx | cloud (nuvem — opt-in)"
+        "engine_save": ("local (MLX auto no Apple Silicon) | mlx | apple (macOS 26+) | cloud (nuvem — opt-in)"
                         if _MAC else "local | cloud (envia o áudio à nuvem — opt-in)"),
     }
 
@@ -121,6 +123,7 @@ vad_filter = true
 hotwords = ""
 {_H["engine"]}
 engine = "local"
+live = false                       # só engine=apple: transcreve durante a call (ao fim, só vozes + resumo)
 cloud_base_url = ""                # vazio = Groq (https://api.groq.com/openai/v1)
 cloud_api_key = ""                 # só engine=cloud; chave BYO. Definida pela UI, {_H["cifra"]}.
 cloud_model = "whisper-large-v3-turbo"
@@ -234,7 +237,9 @@ class Whisper:
     # inventado que chega à ata. False = áudio inteiro ao modelo (só p/ depurar).
     vad_filter: bool = True
     hotwords: str = ""
-    engine: str = "local"              # local (faster-whisper) | cloud (Groq/OpenAI-compat STT)
+    engine: str = "local"              # local (Whisper) | apple (macOS 26+) | cloud (Groq/OpenAI-compat STT)
+    # Só com engine=apple: transcreve DURANTE a call; ao fim só faltam vozes + resumo (#222)
+    live: bool = False
     cloud_base_url: str = ""           # vazio = Groq (https://api.groq.com/openai/v1)
     cloud_api_key: str = ""            # só engine=cloud; chave BYO (cifrada com DPAPI ao gravar)
     cloud_model: str = "whisper-large-v3-turbo"
@@ -442,6 +447,7 @@ vad_filter = {_b(w.vad_filter)}        # transcrever só trechos com fala (Siler
 # Vocabulário para guiar a transcrição (o jargão da sua área; vazio = sem viés):
 hotwords = {_s(w.hotwords)}
 engine = {_s(w.engine)}          # {_H["engine_save"]}
+live = {_b(w.live)}                  # só engine=apple: transcreve durante a call
 cloud_base_url = {_s(w.cloud_base_url)}   # vazio = Groq (.../openai/v1)
 cloud_api_key = {_s(_maybe_protect(w.cloud_api_key, "whisper.cloud_api_key"))}     # só engine=cloud; chave BYO, {_H["cifra_save"]}
 cloud_model = {_s(w.cloud_model)}

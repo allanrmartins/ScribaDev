@@ -68,6 +68,8 @@ def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: Transc
     device = tr.ensure_loaded()
     if (cfg.whisper.engine or "local").strip().lower() == "cloud":
         print(f"transcrição na nuvem: {cfg.whisper.cloud_model}")
+    elif device == "apple":
+        print("motor de fala da Apple (macOS)")
     else:
         print(f"modelo {cfg.whisper.model} em {device}")
 

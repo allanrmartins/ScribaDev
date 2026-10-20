@@ -66,6 +66,10 @@ _pkg_datas = [
     (str(REPO / "scriba" / "assets"), "scriba/assets"),
     (str(REPO / "scriba" / "qt" / "icons"), "scriba/qt/icons"),
 ]
+# motor de fala da Apple (#222): o BINÁRIO compilado pelo build.sh, não o .swift
+_apple_stt = Path(SPECPATH) / "build" / "apple_stt" / "apple-stt"
+if _apple_stt.exists():
+    _pkg_datas.append((str(_apple_stt), "scriba/apple_stt"))
 
 # Regras compartilhadas com o spec Windows (installer/speclib.py): stdlib inteira
 # COM submódulos, scipy inteiro quando presente e a asserção de build.

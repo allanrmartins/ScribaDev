@@ -37,7 +37,7 @@ class TranscriptionProvider(Protocol):
 
 def effective_engine(cfg: Whisper, force_cpu: bool = False) -> str:
     """Qual motor `make_transcriber` vai construir de fato p/ este config nesta
-    máquina: 'cloud' | 'mlx' | 'faster-whisper'. É a ÚNICA regra de escolha - o
+    máquina: 'cloud' | 'apple' | 'mlx' | 'faster-whisper'. É a ÚNICA regra de escolha - o
     `doctor` usa a mesma, p/ reportar o caminho efetivo e não só o que está
     instalado (#202: um engine desviado p/ o faster-whisper aparecia como "Metal")."""
     import platform
@@ -46,6 +46,11 @@ def effective_engine(cfg: Whisper, force_cpu: bool = False) -> str:
     engine = (cfg.engine or "local").strip().lower()
     if engine == "cloud":
         return "cloud"
+    if engine == "apple" and not force_cpu:
+        from .stt_apple import macos_suportado
+
+        if macos_suportado():
+            return "apple"   # o provider ainda cai p/ o Whisper se o helper falhar
     if (not force_cpu and engine in ("local", "mlx")
             and sys.platform == "darwin" and platform.machine() == "arm64"):
         from .stt_mlx import mlx_disponivel
@@ -61,6 +66,14 @@ def make_transcriber(cfg: Whisper, force_cpu: bool = False) -> TranscriptionProv
     mlx_whisper instalado) → Metal via MLX (#104, M5); senão o faster-whisper local.
     Com force_cpu o MLX é pulado — quem pediu CPU ganha CPU."""
     kind = effective_engine(cfg, force_cpu)
+    if kind == "apple":
+        import dataclasses
+
+        from .stt_apple import AppleSpeechProvider
+
+        # sem o motor da Apple: o Whisper que esta máquina usaria com engine=local
+        local = dataclasses.replace(cfg, engine="local")
+        return AppleSpeechProvider(cfg, lambda: make_transcriber(local, force_cpu))
     if kind == "cloud":
         from .stt_cloud import CloudTranscriptionProvider
 

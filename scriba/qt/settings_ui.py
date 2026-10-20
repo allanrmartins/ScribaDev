@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import sys
 import threading
 from pathlib import Path
 
@@ -79,7 +80,10 @@ _WHISPER_MODELS = ("tiny", "base", "small", "medium", "large-v3", "large-v3-turb
 _WHISPER_DEVICES = {"Automático": "auto", "GPU (CUDA)": "cuda", "CPU": "cpu"}
 _WHISPER_LANGS = {"Detectar automaticamente": "", "Português": "pt", "Inglês": "en",
                   "Espanhol": "es", "Francês": "fr", "Alemão": "de", "Italiano": "it"}
-_STT_ENGINES = {"Local (faster-whisper)": "local", "Nuvem (Groq / OpenAI-compat)": "cloud"}
+_STT_ENGINES = {"Local (Whisper)": "local", "Nuvem (Groq / OpenAI-compat)": "cloud"}
+if sys.platform == "darwin":   # motor de fala da Apple (#222): macOS 26+, 100% no Mac
+    _STT_ENGINES = {"Local (Whisper)": "local", "Apple (macOS 26+, no Mac)": "apple",
+                    "Nuvem (Groq / OpenAI-compat)": "cloud"}
 _PROVIDERS = {"Claude (CLI)": "claude", "Ollama (local)": "ollama", "OpenAI-compatível": "openai"}
 _SUMMARY_MODELS = {"Haiku 4.5": "claude-haiku-4-5", "Sonnet 4.6": "claude-sonnet-4-6",
                    "Opus 4.8": "claude-opus-4-8"}
@@ -465,6 +469,10 @@ class SettingsWindow(QWidget):
                     hint="transcreve só os trechos com fala; desligar só para depurar")
         self._int(av, "VAD silêncio mín. (ms)", "whisper", "vad_min_silence_ms", 0, 5000, hint="0 = padrão")
         self._float(av, "VAD limiar (0..1)", "whisper", "vad_threshold", 0.0, 1.0, 0.05, hint="0 = padrão")
+        if sys.platform == "darwin":
+            ap = self._group(f, "Apple (só com motor = Apple)")
+            self._check(ap, "Transcrever ao vivo", "whisper", "live",
+                        hint="transcreve durante a call; ao fim só faltam as vozes e o resumo")
         cl = self._group(f, "Nuvem (só com motor = Nuvem)")
         self._text(cl, "Endpoint", "whisper", "cloud_base_url", placeholder="vazio = Groq",
                    tooltip="URL do serviço compatível com OpenAI. Vazio usa a Groq.")
