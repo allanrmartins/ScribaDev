@@ -54,10 +54,17 @@ class InfoPlistTests(unittest.TestCase):
         self.assertRegex(txt, r'"LSBackgroundOnly":\s*False')
 
     def test_usage_strings_de_permissao_presentes(self):
-        txt = MAC_SPEC.read_text(encoding="utf-8")
+        """Fonte única em installer/macos/bundle_info.py, mesclada no info_plist do
+        spec (o lançador do modo código-fonte usa a mesma)."""
+        sys.path.insert(0, str(MAC_SPEC.parent))
+        try:
+            from bundle_info import PERMISSION_PLIST
+        finally:
+            sys.path.remove(str(MAC_SPEC.parent))
         for chave in ("NSMicrophoneUsageDescription", "NSAudioCaptureUsageDescription"):
             with self.subTest(chave=chave):
-                self.assertIn(chave, txt)
+                self.assertTrue(PERMISSION_PLIST.get(chave))
+        self.assertIn("**PERMISSION_PLIST", MAC_SPEC.read_text(encoding="utf-8"))
 
     @unittest.skipUnless(sys.platform == "darwin", "só faz sentido no macOS")
     def test_app_instalado_nao_e_background_only(self):

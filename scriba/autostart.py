@@ -25,6 +25,23 @@ def _mac_plist_path() -> Path:
     return Path.home() / "Library" / "LaunchAgents" / f"{_MAC_LABEL}.plist"
 
 
+def _mac_app_bundle() -> Path | None:
+    """O .app que abriu este processo: o do DMG (congelado) ou o lançador do modo
+    código-fonte, que exporta SCRIBADEV_APP_BUNDLE (installer/macos/source_launcher.sh).
+
+    O autostart precisa abrir o .APP, não o executável cru: é o bundle que carrega
+    as frases de uso do microfone/áudio do sistema no Info.plist, e o macOS nega o
+    áudio do sistema EM SILÊNCIO a quem não as tem - a call gravaria só a sua voz."""
+    env = os.environ.get("SCRIBADEV_APP_BUNDLE")
+    if env and Path(env).is_dir():
+        return Path(env)
+    if getattr(sys, "frozen", False):
+        for parent in Path(sys.executable).resolve().parents:
+            if parent.suffix == ".app":
+                return parent
+    return None
+
+
 def is_enabled() -> bool:
     if sys.platform == "darwin":
         return _mac_plist_path().exists()
@@ -42,15 +59,21 @@ def _mac_set_autostart(enable: bool) -> int:
         plist.unlink(missing_ok=True)
         print("autostart desligado")
         return 0
-    target = Path(sys.prefix) / "bin" / "scribadev-tray"
-    if not target.exists():
-        print(f"não encontrei {target} — rode o setup.sh de novo")
-        return 1
+    bundle = _mac_app_bundle()
+    if bundle is not None:
+        # via LaunchServices: o processo nasce "dentro" do .app (permissões certas)
+        args = ["/usr/bin/open", "-a", str(bundle), "--args", "--minimized"]
+    else:
+        target = Path(sys.prefix) / "bin" / "scribadev-tray"
+        if not target.exists():
+            print(f"não encontrei {target} — rode o setup.sh de novo")
+            return 1
+        args = [str(target), "--minimized"]
     import plistlib
 
     data = {
         "Label": _MAC_LABEL,
-        "ProgramArguments": [str(target), "--minimized"],  # autostart inicia só na bandeja
+        "ProgramArguments": args,  # autostart inicia só na bandeja (--minimized)
         "RunAtLoad": True,
     }
     plist.parent.mkdir(parents=True, exist_ok=True)

@@ -12,7 +12,7 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
     exit 1
 fi
 
-echo "== [1/6] Python 3.12+ =="
+echo "== [1/7] Python 3.12+ =="
 PY=""
 for cand in python3.14 python3.13 python3.12 python3; do
     if command -v "$cand" >/dev/null 2>&1; then
@@ -27,20 +27,20 @@ if [[ -z "$PY" ]]; then
 fi
 echo "usando: $PY ($("$PY" --version))"
 
-echo "== [2/6] venv em $VENV =="
+echo "== [2/7] venv em $VENV =="
 mkdir -p "$APP_DIR"
 if [[ ! -x "$VENV/bin/python" ]]; then
     "$PY" -m venv "$VENV" || { echo "FALHA ao criar o venv"; exit 1; }
 fi
 
-echo "== [3/6] GPU =="
-echo "macOS não tem CUDA — a transcrição local roda em CPU por ora (aceleração Metal/MLX chega no marco M5)."
+echo "== [3/7] GPU =="
+echo "macOS não tem CUDA — a transcrição roda na GPU do chip via MLX (Metal); a separação de vozes, via MPS."
 
-echo "== [4/6] pip install -e . =="
+echo "== [4/7] pip install -e . =="
 "$VENV/bin/pip" install --upgrade pip >/dev/null
 "$VENV/bin/pip" install -e "$REPO_DIR" || { echo "FALHA no pip install"; exit 1; }
 
-echo "== [5/6] comandos no PATH =="
+echo "== [5/7] comandos no PATH =="
 # symlink em vez do shim .cmd do Windows; primeiro diretório gravável do PATH, sem sudo
 LINKED=""
 for dir in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin"; do
@@ -61,12 +61,18 @@ else
     echo "AVISO: nenhum diretório gravável no PATH — use $VENV/bin/scribadev diretamente"
 fi
 
+echo "== [6/7] app lançador (ScribaDev Dev.app) =="
+# o app precisa nascer num .app: sem as frases de uso do Info.plist o macOS nega o
+# áudio do sistema EM SILÊNCIO (docs/port-mac.md). Abra pelo Launchpad/Spotlight.
+"$VENV/bin/python3" "$REPO_DIR/installer/macos/make_source_app.py" "$VENV" \
+    || echo "AVISO: não consegui criar o ScribaDev Dev.app — rode $VENV/bin/scribadev-tray (o áudio do sistema pode sair zerado)"
+
 # ffmpeg: não-fatal (mesma regra do ffmpeg_status: sem ele o áudio fica em WAV cru)
 if ! command -v ffmpeg >/dev/null 2>&1; then
     echo "AVISO: ffmpeg ausente — o áudio guardado fica em WAV cru (~1,3 GB/h). Instale: brew install ffmpeg"
 fi
 
-echo "== [6/6] modelo Whisper (pré-download; não-fatal) =="
+echo "== [7/7] modelo Whisper (pré-download; não-fatal) =="
 "$VENV/bin/python" -m scriba.predownload || echo "AVISO: pré-download falhou — o modelo baixa na primeira transcrição"
 
 echo
