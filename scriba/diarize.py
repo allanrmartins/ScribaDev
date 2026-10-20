@@ -178,7 +178,7 @@ def diarize(wav: Path, cfg: Diarization, num_speakers: int | None = None,
             meta["diarization_error"] = msg[:200]
 
     if not cfg.hf_token:
-        _fail("habilitada sem token Hugging Face — configure na aba Transcrição")
+        _fail("habilitada sem token Hugging Face — configure em Configurações → Gravação → Diarização")
         return None
     # um `import torch` anterior que falhou no meio (engolido por alguém) deixaria
     # este import morrer no falso circular import da #196 - limpa antes

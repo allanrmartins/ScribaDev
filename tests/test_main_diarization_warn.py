@@ -41,7 +41,7 @@ class DiarizationWarnTests(unittest.TestCase):
         app = self._app()
         with self.assertLogs("scriba", "WARNING"):
             app._warn_diarization_error(
-                Path("10-59"), "habilitada sem token Hugging Face — configure na aba Transcrição")
+                Path("10-59"), "habilitada sem token Hugging Face — configure em Configurações → Gravação → Diarização")
         app._toast.assert_not_called()
 
 
