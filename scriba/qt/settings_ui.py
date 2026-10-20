@@ -432,6 +432,9 @@ class SettingsWindow(QWidget):
                   hint="0 = espera indefinida")
         self._int(dz, "Diarizar em blocos de (min)", "diarization", "chunk_minutes", 0, 60,
                   hint="0 = inteiro; blocos evitam estourar a VRAM em reuniões longas")
+        self._check(dz, "Separar vozes só na tomada", "diarization", "only_on_ac",
+                    hint="Na bateria a nota sai na hora sem separar vozes; "
+                         "a separação roda sozinha ao ligar na tomada")
 
         ui = self._group(f, "Interface e atalhos")
         self._check(ui, "Pílula flutuante durante a gravação", "ui", "overlay")

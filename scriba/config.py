@@ -141,6 +141,8 @@ ask_speakers_timeout = 90   # s sem resposta -> automático (0 = espera indefini
 # Áudio longo: diariza em blocos de N min p/ não estourar a VRAM (re-liga as vozes
 # pelo embedding). Resolve o spill VRAM->RAM em reuniões longas. 0 = sempre inteiro.
 chunk_minutes = 3
+# Notebook na bateria: nota na hora sem separar vozes; separa ao voltar à tomada.
+only_on_ac = true
 
 [summary]
 enabled = true           # gerar resumo estruturado da reunião (IA)
@@ -255,6 +257,10 @@ class Diarization:
     # O nº de vozes informado ao fim da call vale aqui também (#198): teto por bloco
     # e redução das vozes re-ligadas a esse número no fim.
     chunk_minutes: int = 3
+    # Notebook na bateria: a nota sai na hora SEM separar vozes, e a separação roda
+    # sozinha quando voltar à tomada (é a etapa mais pesada: GPU quente por minutos).
+    # Desktop não tem bateria e ignora.
+    only_on_ac: bool = True
 
 
 @dataclass(frozen=True)
@@ -454,6 +460,7 @@ min_speakers = {_n(dz.min_speakers)}         # 0 = automático (mín. de vozes)
 ask_speakers = {_b(dz.ask_speakers)}
 ask_speakers_timeout = {_n(dz.ask_speakers_timeout)}   # s sem resposta -> automático (0 = espera indefinida)
 chunk_minutes = {_n(dz.chunk_minutes)}      # diariza em blocos de N min (0 = inteiro) p/ não estourar a VRAM
+only_on_ac = {_b(dz.only_on_ac)}        # na bateria: nota já, vozes quando voltar à tomada
 
 [summary]
 enabled = {_b(s.enabled)}           # gerar resumo estruturado da reunião (IA)

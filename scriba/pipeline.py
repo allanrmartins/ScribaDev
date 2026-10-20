@@ -8,6 +8,7 @@ from pathlib import Path
 
 from . import idlewatch
 from . import merge as merge_mod
+from . import power
 from . import util as util_mod
 from .config import load
 from .transcription import TranscriptionProvider, make_transcriber
@@ -107,7 +108,13 @@ def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: Transc
 
     # 2ª passada: diarização do loopback (pyannote), já sem o Whisper na memória
     diarized_groups: dict[str, list] | None = None
-    if loopback_wav is not None:
+    if (loopback_wav is not None and cfg.diarization.enabled and cfg.diarization.only_on_ac
+            and power.on_battery()):
+        # a etapa mais pesada fica p/ a tomada: a nota sai agora com "Participantes"
+        # e o app reprocessa sozinho ao voltar à energia (main._power_watch)
+        print("na bateria: separação de vozes adiada até ligar na tomada")
+        meta["diarization_deferred"] = "battery"
+    elif loopback_wav is not None:
         from . import diarize as diarize_mod
 
         # marca o estágio antes de carregar o pyannote: a UI mostra "Separando vozes…"
@@ -117,6 +124,7 @@ def transcribe_folder(folder: Path, force_cpu: bool = False, transcriber: Transc
                                         meta=meta, force_cpu=force_cpu)  # --cpu vale p/ a diarização também (#115)
         if dz_result and dz_result.turns:
             meta.pop("diarization_error", None)  # sucesso: limpa erro de tentativa anterior
+            meta.pop("diarization_deferred", None)
             diarized_groups, order = diarize_mod.assign_speakers(lb_segments, dz_result.turns)
             meta["diarization_model"] = cfg.diarization.model
             # enrollment de voz (#1): casa cada "Participante N" ao seu embedding,

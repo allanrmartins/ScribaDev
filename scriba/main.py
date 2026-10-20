@@ -1113,6 +1113,7 @@ class ScribaApp:
                 )
             return
         export_path = title = None
+        deferred = False
         try:
             done_meta = json.loads(meta_path.read_text(encoding="utf-8"))
             # sucesso fecha o episódio de watchdog (#186): sem o carimbo, uma
@@ -1122,10 +1123,15 @@ class ScribaApp:
                     meta_path, json.dumps(done_meta, ensure_ascii=False, indent=2))
             export_path = done_meta.get("export_path")
             title = done_meta.get("title")
+            deferred = bool(done_meta.get("diarization_deferred"))
             if done_meta.get("diarization_error"):
                 self._warn_diarization_error(folder, done_meta["diarization_error"])
         except Exception:
             log.exception("meta.json ilegível pós-processamento")
+        if deferred:
+            log.info("na bateria: %s saiu sem separar vozes - separo ao ligar na tomada", folder.name)
+            self._toast("Nota pronta, vozes depois",
+                        "Na bateria a separação de vozes fica para quando ligar na tomada.")
         if export_path and self.notifier:
             try:
                 self.notifier.notes_ready(Path(export_path))
@@ -1199,7 +1205,7 @@ class ScribaApp:
         """True se a pasta já espera um reprocesso manual na fila (o menu desabilita)."""
         return str(folder) in self._reprocess_queued
 
-    def enqueue_reprocess(self, folder, verb: str) -> None:
+    def enqueue_reprocess(self, folder, verb: str, toast: bool = True) -> None:
         """Reprocesso pedido pelo menu Reprocessar (#186), na MESMA fila serial do
         processamento normal - dois Whisper na mesma GPU já travou calls seguidas.
 
@@ -1235,8 +1241,49 @@ class ScribaApp:
         self._reprocess_queued.add(str(folder))
         self.jobs.put((folder, verb))
         log.info("reprocesso manual (%s) enfileirado: %s", verb, folder.name)
-        self._toast("Reprocessamento na fila",
-                    f"{folder.name} - a nota atual fica guardada como .bak")
+        if toast:
+            self._toast("Reprocessamento na fila",
+                        f"{folder.name} - a nota atual fica guardada como .bak")
+
+    def _power_watch(self) -> None:
+        """Vozes adiadas na bateria (diarization.only_on_ac): ao voltar à tomada,
+        reprocessa as reuniões que saíram sem separar vozes. Sonda a cada 60 s numa
+        thread própria (o pmset é subprocesso - nada disso na thread da GUI). A 1ª
+        sonda conta como "voltou à tomada": pega o que ficou de sessões anteriores."""
+        from . import power
+
+        was_battery = True
+        while not self.stop_event.wait(60):
+            try:
+                on_battery = power.on_battery()
+                if was_battery and not on_battery:
+                    self._reprocess_deferred_voices()
+                was_battery = on_battery
+            except Exception:
+                log.exception("vigia de energia falhou (seguindo)")
+
+    def _reprocess_deferred_voices(self) -> None:
+        """Enfileira na fila serial as reuniões prontas com `diarization_deferred`."""
+        import json
+
+        if not self.cfg.diarization.enabled:
+            return
+        folders = []
+        for meta_path in self.cfg.output.resolved_recordings_dir().rglob("meta.json"):
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if (meta.get("diarization_deferred") and meta.get("status") == "done"
+                    and not self.is_reprocess_queued(meta_path.parent)):
+                folders.append(meta_path.parent)
+        if not folders:
+            return
+        log.info("na tomada: separando vozes de %d reunião(ões) feitas na bateria", len(folders))
+        self._toast("Na tomada: separando vozes",
+                    f"{len(folders)} reunião(ões) feita(s) na bateria - a nota atual fica como .bak")
+        for folder in sorted(folders):
+            self.enqueue_reprocess(folder, "process", toast=False)
 
     def scan_pending(self) -> None:
         """Enfileira reuniões gravadas que ainda não viraram notas (ex.: app caiu)."""
@@ -1480,6 +1527,7 @@ class ScribaApp:
         threading.Thread(target=self.detector.run, args=(self.stop_event,), daemon=True, name="detector").start()
         threading.Thread(target=self._worker, daemon=True, name="worker").start()
         threading.Thread(target=self._show_window_listener, daemon=True, name="activate").start()
+        threading.Thread(target=self._power_watch, daemon=True, name="power").start()
         self._setup_hotkey()
         self.scan_pending()
         self._after(8000, self._purge_loop)  # limpeza de gravações antigas (e a cada 6 h)
