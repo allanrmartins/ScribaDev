@@ -65,6 +65,7 @@ def enum_titles(exe_names: set[str]) -> list[str]:
     kwin = getattr(AS, "kAXWindowsAttribute", "AXWindows")
     ktitle = getattr(AS, "kAXTitleAttribute", "AXTitle")
     prefixes = _prefixes_for(exe_names)
+    kmin = getattr(AS, "kAXMinimizedAttribute", "AXMinimized")
     titles: list[str] = []
     for app in NSWorkspace.sharedWorkspace().runningApplications():
         bid = (app.bundleIdentifier() or "").lower()
@@ -74,7 +75,15 @@ def enum_titles(exe_names: set[str]) -> list[str]:
         err, wins = AS.AXUIElementCopyAttributeValue(ax, kwin, None)
         if err or not wins:
             continue
+        teams = bid.startswith(_BUNDLE_PREFIXES["ms-teams"])
         for w in wins:
+            if teams:
+                # janela minimizada do Teams não é a call em uso: o chat ou a reunião
+                # de antes ficam no Dock com título de uma linha só e passavam pela
+                # janela da call, gravando o nome errado na ata (2026-10-23)
+                err_min, minimized = AS.AXUIElementCopyAttributeValue(w, kmin, None)
+                if not err_min and minimized:
+                    continue
             err2, title = AS.AXUIElementCopyAttributeValue(w, ktitle, None)
             if not err2 and title:
                 titles.append(str(title))

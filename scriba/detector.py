@@ -442,6 +442,9 @@ def _teams_call_name(raw: str) -> str | None:
 
 # Janelas do Teams do Mac que não são de call nem trazem nome (medido em 2026-10-20).
 _TEAMS_MAC_NAO_CALL = {"window", "microsoft teams", "microsoft teams notification"}
+# Título que é endereço ("teams.microsoft.com/v2/"): o Teams do Mac mostra isso em
+# janela própria no meio da call, por segundos ou minutos (medido em 2026-10-23)
+_TITULO_URL = re.compile(r"^(?:[a-z]+://)?[\w-]+(?:\.[\w-]+)+/\S*$", re.IGNORECASE)
 
 
 def _teams_call_name_mac(raw: str) -> str | None:
@@ -451,11 +454,12 @@ def _teams_call_name_mac(raw: str) -> str | None:
       call:      "<assunto da reunião>"   (sem sufixo de organização/conta/app)
       principal: "Chat | Fulano"          ("<seção> | <contexto>")
       auxiliar:  "Window"
+      endereço:  "teams.microsoft.com/v2/"  (2026-10-23, não é call)
     A janela da call é a única com UM segmento só que não é genérico. A principal
     sempre traz " | ": lê-la como nome gravava o chat aberto na ata (#217 no Mac).
     """
     t = re.sub(r"^\(\d+\)\s*", "", (raw or "").strip())
-    if not t or " | " in t or t.casefold() in _TEAMS_MAC_NAO_CALL:
+    if not t or " | " in t or t.casefold() in _TEAMS_MAC_NAO_CALL or _TITULO_URL.match(t):
         return None
     if _is_aux_window(t):
         return ""
@@ -552,7 +556,7 @@ class Detector:
         on_call_ended: Callable[[], None],
         on_grace: Callable[[], None] | None = None,
         on_grace_cancel: Callable[[], None] | None = None,
-        on_title: Callable[[str], None] | None = None,
+        on_title: Callable[[str, float], None] | None = None,
         is_recording: Callable[[], bool] | None = None,
     ):
         self.cfg = cfg
@@ -567,7 +571,7 @@ class Detector:
         self.on_call_ended = on_call_ended
         self.on_grace = on_grace  # mic liberado: esperando a tolerância
         self.on_grace_cancel = on_grace_cancel  # mic voltou: era troca de device
-        self.on_title = on_title  # título estável capturado (bônus #35: meta tardio)
+        self.on_title = on_title  # título estável + hora (time.time) da 1ª amostra dele
         self.is_recording = is_recording  # #38: p/ rearmar o auto-record após ■
         self.state = CallState.IDLE
         self._grace_deadline = 0.0
@@ -580,6 +584,7 @@ class Detector:
         self._session_stop = 0                  # LastUsedTimeStop guardado ao entrar no GRACE
         # sinal de título da reunião (#35): desempata splits ambíguos do #34
         self._title_last = ""        # última amostra de título
+        self._title_last_at = 0.0    # relógio de parede da 1ª amostra do _title_last
         self._title_stable = ""      # título estável (2 amostras iguais e não-vazias)
         self._title_at_grace = ""    # título estável guardado ao entrar no GRACE (Uso A)
         self._polls_since_title = 0  # contador para reamostrar a cada _TITLE_SAMPLE_EVERY
@@ -640,8 +645,14 @@ class Detector:
 
     def _sample_title(self) -> None:
         """Reamostra o título da janela a cada _TITLE_SAMPLE_EVERY polls e mantém o
-        'título estável' (2 amostras iguais e não-vazias). Uso C (#35): se o estável
-        muda sem nenhum evento de sessão de mic, só alerta - a v1 não divide por isso."""
+        'título estável' (2 amostras iguais e não-vazias).
+
+        Uso C (#35): o estável mudar sem nenhum evento de sessão de mic é a call em
+        espera seguida de outra call - o mic fica aberto de uma para a outra. Aqui só
+        avisa; quem recebe o título (on_title) anota a troca no meta, com a hora da
+        1ª amostra, e o processamento corta a gravação com a transcrição na mão
+        (split.title_cuts), quando dá para ignorar uma piscada de título.
+        """
         self._polls_since_title += 1
         if self._polls_since_title < _TITLE_SAMPLE_EVERY:
             return
@@ -651,8 +662,10 @@ class Detector:
             if self._title_stable:  # Uso C: estável mudou sem ciclo/gap de mic
                 log.warning("possível nova call sem ciclo de mic: %s -> %s", self._title_stable, t)
             self._title_stable = t
-            if self.on_title:  # bônus: preenche o meeting_title tardio no meta
-                self.on_title(t)
+            if self.on_title:  # meeting_title tardio + marca da troca no meta
+                self.on_title(t, self._title_last_at)
+        if t != self._title_last:
+            self._title_last_at = time.time()
         self._title_last = t
 
     def poll_once(self) -> None:

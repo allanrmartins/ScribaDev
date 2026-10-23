@@ -22,6 +22,9 @@ from . import util
 
 _TERMINAL_STATUSES = ("done", "failed")  # gravação parada, seguro de cortar
 _MIN_MARGIN = 5.0  # o offset tem de sobrar >= 5 s de cada lado
+# Corte pela troca de título (call em espera + outra call, 2026-10-23):
+_MIN_SEGMENTO = 120.0  # título que dura menos que isso é piscada, não reunião
+_JANELA_PAUSA = 15.0   # o título é amostrado a cada ~10 s: a troca real veio antes
 
 
 class SplitError(Exception):
@@ -109,6 +112,86 @@ def split_meta(
     return meta1, meta2
 
 
+def _segmentos_por_titulo(meta: dict) -> list[list]:
+    """[[início, título], ...] da gravação pelas marcas de título, já sem piscadas.
+
+    O trecho antes da 1ª marca é da 1ª reunião (o título estabiliza ~20 s depois do
+    início). Segmento curto some no vizinho e vizinhos da mesma reunião se fundem
+    (a pessoa espiou a outra janela, entrou alguém na call ad hoc...). Em dúvida
+    não divide: fundir de novo duas notas é trabalho manual.
+    """
+    from .detector import mesma_reuniao_pelo_titulo
+
+    try:
+        started = datetime.fromisoformat(meta["started_at"])
+    except (KeyError, TypeError, ValueError):
+        return []
+    total = float(meta.get("duration_seconds") or 0.0)
+    segs: list[list] = []
+    for m in meta.get("title_marks") or []:
+        try:
+            at = (datetime.fromisoformat(m["at"]) - started).total_seconds()
+        except (KeyError, TypeError, ValueError):
+            continue
+        title = (m.get("title") or "").strip()
+        if not title or at >= total:
+            continue
+        segs.append([0.0 if not segs else max(at, segs[-1][0]), title])
+    while True:
+        # funde vizinhos da mesma reunião
+        merged = segs[:1]
+        for seg in segs[1:]:
+            if mesma_reuniao_pelo_titulo(merged[-1][1], seg[1]):
+                continue
+            merged.append(seg)
+        segs = merged
+        if len(segs) < 2:
+            return segs
+        ends = [s[0] for s in segs[1:]] + [total]
+        dur = [e - s[0] for s, e in zip(segs, ends)]
+        i = min(range(len(segs)), key=dur.__getitem__)
+        if dur[i] >= _MIN_SEGMENTO:
+            return segs
+        if i == 0:
+            segs[1][0] = 0.0  # o primeiro é curto: o tempo dele vai para o seguinte
+        del segs[i]
+
+
+def _pausa_antes(turns: list[dict], marca: float) -> float:
+    """Ponto de corte perto da `marca`: o meio do maior silêncio entre falas na
+    janela que antecede a primeira amostra do título novo. Sem silêncio na janela
+    (fala corrida), corta na marca."""
+    ini = marca - _JANELA_PAUSA
+    falas = sorted(
+        (float(t.get("start", 0.0)), float(t.get("end", t.get("start", 0.0))))
+        for t in turns if float(t.get("end", t.get("start", 0.0))) > ini
+        and float(t.get("start", 0.0)) < marca
+    )
+    melhor, corte = 0.0, marca
+    cursor = ini
+    for a, b in falas:
+        if a > cursor and a - cursor > melhor:
+            melhor, corte = a - cursor, (cursor + a) / 2
+        cursor = max(cursor, b)
+    if marca > cursor and marca - cursor > melhor:
+        corte = (cursor + marca) / 2
+    return corte
+
+
+def title_cuts(meta: dict, turns: list[dict]) -> list[tuple[float, str]]:
+    """[(offset, título da parte que começa ali), ...] para cortar a gravação onde a
+    call mudou sem o mic fechar. Vazio = uma reunião só."""
+    segs = _segmentos_por_titulo(meta)
+    total = float(meta.get("duration_seconds") or 0.0)
+    cuts: list[tuple[float, str]] = []
+    for start, title in segs[1:]:
+        off = _pausa_antes(turns, start)
+        prev = cuts[-1][0] if cuts else 0.0
+        if prev + _MIN_MARGIN < off < total - _MIN_MARGIN:
+            cuts.append((round(off, 1), title))
+    return cuts
+
+
 # ------------------------------------------------------------- orquestração --
 
 def _run_ffmpeg(ff: list[str], args: list[str]) -> None:
@@ -179,6 +262,83 @@ def split_recording(folder: Path, offset: float, *, reprocess: bool = True) -> t
             f"({_MIN_MARGIN:.0f}s .. {total - _MIN_MARGIN:.0f}s desta gravação de {total:.0f}s)"
         )
 
+    folder2, orig = _cut(folder, meta, offset, ff)
+
+    if not reprocess:
+        return folder, folder2
+
+    # 5) re-resume as duas (NÃO re-transcreve): a parte 1 regrava a nota antiga
+    from . import notes
+    ok1 = notes.build_notes(folder) is not None
+    ok2 = notes.build_notes(folder2) is not None
+    if ok1 and ok2:
+        _cleanup(orig)  # só descarta os originais com as duas notas prontas
+    else:
+        raise SplitError(
+            f"corte feito, mas o re-resumo falhou (originais preservados em *.orig). "
+            f"Rode: scribadev summarize \"{folder}\" e \"{folder2}\""
+        )
+
+    # 6) o índice é cache derivado das pastas: reconstrói do zero (some a fundida)
+    try:
+        from . import meetings_index
+        meetings_index.reindex()
+    except Exception:
+        pass
+    return folder, folder2
+
+
+def split_by_titles(folder: Path) -> list[Path]:
+    """Separa as calls emendadas de uma gravação recém-transcrita, pelas marcas de
+    título do meta (call em espera + outra call, sem o mic fechar no meio).
+
+    Roda dentro do processamento, com o .lock da pasta: a parte 1 continua no fluxo
+    normal e as demais ficam em "transcribed", prontas para o resumo. Devolve as
+    pastas novas (vazio = nada a cortar). Corte idempotente: cada parte sai com a
+    própria marca só, e rodar de novo não corta nada.
+    """
+    folder = Path(folder)
+    meta_path = folder / "meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    turns = json.loads((folder / "transcript.json").read_text(encoding="utf-8"))
+    cuts = title_cuts(meta, turns)
+    if not cuts:
+        return []
+    ff = util.ffmpeg_command()
+    if ff is None:
+        print("ffmpeg ausente: a gravação tem mais de uma call, mas fica numa nota só")
+        return []
+    first = _segmentos_por_titulo(meta)[0][1]
+    novas: list[Path] = []
+    # do fim para o começo: cada corte é na pasta original, no tempo original
+    for offset, title in reversed(cuts):
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        folder2, orig = _cut(folder, meta, offset, ff)
+        _cleanup(orig)  # corte sem recodificar: as partes juntas são o original
+        _marcar_parte(folder2 / "meta.json", title)
+        novas.insert(0, folder2)
+        print(f"call nova pelo título em {offset:.0f}s: {title} -> {folder2.name}")
+    _marcar_parte(meta_path, first)
+    return novas
+
+
+def _marcar_parte(meta_path: Path, title: str) -> None:
+    """A parte vira uma reunião de um título só: meeting_title e marca única."""
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["meeting_title"] = title
+    meta["title_marks"] = [{"at": meta["started_at"], "title": title}]
+    _write_json(meta_path, meta)
+
+
+def _cut(folder: Path, meta: dict, offset: float, ff: list[str]) -> tuple[Path, list[Path]]:
+    """Corta a pasta em duas no offset: transcript, áudio e meta (status "transcribed").
+
+    A parte 1 fica na pasta original; devolve (pasta da parte 2, áudios originais
+    guardados como *.orig). Quem chama decide quando apagar os *.orig.
+    """
+    total = float(meta.get("duration_seconds", 0.0))
+    transcript_path = folder / "transcript.json"
+    meta_path = folder / "meta.json"
     streams = meta.get("streams", {})
     src = {key: folder / st["file"] for key, st in streams.items() if st.get("file")}
     missing = [str(p) for p in src.values() if not p.exists()]
@@ -242,29 +402,7 @@ def split_recording(folder: Path, offset: float, *, reprocess: bool = True) -> t
     if voices.exists():
         shutil.copyfile(voices, folder2 / "voices.json")
     _cleanup([folder / "notas.md"])  # a nota da parte 1 será regravada pelo re-resumo
-
-    if not reprocess:
-        return folder, folder2
-
-    # 5) re-resume as duas (NÃO re-transcreve): a parte 1 regrava a nota antiga
-    from . import notes
-    ok1 = notes.build_notes(folder) is not None
-    ok2 = notes.build_notes(folder2) is not None
-    if ok1 and ok2:
-        _cleanup(orig)  # só descarta os originais com as duas notas prontas
-    else:
-        raise SplitError(
-            f"corte feito, mas o re-resumo falhou (originais preservados em *.orig). "
-            f"Rode: scribadev summarize \"{folder}\" e \"{folder2}\""
-        )
-
-    # 6) o índice é cache derivado das pastas: reconstrói do zero (some a fundida)
-    try:
-        from . import meetings_index
-        meetings_index.reindex()
-    except Exception:
-        pass
-    return folder, folder2
+    return folder2, orig
 
 
 def _base_dir_for(folder: Path) -> Path:

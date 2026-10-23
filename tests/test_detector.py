@@ -150,7 +150,8 @@ class TeamsCallWindowMacTests(unittest.TestCase):
         self.assertEqual(detector._teams_call_title([self.PRINCIPAL, self.CALL, "Window"]), self.CALL)
 
     def test_principal_e_auxiliar_nao_sao_call(self):
-        for raw in (self.PRINCIPAL, "Calendar | Calendar", "Window", "Microsoft Teams", "", "   "):
+        for raw in (self.PRINCIPAL, "Calendar | Calendar", "Window", "Microsoft Teams", "", "   ",
+                    "teams.microsoft.com/v2/", "https://teams.microsoft.com/l/meetup-join/x"):
             self.assertIsNone(detector._teams_call_name_mac(raw), raw)
         self.assertIsNone(detector._teams_call_title([self.PRINCIPAL, "Window"]))
 
@@ -264,7 +265,7 @@ class DetectorStateMachineTests(unittest.TestCase):
             on_call_ended=lambda: self.events.append(("ended",)),
             on_grace=lambda: self.events.append(("grace",)),
             on_grace_cancel=lambda: self.events.append(("resume",)),
-            on_title=lambda t: self.events.append(("title", t)),
+            on_title=lambda t, _at: self.events.append(("title", t)),
             is_recording=lambda: self.recording,
         )
         det._mic_sessions = lambda: dict(self.sessions)  # registro controlado

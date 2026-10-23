@@ -452,26 +452,19 @@ class ScribaApp:
         except Exception:
             log.exception("não consegui gravar num_speakers no meta de %s", getattr(folder, "name", folder))
 
-    def _on_title(self, title: str) -> None:
-        """Título estável capturado durante a gravação (#35): preenche meeting_title
-        no meta da gravação ATIVA se ele estava vazio — melhora a nota e o índice de
-        busca para calls que demoram a expor o título. Roda na thread do detector."""
-        import json
-
+    def _on_title(self, title: str, at: float = 0.0) -> None:
+        """Título estável capturado durante a gravação (#35): o meta da gravação
+        ATIVA ganha o meeting_title que faltava e uma marca de troca de título, que o
+        processamento usa para separar calls emendadas. Roda na thread do detector."""
         with self.rec_lock:
             rec = self.rec
         if rec is None:
             return
-        meta_path = rec.folder / "meta.json"
         try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            if meta.get("meeting_title"):
-                return  # já tem título de janela: não sobrescreve
-            meta["meeting_title"] = title
-            util.atomic_write_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
-            log.info("meeting_title capturado tardiamente: %s (%s)", title, rec.folder.name)
+            rec.note_title(title, at)
+            log.info("título da call: %s (%s)", title, rec.folder.name)
         except Exception:
-            log.exception("não consegui gravar meeting_title tardio em %s", rec.folder.name)
+            log.exception("não consegui anotar o título no meta de %s", rec.folder.name)
 
     def _set_speakers_live(self, n: int) -> None:
         """Pílula definiu o nº de participantes durante a call (#13): grava no meta da
@@ -1190,6 +1183,15 @@ class ScribaApp:
             if done_meta.pop("watchdog_requeued", None):
                 util.atomic_write_text(
                     meta_path, json.dumps(done_meta, ensure_ascii=False, indent=2))
+            # calls emendadas cortadas pelo título: as outras partes vão para a fila
+            # (já transcritas, só falta o resumo)
+            split_parts = done_meta.pop("split_parts", None) or []
+            if split_parts:
+                util.atomic_write_text(
+                    meta_path, json.dumps(done_meta, ensure_ascii=False, indent=2))
+                log.info("%s tinha %d call(s) emendada(s): na fila", folder.name, len(split_parts))
+                for part in split_parts:
+                    self.jobs.put(Path(part))
             export_path = done_meta.get("export_path")
             title = done_meta.get("title")
             deferred = bool(done_meta.get("diarization_deferred"))

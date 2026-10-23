@@ -353,6 +353,7 @@ class Recording:
         # outro processo estiver travado (#114). A gravação nasce JÁ (meta escrito,
         # pílula aparece); o título é capturado em thread e regrava o meta ao chegar.
         self.meeting_title = ""
+        self._title_marks: list[dict] = []  # trocas de título no meio da call (#35 Uso C)
         self._meta_lock = threading.Lock()
         self._meta_final = False  # stop() já gravou o meta final — não sobrescrever
         self._write_meta("recording")
@@ -377,6 +378,23 @@ class Recording:
             self.meeting_title = title
             if not self._meta_final:
                 self._write_meta("recording")
+
+    def note_title(self, title: str, at: float) -> None:
+        """Título estável da janela da call, visto pelo detector desde `at` (time.time).
+
+        Vira uma marca em `title_marks` no meta: a call em espera seguida de outra
+        não fecha o mic, e a troca de título é o único sinal. O processamento decide
+        se corta (split.title_cuts). Também preenche o meeting_title que o início da
+        gravação não conseguiu ler.
+        """
+        when = datetime.fromtimestamp(at) if at else datetime.now()
+        with self._meta_lock:
+            if self._meta_final:
+                return
+            if not self.meeting_title:
+                self.meeting_title = title
+            self._title_marks.append({"at": when.isoformat(timespec="seconds"), "title": title})
+            self._write_meta("recording")
 
     def _new_folder(self) -> Path:
         # árvore ano/mês/dia + pasta HH-MM da gravação (":" não é válido em nome
@@ -440,6 +458,8 @@ class Recording:
         }
         if getattr(self, "meeting_title", ""):
             meta["meeting_title"] = self.meeting_title
+        if getattr(self, "_title_marks", None):
+            meta["title_marks"] = self._title_marks
         if getattr(self, "_switches", None):
             meta["device_switches"] = self._switches  # trocas de dispositivo no meio (#22)
         if extra:

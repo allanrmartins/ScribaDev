@@ -2,16 +2,22 @@
 
 O orquestrador split_recording (ffmpeg + arquivos + re-resumo) é validado por
 integração; aqui cobrimos as três funções puras: parse_offset, slice_transcript
-e split_meta.
+e split_meta. O corte pelas marcas de título (title_cuts) também é puro; o
+split_by_titles roda de ponta a ponta com ffmpeg quando ele está no PATH.
 """
 
+import json
+import shutil
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scriba.split import parse_offset, slice_transcript, split_meta  # noqa: E402
+from scriba import split  # noqa: E402
+from scriba.split import parse_offset, slice_transcript, split_meta, title_cuts  # noqa: E402
 
 
 class ParseOffsetTests(unittest.TestCase):
@@ -125,3 +131,102 @@ class SplitMetaTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _meta_com_marcas(marcas: list[tuple[int, str]], total: float = 3391.0) -> dict:
+    """Meta de gravação iniciada às 10:06:51 com marcas de título (offset, título)."""
+    from datetime import datetime, timedelta
+
+    t0 = datetime(2026, 10, 23, 10, 6, 51)
+    return {
+        "started_at": t0.isoformat(timespec="seconds"),
+        "duration_seconds": total,
+        "title_marks": [{"at": (t0 + timedelta(seconds=s)).isoformat(timespec="seconds"),
+                         "title": t} for s, t in marcas],
+    }
+
+
+class TitleCutsTests(unittest.TestCase):
+    """Call em espera + outra call: o mic não fecha e só o título muda (2026-10-23)."""
+
+    FLORESTAL = "[Florestal] Testes integrados - Módulo FM"
+    # falas reais em volta da troca: a Florestal termina em 2746,3 e o colega
+    # atende em 2747,1, alguns segundos antes da 1ª amostra do título novo
+    TURNOS = [
+        {"start": 2673.6, "end": 2718.6, "speaker": "Participantes", "text": "a"},
+        {"start": 2718.6, "end": 2746.3, "speaker": "Participantes", "text": "b"},
+        {"start": 2747.1, "end": 2763.1, "speaker": "Participantes", "text": "fala meu"},
+        {"start": 2747.3, "end": 2752.8, "speaker": "Eu", "text": "opa"},
+    ]
+
+    def test_espera_e_outra_call_corta_na_pausa_antes_do_titulo_novo(self):
+        meta = _meta_com_marcas([(20, self.FLORESTAL), (2751, "Ebert Junior")])
+        self.assertEqual(title_cuts(meta, self.TURNOS), [(2746.7, "Ebert Junior")])
+
+    def test_um_titulo_so_nao_corta(self):
+        self.assertEqual(title_cuts(_meta_com_marcas([(20, self.FLORESTAL)]), self.TURNOS), [])
+        self.assertEqual(title_cuts({"started_at": "2026-10-23T10:06:51"}, []), [])
+
+    def test_piscada_de_titulo_nao_corta(self):
+        """Espiar a janela de outra reunião por 1 min não é call nova."""
+        meta = _meta_com_marcas([(20, self.FLORESTAL), (600, "Outra reunião"), (660, self.FLORESTAL)])
+        self.assertEqual(title_cuts(meta, []), [])
+
+    def test_call_curta_no_fim_nao_corta(self):
+        meta = _meta_com_marcas([(20, self.FLORESTAL), (3300, "Ebert Junior")])
+        self.assertEqual(title_cuts(meta, []), [])
+
+    def test_mesma_call_ad_hoc_com_gente_entrando_nao_corta(self):
+        meta = _meta_com_marcas([(20, "Pessoa A"), (900, "Pessoa A, Pessoa B")])
+        self.assertEqual(title_cuts(meta, []), [])
+
+    def test_voltar_para_a_call_em_espera_vira_terceira_parte(self):
+        meta = _meta_com_marcas([(20, self.FLORESTAL), (1000, "Ebert Junior"), (2000, self.FLORESTAL)])
+        cuts = title_cuts(meta, [])
+        self.assertEqual([t for _, t in cuts], ["Ebert Junior", self.FLORESTAL])
+        # sem fala na janela: corta no meio dela, antes da 1ª amostra do título
+        self.assertEqual([o for o, _ in cuts], [992.5, 1992.5])
+
+    def test_titulo_que_estabiliza_tarde_e_da_primeira_reuniao(self):
+        meta = _meta_com_marcas([(200, self.FLORESTAL), (2751, "Ebert Junior")])
+        self.assertEqual(title_cuts(meta, self.TURNOS), [(2746.7, "Ebert Junior")])
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg ausente")
+class SplitByTitlesTests(unittest.TestCase):
+    """Corte de ponta a ponta numa pasta recém-transcrita (áudio wav de verdade)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.base = Path(tmp.name)
+        self.folder = self.base / "2026" / "10" / "23" / "10-06"
+        self.folder.mkdir(parents=True)
+        for name in ("mic.wav", "loopback.wav"):
+            subprocess.run(
+                ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono",
+                 "-t", "400", str(self.folder / name)], check=True)
+        meta = _meta_com_marcas([(15, "Reunião A"), (250, "Pessoa B")], total=400.0)
+        meta["status"] = "transcribed"
+        meta["meeting_title"] = "Reunião A"
+        meta["streams"] = {k: {"file": f"{k}.wav", "offset_seconds": 0.0} for k in ("mic", "loopback")}
+        (self.folder / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+        turnos = [{"start": 10.0, "end": 238.0, "speaker": "Eu", "text": "a"},
+                  {"start": 244.0, "end": 300.0, "speaker": "Eu", "text": "b"}]
+        (self.folder / "transcript.json").write_text(json.dumps(turnos), encoding="utf-8")
+
+    def _meta(self, folder: Path) -> dict:
+        return json.loads((folder / "meta.json").read_text(encoding="utf-8"))
+
+    def test_corta_em_duas_reunioes_prontas_para_o_resumo(self):
+        novas = split.split_by_titles(self.folder)
+        self.assertEqual([p.name for p in novas], ["10-10"])  # 10:06:51 + 241 s
+        m1, m2 = self._meta(self.folder), self._meta(novas[0])
+        self.assertEqual((m1["meeting_title"], m2["meeting_title"]), ("Reunião A", "Pessoa B"))
+        self.assertEqual((m1["status"], m2["status"]), ("transcribed", "transcribed"))
+        self.assertEqual(m1["duration_seconds"], 241.0)
+        t2 = json.loads((novas[0] / "transcript.json").read_text(encoding="utf-8"))
+        self.assertEqual(t2[0]["start"], 3.0)  # a fala das 244 s abre a parte 2
+        self.assertFalse(list(self.folder.glob("*.orig")))
+        self.assertEqual(split.split_by_titles(self.folder), [])  # idempotente
+        self.assertEqual(split.split_by_titles(novas[0]), [])

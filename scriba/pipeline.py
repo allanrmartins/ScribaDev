@@ -264,6 +264,25 @@ def _mark_failed(folder: Path, exc: BaseException) -> None:
         pass  # meta ilegível: o supervisor (app) ainda marca failed pelo rc
 
 
+def _split_by_titles(folder: Path) -> None:
+    """Calls emendadas pelo título (espera + outra call): corta antes do resumo e
+    anota as partes novas em `split_parts`, para o app pôr na fila. Falha no corte
+    não derruba o processamento: sai uma nota só, como antes."""
+    from . import split
+
+    try:
+        parts = split.split_by_titles(folder)
+    except Exception as e:
+        print(f"corte pelo título falhou, segue numa nota só: {e}")
+        return
+    if not parts:
+        return
+    meta_path = folder / "meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["split_parts"] = [str(p) for p in parts]
+    _write_meta(meta_path, meta)
+
+
 def process_folder(folder: Path, force_cpu: bool = False, transcriber: TranscriptionProvider | None = None,
                    num_speakers: int | None = None) -> Path | None:
     """Fluxo completo pós-call: transcrever + gerar notas. Retorna o MD exportado.
@@ -311,6 +330,7 @@ def process_folder(folder: Path, force_cpu: bool = False, transcriber: Transcrip
             return None
         from . import notes
 
+        _split_by_titles(folder)
         # o resumo é espera legítima de rede/CLI (sem CPU, sem log por minutos):
         # a sentinela fica suspensa; ali quem vigia é o timeout do resumo (pai)
         idlewatch.suspend()
