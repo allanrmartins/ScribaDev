@@ -481,6 +481,17 @@ class ScribaApp:
         """Mostra a janela principal (chamável de qualquer thread)."""
         self.ui(lambda: self.main_win.show() if self.main_win else None)
 
+    def _install_dock_reopen(self) -> None:
+        """macOS: clique no ícone do Dock abre a janela, mesmo com o app iniciado
+        só na bandeja (login). Roda na thread da GUI."""
+        from . import dock_mac
+
+        def on_reopen() -> None:
+            log.info("clique no Dock - mostrando a janela")
+            self.show_main()
+
+        dock_mac.install_reopen_handler(on_reopen)
+
     def _refresh_home_after_process(self) -> None:
         """Re-atualiza a capa depois que o processamento terminou E o índice foi
         reconciliado pós-rename (#90). Roda na thread da GUI. Janela fechada/oculta
@@ -1617,6 +1628,9 @@ class ScribaApp:
         self._after(15000, self._repair_shortcuts_boot)  # ícone dos atalhos (#192)
         self._after(20000, self._claude_auth_loop)     # login do claude CLI (resumo)
 
+        if sys.platform == "darwin":
+            # depois do exec(): o Cocoa instala o handler dele ao terminar de subir
+            self._after(0, self._install_dock_reopen)
         if not self.start_hidden:
             self.show_main()  # lançamento manual (atalho): abre a janela na frente
         log.info("ScribaDev iniciado — monitorando calls do Teams")
