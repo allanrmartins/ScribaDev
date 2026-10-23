@@ -204,3 +204,60 @@ class DedupTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class NoteTitleTests(unittest.TestCase):
+    """Troca de título no meio da call vira marca no meta (call em espera + outra)."""
+
+    def setUp(self):
+        import tempfile
+        import threading
+        from datetime import datetime
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        rec = recorder.Recording.__new__(recorder.Recording)  # sem abrir áudio
+        rec.folder = Path(tmp.name)
+        rec.started_at = datetime(2026, 10, 23, 10, 6, 51)
+        stream = types.SimpleNamespace(
+            wav=types.SimpleNamespace(path=Path("mic.wav"), frames_written=0),
+            device_name="dev", rate=16000, channels=1, offset_seconds=0.0)
+        rec.mic = rec.loopback = stream
+        rec.meeting_title = ""
+        rec._title_marks = []
+        rec._switches = []
+        rec._meta_lock = threading.Lock()
+        rec._meta_final = False
+        rec._write_meta("recording")
+        self.rec = rec
+
+    def _meta(self) -> dict:
+        import json
+
+        return json.loads((self.rec.folder / "meta.json").read_text(encoding="utf-8"))
+
+    def test_marca_cada_titulo_e_preenche_o_nome_que_faltava(self):
+        from datetime import datetime
+
+        self.rec.note_title("Reunião A", datetime(2026, 10, 23, 10, 7, 10).timestamp())
+        self.rec.note_title("Pessoa B", datetime(2026, 10, 23, 10, 52, 42).timestamp())
+        meta = self._meta()
+        self.assertEqual(meta["meeting_title"], "Reunião A")
+        self.assertEqual(meta["title_marks"], [
+            {"at": "2026-10-23T10:07:10", "title": "Reunião A"},
+            {"at": "2026-10-23T10:52:42", "title": "Pessoa B"},
+        ])
+
+    def test_nao_apaga_o_num_speakers_da_pilula(self):
+        import json
+
+        meta = self._meta()
+        meta["num_speakers"] = 3  # gravado pela pílula direto no arquivo (#13)
+        (self.rec.folder / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+        self.rec.note_title("Reunião A", 0.0)
+        self.assertEqual(self._meta()["num_speakers"], 3)
+
+    def test_depois_do_meta_final_nao_regrava(self):
+        self.rec._meta_final = True
+        self.rec.note_title("Reunião A", 0.0)
+        self.assertNotIn("title_marks", self._meta())

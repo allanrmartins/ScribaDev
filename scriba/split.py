@@ -317,7 +317,8 @@ def split_by_titles(folder: Path) -> list[Path]:
         _cleanup(orig)  # corte sem recodificar: as partes juntas são o original
         _marcar_parte(folder2 / "meta.json", title)
         novas.insert(0, folder2)
-        print(f"call nova pelo título em {offset:.0f}s: {title} -> {folder2.name}")
+        print(f"call nova pelo título em {offset:.0f}s: {title} -> {folder2} "
+              "(fora do app: scribadev process <pasta>)")
     _marcar_parte(meta_path, first)
     return novas
 

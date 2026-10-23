@@ -464,6 +464,13 @@ class Recording:
             meta["device_switches"] = self._switches  # trocas de dispositivo no meio (#22)
         if extra:
             meta.update(extra)
+        # o meta também recebe escrita de fora no meio da call (num_speakers da
+        # pílula, #13): o que o gravador não monta fica como está no arquivo
+        try:
+            atual = json.loads((self.folder / "meta.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            atual = {}
+        meta = {**atual, **meta}
         util.atomic_write_text(
             self.folder / "meta.json",
             json.dumps(meta, ensure_ascii=False, indent=2),
