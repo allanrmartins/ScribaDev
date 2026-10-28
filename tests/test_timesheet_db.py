@@ -440,5 +440,91 @@ class TimesheetDbTests(unittest.TestCase):
         self.assertIn(out.name, left)
 
 
+    # -- cadastro de OS por cliente --------------------------------------------
+    def test_normaliza_codigo_de_os(self):
+        n = tsdb.normalize_project_code
+        self.assertEqual(n("OC 20933"), "20933")
+        self.assertEqual(n("os: 20933"), "20933")
+        self.assertEqual(n("GAP-401220"), "401220")
+        self.assertEqual(n(" 20933 "), "20933")
+        # texto livre fica como veio (só espaços normalizados)
+        self.assertEqual(n("Relatório  de Cubagem"), "Relatório de Cubagem")
+        self.assertEqual(n("GAP ID 3.4.07-G14"), "GAP ID 3.4.07-G14")
+        # "OC 20933" e "20933" são a MESMA OS do cliente
+        cid = tsdb.add_client("Delta")
+        pid = tsdb.add_project(cid, "OC 20933")
+        self.assertEqual(tsdb.add_project(cid, "20933"), pid)
+        self.assertEqual(tsdb.list_projects(cid)[0]["code"], "20933")
+        self.assertEqual(tsdb.find_project(cid, "oc 20933"), pid)
+
+    def test_seed_registry_do_historico(self):
+        """Clientes em texto cru viram cadastro (grafia mais usada), cada OS
+        vira OS DAQUELE cliente e os apontamentos são ligados; descartados não
+        geram cliente; dry_run não grava nada."""
+        self._entry(client_text="Simpar", project_text="100041")
+        self._entry(client_text="SIMPAR", project_text="100041", start_time="14:00",
+                    end_time="15:00")
+        self._entry(client_text="Simpar", project_text="21312", start_time="15:00",
+                    end_time="16:00")
+        self._entry(client_text="Delta", project_text="OC 20933", start_time="16:00",
+                    end_time="17:00")
+        self._entry(client_text="Delta", project_text="20933", start_time="17:00",
+                    end_time="18:00")
+        dead = self._entry(client_text="pessoal", start_time="18:00", end_time="19:00")
+        tsdb.update_entry(dead, status="discarded")
+
+        preview = tsdb.seed_registry(dry_run=True)
+        self.assertEqual(preview["clients"], ["Delta", "Simpar"])
+        self.assertEqual(preview["projects"],
+                         [("Delta", "20933"), ("Simpar", "100041"), ("Simpar", "21312")])
+        self.assertEqual(preview["entries"], 5)
+        self.assertEqual(tsdb.list_clients(), [])          # dry_run desfez
+        self.assertTrue(all(e["client_id"] is None for e in tsdb.list_entries()))
+
+        self.assertEqual(tsdb.seed_registry(), preview)
+        rows = [e for e in tsdb.list_entries() if e["status"] != "discarded"]
+        self.assertTrue(all(e["client_id"] and e["project_id"] for e in rows))
+        self.assertTrue(all(e["client_text"] == "" and e["project_text"] == "" for e in rows))
+        self.assertEqual({e["project_code"] for e in rows if e["client_name"] == "Delta"},
+                         {"20933"})
+        # idempotente: rodar de novo não acha nada
+        self.assertEqual(tsdb.seed_registry(),
+                         {"clients": [], "projects": [], "entries": 0})
+
+    def test_link_entries_depois_do_alias(self):
+        cid = tsdb.add_client("Coruripe")
+        eid = self._entry(client_text="Usina Cururipe", project_text="403240")
+        self.assertEqual(tsdb.link_entries(), 0)            # grafia não resolve ainda
+        tsdb.add_alias(cid, "Usina Cururipe")
+        self.assertEqual(tsdb.link_entries([eid]), 1)
+        e = tsdb.list_entries()[0]
+        self.assertEqual((e["client_name"], e["project_code"]), ("Coruripe", "403240"))
+
+    def test_merge_client_preserva_os_dos_apontamentos(self):
+        """Mesma OS nos dois clientes: os apontamentos da origem passam para a
+        OS do destino - antes o cascade apagava a OS e o SET NULL deixava os
+        apontamentos SEM OS (justamente o caso Cururipe → Coruripe)."""
+        dst = tsdb.add_client("Coruripe")
+        src = tsdb.add_client("Cururipe")
+        p_dst = tsdb.add_project(dst, "403240")
+        p_src = tsdb.add_project(src, "403240")
+        only_src = tsdb.add_project(src, "999")
+        self._entry(client_id=src, project_id=p_src)
+        self._entry(client_id=src, project_id=only_src, start_time="14:00", end_time="15:00")
+        tsdb.merge_client(src, dst)
+        rows = tsdb.list_entries()
+        self.assertEqual([r["client_id"] for r in rows], [dst, dst])
+        self.assertEqual([r["project_id"] for r in rows], [p_dst, only_src])
+        self.assertEqual(sorted(p["code"] for p in tsdb.list_projects(dst)), ["403240", "999"])
+        self.assertEqual(tsdb.resolve_client("cururipe"), (dst, "Coruripe"))
+
+    def test_desativar_os(self):
+        cid = tsdb.add_client("Simpar")
+        pid = tsdb.add_project(cid, "20990")
+        tsdb.set_project_active(pid, False)
+        self.assertEqual(tsdb.list_projects(cid), [])
+        self.assertEqual(len(tsdb.list_projects(cid, active_only=False)), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

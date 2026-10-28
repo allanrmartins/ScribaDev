@@ -537,12 +537,11 @@ def _ts_add(args, tsdb) -> int:
 def _resolve_project(tsdb, client_id: int | None, code: str) -> tuple[int | None, str]:
     """(project_id, project_text): o código casa com um projeto cadastrado do
     cliente resolvido, senão fica como texto cru."""
-    text = (code or "").strip()
+    text = tsdb.normalize_project_code(code)
     if client_id is not None and text:
-        match = [p for p in tsdb.list_projects(client_id)
-                 if p["code"].casefold() == text.casefold()]
-        if match:
-            return match[0]["id"], ""
+        pid = tsdb.find_project(client_id, text)
+        if pid is not None:
+            return pid, ""
     return None, text
 
 

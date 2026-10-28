@@ -22,6 +22,7 @@ DB: %LOCALAPPDATA%/ScribaDev/timesheet.db (sqlite3 da stdlib; zero dependência)
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 import unicodedata
 from contextlib import closing
@@ -735,10 +736,19 @@ def merge_client(src_id: int, dst_id: int) -> None:
                      (dst_id, src_id))
         conn.execute("UPDATE client_aliases SET client_id = ? WHERE client_id = ?",
                      (dst_id, src_id))
-        # projeto com mesmo código no destino: mantém o do destino; o do src cai
-        # junto com o cliente (cascade) — UPDATE OR IGNORE pula só os conflitantes.
-        conn.execute("UPDATE OR IGNORE projects SET client_id = ? WHERE client_id = ?",
-                     (dst_id, src_id))
+        # projeto com mesmo código (normalizado) no destino: os apontamentos passam
+        # para o do destino ANTES de o do src cair - senão o cascade do cliente
+        # apagaria o projeto e o SET NULL deixaria os apontamentos sem OS
+        for p in conn.execute("SELECT id, code FROM projects WHERE client_id = ?",
+                              (src_id,)).fetchall():
+            twin = _find_project(conn, dst_id, p["code"])
+            if twin is not None:
+                conn.execute("UPDATE entries SET project_id = ? WHERE project_id = ?",
+                             (twin["id"], p["id"]))
+                conn.execute("DELETE FROM projects WHERE id = ?", (p["id"],))
+            else:
+                conn.execute("UPDATE projects SET client_id = ? WHERE id = ?",
+                             (dst_id, p["id"]))
         # nome antigo vira alias do destino - só se um equivalente (chave _fold)
         # ainda não existir (os aliases do src acabaram de ser re-apontados)
         key = _fold(src["name"])
@@ -750,16 +760,34 @@ def merge_client(src_id: int, dst_id: int) -> None:
         conn.execute("DELETE FROM clients WHERE id = ?", (src_id,))
 
 
+_PROJECT_PREFIX = re.compile(r"^(?:OC|OS|GAP)\s*[-:#.nº°]*\s*(\d+)$", re.IGNORECASE)
+
+
+def normalize_project_code(raw: str) -> str:
+    """Código de OS/GAP como fica no cadastro: só o número quando o texto é um
+    prefixo conhecido + número ("OC 20933", "os: 20933" → "20933"); texto livre
+    ("Relatório de Cubagem") fica como veio, só com os espaços normalizados."""
+    text = _norm(raw)
+    m = _PROJECT_PREFIX.match(text)
+    return m.group(1) if m else text
+
+
+def _find_project(conn: sqlite3.Connection, client_id: int, code: str):
+    """Projeto do cliente com o código (normalizado, sem caixa), ou None."""
+    key = normalize_project_code(code).casefold()
+    return next((r for r in conn.execute(
+        "SELECT * FROM projects WHERE client_id = ? ORDER BY id", (client_id,))
+        if normalize_project_code(r["code"]).casefold() == key), None)
+
+
 def add_project(client_id: int, code: str, label: str = "") -> int:
-    """Cadastra um código de OS/GAP do cliente; idempotente por (cliente, código)."""
-    text = _norm(code)
+    """Cadastra um código de OS/GAP do cliente; idempotente por (cliente, código
+    normalizado - "OC 20933" e "20933" são o mesmo projeto)."""
+    text = normalize_project_code(code)
     if not text:
         raise ValueError("código de projeto vazio")
     with closing(connect()) as conn, conn:
-        row = conn.execute(
-            "SELECT id FROM projects WHERE client_id = ? AND code = ?",
-            (client_id, text),
-        ).fetchone()
+        row = _find_project(conn, client_id, text)
         if row is not None:
             return row["id"]
         cur = conn.execute(
@@ -767,6 +795,136 @@ def add_project(client_id: int, code: str, label: str = "") -> int:
             (client_id, text, label),
         )
         return cur.lastrowid
+
+
+def find_project(client_id: int, code: str) -> int | None:
+    """id do projeto do cliente com esse código (normalizado), ou None."""
+    with closing(connect()) as conn, conn:
+        row = _find_project(conn, client_id, code)
+        return row["id"] if row is not None else None
+
+
+def set_project_active(project_id: int, active: bool) -> None:
+    """Ativa/desativa uma OS (desativada sai dos combos e do preenchimento
+    automático; os apontamentos históricos continuam apontando para ela)."""
+    with closing(connect()) as conn, conn:
+        conn.execute("UPDATE projects SET active = ? WHERE id = ?",
+                     (int(bool(active)), project_id))
+
+
+# -- vínculo dos apontamentos ao cadastro ----------------------------------------
+
+def _client_index(conn: sqlite3.Connection) -> dict[str, int]:
+    """{chave _fold: client_id} de nomes canônicos e aliases dos clientes ativos
+    (nome vence alias; entre aliases iguais, o mais antigo - regra do resolve)."""
+    index: dict[str, int] = {}
+    for r in conn.execute(
+            """SELECT a.alias_norm AS k, a.client_id AS id FROM client_aliases a
+               JOIN clients c ON c.id = a.client_id WHERE c.active = 1
+               ORDER BY a.id DESC"""):
+        index[r["k"]] = r["id"]
+    for r in conn.execute("SELECT id, name FROM clients WHERE active = 1 ORDER BY id DESC"):
+        index[_fold(r["name"])] = r["id"]
+    return index
+
+
+def _link_entries(conn: sqlite3.Connection, ids=None) -> tuple[int, list[tuple[int, str]]]:
+    """Liga apontamentos em texto cru ao cadastro: cliente cujo texto resolve
+    (nome ou alias) ganha client_id; com o cliente ligado, o projeto em texto
+    vira projeto DESSE cliente (cadastrado na hora se ainda não existe) - é assim
+    que a base de OS por cliente se forma a partir do uso. Texto que não resolve
+    fica como está. Descartados não entram. Devolve (linhas alteradas,
+    [(client_id, código)] dos projetos criados)."""
+    sql = ("SELECT id, client_id, client_text, project_id, project_text FROM entries "
+           "WHERE status != 'discarded' AND ((client_id IS NULL AND client_text != '') "
+           "OR (project_id IS NULL AND project_text != ''))")
+    args: list = []
+    if ids is not None:
+        ids = list(ids)
+        if not ids:
+            return 0, []
+        sql += f" AND id IN ({','.join('?' * len(ids))})"
+        args = ids
+    index = _client_index(conn)
+    changed, created = 0, []
+    for r in conn.execute(sql, args).fetchall():
+        cid = r["client_id"] or index.get(_fold(r["client_text"]))
+        if cid is None:
+            continue
+        sets = {}
+        if r["client_id"] is None:
+            sets.update(client_id=cid, client_text="")
+        code = normalize_project_code(r["project_text"])
+        if r["project_id"] is None and code:
+            row = _find_project(conn, cid, code)
+            if row is None:
+                pid = conn.execute(
+                    "INSERT INTO projects (client_id, code, label) VALUES (?, ?, '')",
+                    (cid, code)).lastrowid
+                created.append((cid, code))
+            else:
+                pid = row["id"]
+            sets.update(project_id=pid, project_text="")
+        if sets:
+            sets["updated_at"] = _now()
+            conn.execute(f"UPDATE entries SET {', '.join(f'{k} = ?' for k in sets)} "
+                         "WHERE id = ?", (*sets.values(), r["id"]))
+            changed += 1
+    return changed, created
+
+
+def link_entries(ids=None) -> int:
+    """Liga ao cadastro os apontamentos em texto cru (todos, ou só `ids`).
+    Chamado depois de cadastrar/mesclar cliente e ao aceitar sugestões."""
+    with closing(connect()) as conn, conn:
+        return _link_entries(conn, ids)[0]
+
+
+def seed_registry(dry_run: bool = False) -> dict:
+    """Monta o cadastro a partir do HISTÓRICO: cada cliente em texto cru vira um
+    cliente cadastrado (grafias que só diferem em caixa/acento são o mesmo; vale
+    a grafia mais usada), e os apontamentos são ligados a ele e às suas OS.
+    Descartados não geram cliente (pastas soltas que o mod mandou e você
+    descartou não poluem o cadastro). Grafias realmente diferentes ("Usina
+    Coruripe") viram clientes separados: junte com "Mesclar em…".
+
+    dry_run=True calcula o relatório e desfaz tudo. Devolve {"clients": [nomes
+    criados], "projects": [(cliente, código)], "entries": linhas ligadas}."""
+    with closing(connect()) as conn:
+        try:
+            index = _client_index(conn)
+            spellings: dict[str, dict[str, int]] = {}
+            for r in conn.execute(
+                    """SELECT client_text, COUNT(*) AS n FROM entries
+                       WHERE client_id IS NULL AND client_text != ''
+                         AND status != 'discarded'
+                       GROUP BY client_text"""):
+                text = _norm(r["client_text"])
+                key = _fold(text)
+                if key and key not in index:
+                    counts = spellings.setdefault(key, {})
+                    counts[text] = counts.get(text, 0) + r["n"]
+            names = []
+            for counts in spellings.values():
+                # grafia mais usada; empate → a primeira em ordem alfabética
+                name = min(counts, key=lambda s: (-counts[s], s))
+                conn.execute("INSERT INTO clients (name, created_at) VALUES (?, ?)",
+                             (name, _now()))
+                names.append(name)
+            linked, created = _link_entries(conn)
+            cnames = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM clients")}
+            report = {"clients": sorted(names, key=str.casefold),
+                      "projects": sorted(((cnames[c], code) for c, code in created),
+                                         key=lambda x: (x[0].casefold(), x[1])),
+                      "entries": linked}
+            if dry_run:
+                conn.rollback()
+            else:
+                conn.commit()
+            return report
+        except Exception:
+            conn.rollback()
+            raise
 
 
 def list_projects(client_id: int | None = None, active_only: bool = True) -> list[dict]:

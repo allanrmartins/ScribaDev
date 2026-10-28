@@ -21,11 +21,12 @@ não há gate. Toda leitura/escrita do banco roda fora da thread da GUI.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from datetime import date, datetime
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QBrush, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QDateEdit, QDialog, QDialogButtonBox,
     QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
@@ -46,6 +47,7 @@ _ORIGIN_LABELS = {"scriba": "Call", "claude": "Claude", "manual": "Manual", "imp
 _COL_EXTRA = 5    # flag de hora extra (grade e fila) - coluna própria, não
                   # mais concatenada na descrição (a coluna H da planilha)
 _COL_POSTED = 6   # checkbox "Lançado" da grade (a coluna J da planilha)
+_HHMM = re.compile(r"\d\d:\d\d")
 
 
 def _fmt_min(minutes: int) -> str:
@@ -57,14 +59,61 @@ def _day_label(day: str) -> str:
     return f"{_WEEK[d.weekday()]} {d.strftime('%d/%m')}"
 
 
-def _time_edit(tooltip: str) -> QLineEdit:
-    """Campo HH:MM: dígitos viram máscara ao sair (util.format_time_hhmm)."""
-    le = widgets.make_entry("hh:mm")
-    le.setFixedWidth(72)
-    le.setAlignment(Qt.AlignCenter)
-    widgets.add_tooltip(le, tooltip)
-    le.editingFinished.connect(lambda le=le: le.setText(util.format_time_hhmm(le.text())))
-    return le
+class _TimeEdit(QLineEdit):
+    """Hora HH:MM com máscara FIXA: o ':' fica sempre visível ("__:__") e cada
+    dígito ocupa sua casa. Entrar no campo (Tab ou clique) seleciona a hora
+    inteira, então o que se digita SUBSTITUI o valor anterior - antes, clicar
+    no fim de "15:15" e digitar "12:15" gravava 15:15 em silêncio (a máscara
+    antiga ficava com os 4 primeiros dígitos)."""
+
+    def __init__(self, tooltip: str):
+        super().__init__()
+        self.setInputMask("99:99;_")
+        self.setFixedWidth(72)
+        self.setAlignment(Qt.AlignCenter)
+        widgets.add_tooltip(self, tooltip)
+        self._select_on_release = False
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        if event.reason() == Qt.MouseFocusReason:
+            # o clique que DÁ o foco seleciona tudo só no release: o press (que
+            # o Qt entrega DEPOIS do foco) posiciona o cursor e desfaria a
+            # seleção. Clique com o campo já focado posiciona o cursor
+            # normalmente, para corrigir um dígito só
+            self._select_on_release = True
+        else:
+            self.selectAll()
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if self._select_on_release and not self.hasSelectedText():
+            self.selectAll()
+        self._select_on_release = False
+
+    def hhmm(self) -> str:
+        """O valor digitado: "" para o campo vazio, senão o texto (pode ser
+        incompleto, ex. "9:" - quem valida é o time_hhmm_ok)."""
+        text = self.text().strip()
+        return "" if text == ":" else text
+
+
+def _overlaps(entries: list[dict]) -> dict[int, list[dict]]:
+    """{id: [apontamentos que se sobrepõem a ele]} entre os do MESMO dia -
+    call dentro de um bloco do Claude, bloco esticado por cima do seguinte:
+    horas contadas em dobro. Encostar (fim == início) não é sobreposição."""
+    out: dict[int, list[dict]] = {}
+    for i, a in enumerate(entries):
+        for b in entries[i + 1:]:
+            if (a["work_date"] == b["work_date"] and a["start_time"] < b["end_time"]
+                    and b["start_time"] < a["end_time"]):
+                out.setdefault(a["id"], []).append(b)
+                out.setdefault(b["id"], []).append(a)
+    return out
+
+
+def _has_client(e: dict) -> bool:
+    return bool(e.get("client_name") or e.get("client_text"))
 
 
 def _shift_month(month: str, delta: int) -> str:
@@ -72,6 +121,27 @@ def _shift_month(month: str, delta: int) -> str:
     y, m = d.year, d.month + delta
     y, m = y + (m - 1) // 12, (m - 1) % 12 + 1
     return f"{y:04d}-{m:02d}"
+
+
+def _group_conflict(entries: list[dict]) -> str | None:
+    """Motivo para NÃO agrupar, ou None. Agrupar vira UM lançamento: dias,
+    clientes ou OS diferentes misturariam assuntos (uma call da Delta somada a
+    um bloco da Simpar virava "Delta + OS da Simpar"). Linha sem cliente ou sem
+    OS pode entrar - ela herda os do grupo e o diálogo mostra para revisar."""
+    if len({e["work_date"] for e in entries}) > 1:
+        return "Selecione apontamentos do mesmo dia para agrupar."
+    clients = {tsdb._fold(e["client_name"] or e["client_text"]): e["client_name"]
+               or e["client_text"] for e in entries if _has_client(e)}
+    if len(clients) > 1:
+        return ("Os apontamentos são de clientes diferentes "
+                f"({', '.join(sorted(clients.values(), key=str.casefold))}) - "
+                "agrupe só os do mesmo cliente.")
+    projects = {tsdb.normalize_project_code(e["project_code"] or e["project_text"] or "")
+                for e in entries} - {""}
+    if len(projects) > 1:
+        return (f"Os apontamentos são de OS diferentes ({', '.join(sorted(projects))}) - "
+                "agrupe só os da mesma OS.")
+    return None
 
 
 def _merge_entries(entries: list[dict]) -> dict:
@@ -177,7 +247,10 @@ class TimesheetWindow(QWidget):
                 "clients": clients,
                 "clients_all": tsdb.list_clients(active_only=False),
                 "aliases": {c["id"]: tsdb.list_aliases(c["id"]) for c in clients},
-                "projects": {c["id"]: tsdb.list_projects(c["id"]) for c in clients},
+                # todas as OS (com o flag active): o Cadastro mostra as inativas
+                # para reativar; os combos do diálogo usam só as ativas
+                "projects": {c["id"]: tsdb.list_projects(c["id"], active_only=False)
+                             for c in clients},
             }
         except Exception:
             log.exception("coleta do timesheet falhou")
@@ -240,6 +313,11 @@ class TimesheetWindow(QWidget):
         self._tree.itemChanged.connect(self._on_entry_check)
         self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._entries_menu)
+        # Delete (e o "delete" do Mac, que é o Backspace) exclui a seleção - com
+        # confirmação; WidgetShortcut: só com o foco na grade
+        for key in (Qt.Key_Delete, Qt.Key_Backspace):
+            QShortcut(QKeySequence(key), self._tree, context=Qt.WidgetShortcut,
+                      activated=self._delete_selected)
         lay.addWidget(self._tree, 1)
 
         self._footer = QLabel("")
@@ -333,48 +411,75 @@ class TimesheetWindow(QWidget):
             self._bg(lambda: tsdb.set_day_note(day.date().toPython().isoformat(),
                                                note.text()))
 
+    def _selected_entries(self) -> list[dict]:
+        """Apontamentos da seleção da grade; o nó de um DIA selecionado vale
+        pelo dia inteiro (selecionar dias e excluir de uma vez)."""
+        out: dict[int, dict] = {}
+        for item in self._tree.selectedItems():
+            for e in self._day_items.get(item) or [self._entry_items.get(item)]:
+                if e is not None:
+                    out[e["id"]] = e
+        return sorted(out.values(), key=lambda e: (e["work_date"], e["start_time"]))
+
     def _entries_menu(self, pos) -> None:
         from PySide6.QtWidgets import QMenu
 
         item = self._tree.itemAt(pos)
-        entry = self._entry_items.get(item)
-        if entry is None:
+        if item is None:
             return
+        # as ações valem para a SELEÇÃO inteira (o botão direito numa linha fora
+        # dela já a seleciona sozinha, padrão do Qt)
+        sel = self._selected_entries()
+        if not sel:
+            return
+        n = f" ({len(sel)})" if len(sel) > 1 else ""
         menu = QMenu(self)
-        menu.addAction(theme.qicon("edit"), "Editar…", lambda: self._edit_item(item, 0))
-        sel = [self._entry_items[i] for i in self._tree.selectedItems()
-               if i in self._entry_items]
+        if len(sel) == 1 and item in self._entry_items:
+            menu.addAction(theme.qicon("edit"), "Editar…", lambda: self._edit_item(item, 0))
         if len(sel) > 1:
-            menu.addAction(f"Agrupar selecionados ({len(sel)})…",
-                           lambda: self._group_entries(sel))
-        if entry["posted"]:
-            menu.addAction("Desmarcar lançado",
-                           lambda: self._bg(lambda: tsdb.set_posted([entry["id"]], False)))
-        else:
-            menu.addAction(theme.qicon("checkmark"), "Marcar como lançado",
-                           lambda: self._bg(lambda: tsdb.set_posted([entry["id"]], True)))
-        if tsdb.is_linked(entry):
-            menu.addAction(theme.qicon("dismiss"), "Descartar sugestão aceita",
-                           lambda: self._discard(entry))
-        else:
-            menu.addAction(theme.qicon("delete"), "Excluir",
-                           lambda: self._delete(entry))
+            menu.addAction(f"Agrupar selecionados{n}…", lambda: self._group_entries(sel))
+        ids = [e["id"] for e in sel]
+        if any(not e["posted"] for e in sel):
+            menu.addAction(theme.qicon("checkmark"), f"Marcar como lançado{n}",
+                           lambda: self._bg(lambda: tsdb.set_posted(ids, True)))
+        if any(e["posted"] for e in sel):
+            menu.addAction(f"Desmarcar lançado{n}",
+                           lambda: self._bg(lambda: tsdb.set_posted(ids, False)))
+        menu.addAction(theme.qicon("delete"), f"Excluir{n}…",
+                       lambda: self._remove_entries(sel))
         menu.exec(self._tree.viewport().mapToGlobal(pos))
 
-    def _delete(self, entry: dict) -> None:
-        if QMessageBox.question(
-                self, "Excluir apontamento",
-                f"Excluir {entry['start_time']}-{entry['end_time']} de {entry['work_date']}?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
-            self._bg(lambda: tsdb.delete_entry(entry["id"]))
+    def _delete_selected(self) -> None:
+        sel = self._selected_entries()
+        if sel:
+            self._remove_entries(sel)
 
-    def _discard(self, entry: dict) -> None:
-        if QMessageBox.question(
-                self, "Descartar",
-                "Este apontamento será descartado e a sugestão não voltará.\n"
-                "Descartar mesmo assim?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
-            self._bg(lambda: tsdb.update_entry(entry["id"], status="discarded"))
+    def _remove_entries(self, sel: list[dict]) -> None:
+        """Exclui a seleção numa confirmação só. Manual é apagado; o que veio de
+        reunião ou do Claude é DESCARTADO (o tombstone impede a sugestão de
+        voltar no reprocesso/reenvio) - para o usuário, os dois somem da grade."""
+        linked = [e for e in sel if tsdb.is_linked(e)]
+        if len(sel) == 1:
+            e = sel[0]
+            text = f"Excluir {e['start_time']}-{e['end_time']} de {_day_label(e['work_date'])}?"
+        else:
+            text = f"Excluir {len(sel)} apontamentos?"
+        if linked:
+            text += ("\n\nOs que vieram de reunião ou do Claude ficam descartados: "
+                     "a sugestão não volta.")
+        if QMessageBox.question(self, "Excluir apontamentos", text,
+                                QMessageBox.Yes | QMessageBox.No,
+                                QMessageBox.No) != QMessageBox.Yes:
+            return
+
+        def work():
+            for e in sel:
+                if tsdb.is_linked(e):
+                    tsdb.update_entry(e["id"], status="discarded")
+                else:
+                    tsdb.delete_entry(e["id"])
+
+        self._bg(work)
 
     def _on_entry_check(self, item, col) -> None:
         """Checkbox 'Lançado' da grade (a coluna J da planilha): marca/desmarca o
@@ -387,13 +492,13 @@ class TimesheetWindow(QWidget):
         caça ao segfault intermitente da suíte."""
         if col != _COL_POSTED or self._rendering:
             return
-        from PySide6.QtCore import QTimer
-
         day_entries = self._day_items.get(item)
         if day_entries is not None:
             # checkbox do DIA: marcar consolida (confirma+lança) o dia inteiro;
             # desmarcar só tira o "lançado" dos confirmados (sugestão fica como está)
             if item.checkState(_COL_POSTED) == Qt.Checked:
+                if self._block_unlabeled(day_entries):
+                    return
                 ids = [e["id"] for e in day_entries]
                 QTimer.singleShot(
                     0, lambda: self._bg(lambda: tsdb.confirm_and_post(ids)))
@@ -409,12 +514,33 @@ class TimesheetWindow(QWidget):
             return
         posted = item.checkState(_COL_POSTED) == Qt.Checked
         if e["status"] == "suggested":
+            if posted and self._block_unlabeled([e]):
+                return
             if posted:  # marcar sugestão = confirmar E lançar num gesto
                 QTimer.singleShot(
                     0, lambda: self._bg(lambda: tsdb.confirm_and_post([e["id"]])))
         elif bool(e["posted"]) != posted:
             QTimer.singleShot(
                 0, lambda: self._bg(lambda: tsdb.set_posted([e["id"]], posted)))
+
+    def _block_unlabeled(self, entries: list[dict]) -> bool:
+        """Consolidar sugestão SEM cliente lançaria hora de ninguém (eram 6
+        confirmadas assim em out/2026): recusa, avisa e desfaz o check. Tudo
+        diferido - estamos dentro do itemChanged (ver _on_entry_check)."""
+        bad = [e for e in entries if e["status"] == "suggested" and not _has_client(e)]
+        if not bad:
+            return False
+
+        def warn():
+            QMessageBox.warning(
+                self, "Sugestão sem cliente",
+                f"{len(bad)} sugestão(ões) sem cliente "
+                f"({', '.join(e['start_time'] + '-' + e['end_time'] for e in bad)}).\n"
+                "Edite para informar o cliente, ou exclua, antes de marcar como lançado.")
+            self.refresh()   # re-render desfaz o check
+
+        QTimer.singleShot(0, warn)
+        return True
 
     def _edit_item(self, item, _col) -> None:
         entry = self._entry_items.get(item)
@@ -423,7 +549,7 @@ class TimesheetWindow(QWidget):
             self._open_editor(entry, accept_after=(entry["status"] == "suggested"))
 
     def _open_editor(self, entry: dict, accept_after: bool = False) -> None:
-        dlg = _EntryDialog(self, entry, self._data or {})
+        dlg = _EntryDialog(self, entry, self._data or {}, exclude_ids={entry["id"]})
         if dlg.exec() == QDialog.Accepted:
             self._save_entry_fields(dlg.fields(), entry_id=entry["id"],
                                     accept_after=accept_after)
@@ -438,15 +564,19 @@ class TimesheetWindow(QWidget):
         apontamento POR BLOCO de horário (lançamento fracionado). Na edição, o
         1º bloco atualiza o registro; blocos extras viram apontamentos novos
         (fracionar um bloco existente - ex.: tirar o almoço do meio). Roda FORA
-        da GUI (dentro de _bg) e consome `fields` (pop)."""
+        da GUI (dentro de _bg) e consome `fields` (pop).
+
+        Cliente que o diálogo confirmou como NOVO é cadastrado aqui; com o
+        cliente cadastrado, a OS digitada vira OS DELE (criada se ainda não
+        existe) - a base de OS por cliente cresce com o uso, sem texto solto."""
         cid, text = tsdb.resolve_client(fields.pop("_client"))
-        project = fields.pop("_project")
+        if cid is None and text and fields.pop("_register_client", False):
+            cid, text = tsdb.add_client(text), ""
+        fields.pop("_register_client", None)
+        project = tsdb.normalize_project_code(fields.pop("_project"))
         pid, ptext = None, project
         if cid is not None and project:
-            match = [p for p in tsdb.list_projects(cid)
-                     if p["code"].casefold() == project.casefold()]
-            if match:
-                pid, ptext = match[0]["id"], ""
+            pid, ptext = tsdb.add_project(cid, project), ""
         blocks = fields.pop("blocks")
         common = dict(fields, client_id=cid, client_text="" if cid else text,
                       project_id=pid, project_text=ptext)
@@ -471,12 +601,13 @@ class TimesheetWindow(QWidget):
         nada."""
         if len(sel) < 2:
             return
-        if len({e["work_date"] for e in sel}) > 1:
-            QMessageBox.warning(self, "Agrupar",
-                                "Selecione apontamentos do mesmo dia para agrupar.")
+        problem = _group_conflict(sel)
+        if problem:
+            QMessageBox.warning(self, "Agrupar", problem)
             return
         sel = sorted(sel, key=lambda e: (e["start_time"], e["end_time"]))
-        dlg = _EntryDialog(self, _merge_entries(sel), self._data or {})
+        dlg = _EntryDialog(self, _merge_entries(sel), self._data or {},
+                           exclude_ids={e["id"] for e in sel})
         if dlg.exec() == QDialog.Accepted:
             self._apply_group(dlg.fields(), sel[0], sel[1:])
 
@@ -556,9 +687,21 @@ class TimesheetWindow(QWidget):
         self._b_open.setEnabled(e is None or bool(e["meeting_started_at"]))
 
     def _sug_accept(self) -> None:
-        ids = [e["id"] for e in self._sug_selection()]
+        sel = self._sug_selection()
+        bad = [e for e in sel if not _has_client(e)]
+        ids = [e["id"] for e in sel if _has_client(e)]
         if ids:
-            self._bg(lambda: [tsdb.update_entry(i, status="confirmed") for i in ids])
+            def work():
+                for i in ids:
+                    tsdb.update_entry(i, status="confirmed")
+                tsdb.link_entries(ids)   # cliente/OS em texto → cadastro
+
+            self._bg(work)
+        if bad:
+            QMessageBox.information(
+                self, "Aceitar",
+                f"{len(bad)} sugestão(ões) sem cliente ficaram na fila - use "
+                "\"Editar e aceitar…\" para informar o cliente.")
 
     def _sug_edit_accept(self, item) -> None:
         e = self._sug_items.get(item) if item is not None else self._sug_selected()
@@ -601,6 +744,7 @@ class TimesheetWindow(QWidget):
             if target is not None:
                 tsdb.add_alias(cid, raw)
             tsdb.update_entry(e["id"], client_id=cid, client_text="")
+            tsdb.link_entries()   # outras linhas com a mesma grafia vêm junto
 
         self._bg(work)
 
@@ -712,6 +856,11 @@ class TimesheetWindow(QWidget):
         lbtn.addWidget(widgets.ModernButton("Desativar", self._client_deactivate))
         lbtn.addWidget(widgets.ModernButton("Mesclar em…", self._client_merge))
         llay.addLayout(lbtn)
+        seed = widgets.ModernButton("Cadastrar a partir do histórico…", self._seed_registry)
+        widgets.add_tooltip(seed, "Cria os clientes e as OS que já aparecem nos seus "
+                                  "apontamentos e liga cada apontamento a eles - "
+                                  "mostra a prévia antes de gravar")
+        llay.addWidget(seed)
         split.addWidget(left)
 
         right = QWidget()
@@ -727,8 +876,12 @@ class TimesheetWindow(QWidget):
         arow.addWidget(self._alias_entry, 1)
         arow.addWidget(widgets.ModernButton("Adicionar", self._alias_add))
         rlay.addLayout(arow)
-        rlay.addWidget(QLabel("Projetos (códigos de OS/GAP):"))
+        rlay.addWidget(QLabel("OS/projetos do cliente (duplo clique ativa/desativa):"))
         self._proj_list = QListWidget()
+        widgets.add_tooltip(self._proj_list,
+                            "OS desativada (encerrada) sai do combo e do preenchimento "
+                            "automático; os apontamentos antigos continuam nela")
+        self._proj_list.itemDoubleClicked.connect(self._project_toggle)
         rlay.addWidget(self._proj_list, 1)
         prow = QHBoxLayout()
         self._proj_code = widgets.make_entry("código (ex.: 123456)…")
@@ -752,7 +905,51 @@ class TimesheetWindow(QWidget):
     def _client_new(self) -> None:
         name, ok = QInputDialog.getText(self, "Novo cliente", "Nome canônico:")
         if ok and name.strip():
-            self._bg(lambda: tsdb.add_client(name))
+            self._bg(lambda: (tsdb.add_client(name), tsdb.link_entries()))
+
+    def _seed_registry(self) -> None:
+        """Prévia (dry-run, fora da GUI) → confirmação → grava com backup antes."""
+        def preview():
+            try:
+                report = tsdb.seed_registry(dry_run=True)
+            except Exception as e:
+                log.exception("prévia do cadastro falhou")
+                self.app.ui(lambda: QMessageBox.warning(self, "Cadastro", str(e)))
+                return
+            self.app.ui(lambda: self._confirm_seed(report))
+
+        if self._inline_bg:
+            preview()
+        else:
+            threading.Thread(target=preview, daemon=True, name="timesheet-seed").start()
+
+    def _confirm_seed(self, preview: dict) -> None:
+        if not preview["clients"] and not preview["projects"] and not preview["entries"]:
+            QMessageBox.information(self, "Cadastro",
+                                    "Nada a cadastrar: os apontamentos já estão "
+                                    "ligados ao cadastro.")
+            return
+        lines = []
+        if preview["clients"]:
+            lines.append("Clientes novos: " + ", ".join(preview["clients"]))
+        if preview["projects"]:
+            lines.append("OS novas: " + ", ".join(f"{c} {code}"
+                                                  for c, code in preview["projects"]))
+        lines.append(f"Apontamentos ligados ao cadastro: {preview['entries']}")
+        lines.append("\nGrafias diferentes do mesmo cliente (ex.: com e sem "
+                     "\"Usina\") viram clientes separados: junte depois com "
+                     "\"Mesclar em…\".")
+        if QMessageBox.question(self, "Cadastrar a partir do histórico",
+                                "\n".join(lines) + "\n\nGravar?",
+                                QMessageBox.Yes | QMessageBox.No,
+                                QMessageBox.No) != QMessageBox.Yes:
+            return
+
+        def work():
+            tsdb.backup()
+            tsdb.seed_registry()
+
+        self._bg(work)
 
     def _client_rename(self) -> None:
         c = self._reg_selected_client()
@@ -786,14 +983,14 @@ class TimesheetWindow(QWidget):
             self, "Mesclar cliente", f"Mesclar {c['name']} em:", names, 0, False)
         if ok and name:
             dst = next(x["id"] for x in others if x["name"] == name)
-            self._bg(lambda: tsdb.merge_client(c["id"], dst))
+            self._bg(lambda: (tsdb.merge_client(c["id"], dst), tsdb.link_entries()))
 
     def _alias_add(self) -> None:
         c = self._reg_selected_client()
         alias = self._alias_entry.text().strip()
         if c and alias:
             self._alias_entry.clear()
-            self._bg(lambda: tsdb.add_alias(c["id"], alias))
+            self._bg(lambda: (tsdb.add_alias(c["id"], alias), tsdb.link_entries()))
 
     def _project_add(self) -> None:
         c = self._reg_selected_client()
@@ -803,6 +1000,11 @@ class TimesheetWindow(QWidget):
             self._proj_code.clear()
             self._proj_label.clear()
             self._bg(lambda: tsdb.add_project(c["id"], code, label))
+
+    def _project_toggle(self, item) -> None:
+        p = item.data(Qt.UserRole)
+        if p is not None:
+            self._bg(lambda: tsdb.set_project_active(p["id"], not p["active"]))
 
     # ------------------------------------------------------------------ render --
 
@@ -853,6 +1055,7 @@ class TimesheetWindow(QWidget):
         bold = self.font()
         bold.setBold(True)
         self._day_items.clear()
+        clashes = _overlaps(data["entries"])
         # dias mais recentes primeiro (pedido do uso real: o hoje fica no topo)
         for day in sorted(set(by_day) | set(data["notes"]), reverse=True):
             total = data["totals"].get(day)
@@ -876,6 +1079,15 @@ class TimesheetWindow(QWidget):
                     # ÚLTIMO p/ vencer o azul do extra (o negrito permanece)
                     for col in range(item.columnCount()):
                         item.setForeground(col, QBrush(QColor(t.muted)))
+                if e["id"] in clashes:
+                    # sobreposição (horas em dobro): horário em vermelho, por
+                    # ÚLTIMO para vencer o âmbar/apagado, com o porquê no tooltip
+                    item.setForeground(0, QBrush(QColor(t.rec)))
+                    item.setFont(0, bold)
+                    item.setToolTip(0, "Sobrepõe " + ", ".join(
+                        f"{o['start_time']}-{o['end_time']} "
+                        f"({o['client_name'] or o['client_text'] or 'sem cliente'})"
+                        for o in clashes[e["id"]]))
                 self._entry_items[item] = e
             entries = by_day.get(day, [])
             if entries:
@@ -958,7 +1170,11 @@ class TimesheetWindow(QWidget):
             self._alias_list.addItem(a["alias"])
         for p in self._data["projects"].get(c["id"], ()):
             label = p["code"] + (f"  -  {p['label']}" if p["label"] else "")
-            self._proj_list.addItem(label)
+            item = QListWidgetItem(label + ("" if p["active"] else "  (inativa)"))
+            item.setData(Qt.UserRole, p)
+            if not p["active"]:
+                item.setForeground(QBrush(QColor(theme.active().muted)))
+            self._proj_list.addItem(item)
 
 
 class _DescEdit(QPlainTextEdit):
@@ -1007,15 +1223,23 @@ class _DescEdit(QPlainTextEdit):
 class _EntryDialog(QDialog):
     """Diálogo de lançamento: novo apontamento (entry=None, com os defaults
     inteligentes de _new_entry_defaults), edição (duplo clique na grade) e
-    'Editar e aceitar' das sugestões. Projeto e sugestões de descrição seguem o
-    cliente escolhido, vindos do HISTÓRICO (client_history) - funciona também
-    para cliente ainda sem cadastro."""
+    'Editar e aceitar' das sugestões. A OS segue o cliente escolhido: o combo
+    lista só as OS DELE (cadastro + histórico) e só se preenche sozinho quando
+    o cliente tem uma única OS ativa. O Salvar valida horário, cliente fora do
+    cadastro, OS de outro cliente e sobreposição com o resto do dia.
 
-    def __init__(self, parent, entry: dict | None, data: dict, defaults: dict | None = None):
+    exclude_ids: apontamentos que este diálogo substitui (o próprio, na edição;
+    o grupo inteiro, no agrupar) - não contam como sobreposição."""
+
+    def __init__(self, parent, entry: dict | None, data: dict, defaults: dict | None = None,
+                 exclude_ids: set | None = None):
         super().__init__(parent)
         self._data = data
         self._new = entry is None
+        self._exclude = set(exclude_ids or ())
         self._auto_project = ""
+        self._register_client = False
+        self._index_registry(data)
         entry = entry or defaults or {
             "work_date": date.today().isoformat(), "start_time": "", "end_time": "",
             "client_name": None, "client_text": "", "project_code": None,
@@ -1098,9 +1322,9 @@ class _EntryDialog(QDialog):
         lay = QHBoxLayout(row)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
-        s = _time_edit("hora de início")
+        s = _TimeEdit("hora de início")
         s.setText(start)
-        e = _time_edit("hora de fim")
+        e = _TimeEdit("hora de fim")
         e.setText(end)
         lay.addWidget(s)
         lay.addWidget(QLabel("até"))
@@ -1123,40 +1347,150 @@ class _EntryDialog(QDialog):
         row.setParent(None)
         row.deleteLater()
 
+    def _index_registry(self, data: dict) -> None:
+        """Índices do cadastro em memória (o diálogo não toca no banco):
+        _reg = {chave _fold de nome/alias: cliente}; _code_clients = {código
+        normalizado sem caixa: chaves dos clientes que já usaram a OS}, do
+        cadastro E do histórico - é o que denuncia OS de outro cliente."""
+        self._reg: dict[str, dict] = {}
+        for c in data.get("clients", ()):
+            for a in data.get("aliases", {}).get(c["id"], ()):
+                self._reg.setdefault(tsdb._fold(a["alias"]), c)
+        for c in data.get("clients", ()):
+            self._reg[tsdb._fold(c["name"])] = c
+        self._code_clients: dict[str, set[str]] = {}
+        names = {c["id"]: c["name"] for c in data.get("clients", ())}
+        for cid, projects in data.get("projects", {}).items():
+            for p in projects:
+                if cid in names:
+                    self._code_clients.setdefault(self._code_key(p["code"]), set()).add(
+                        tsdb._fold(names[cid]))
+        for name, h in data.get("client_history", {}).items():
+            for code in h.get("projects", ()):
+                self._code_clients.setdefault(self._code_key(code), set()).add(
+                    self._client_key(name))
+
+    @staticmethod
+    def _code_key(code: str) -> str:
+        return tsdb.normalize_project_code(code).casefold()
+
+    def _client_key(self, client_name: str) -> str:
+        """Chave do cliente: a do nome canônico quando o texto resolve no
+        cadastro (alias incluso), senão a do próprio texto."""
+        c = self._reg.get(tsdb._fold(client_name))
+        return tsdb._fold(c["name"] if c else client_name)
+
     def _hist_for(self, client_name: str) -> dict:
-        """Histórico do cliente (projetos/descrições), casando o nome sem caixa."""
-        key = client_name.strip().casefold()
+        """Histórico do cliente (projetos/descrições), casando o nome sem caixa
+        nem acento - e pelo nome canônico quando o texto é um alias."""
+        key = self._client_key(client_name)
         return next((h for name, h in self._data.get("client_history", {}).items()
-                     if name.casefold() == key), {})
+                     if tsdb._fold(name) == key), {})
+
+    def _client_projects(self, client_name: str) -> tuple[list[str], list[str]]:
+        """(OS do combo, OS que podem ser preenchidas sozinhas). Cliente
+        cadastrado: OS ATIVAS do cadastro, mais as do histórico que não foram
+        desativadas; o preenchimento automático só olha o cadastro. Cliente sem
+        cadastro: o histórico nas duas listas."""
+        c = self._reg.get(tsdb._fold(client_name))
+        hist = self._hist_for(client_name).get("projects", [])
+        if c is None:
+            return hist, hist
+        projects = self._data.get("projects", {}).get(c["id"], ())
+        active = [p["code"] for p in projects if p["active"]]
+        inactive = {self._code_key(p["code"]) for p in projects if not p["active"]}
+        seen = {self._code_key(x) for x in active}
+        extra = [x for x in hist if self._code_key(x) not in seen | inactive]
+        return active + extra, active
 
     def _on_client_changed(self, client_name: str) -> None:
-        """Projetos e sugestões de descrição seguem o cliente - via HISTÓRICO
-        (qualquer projeto já apontado com ele, mais recente primeiro), não só o
-        cadastro. Campo vazio (ou ainda no valor de um autofill anterior) recebe
-        o projeto mais recente do cliente - tanto no novo quanto na edição
-        ('Editar e aceitar' de sugestão sem projeto); texto digitado pelo
-        usuário nunca é sobrescrito."""
-        hist = self._hist_for(client_name)
-        projects = hist.get("projects", [])
+        """A OS segue o cliente. O combo lista só as OS dele; trocar o cliente
+        troca a OS: a preenchida sozinha sai, e a digitada também sai quando é
+        OS conhecida de OUTRO cliente (era assim que a OS da Simpar ficava num
+        apontamento da Delta). OS nova digitada (ninguém usou ainda) fica.
+        Preenchimento automático só com UMA OS ativa no cliente - com várias,
+        adivinhar a mais recente lançava hora na OS errada."""
+        if not (tsdb._fold(client_name) in self._reg or self._hist_for(client_name)):
+            # nome ainda sendo digitado (ou cliente novo): não mexe na OS - cada
+            # tecla dispara aqui, e "S" a caminho de "Simpar" não pode apagá-la
+            return
+        items, pool = self._client_projects(client_name)
         current = self._project.currentText().strip()
+        owners = self._code_clients.get(self._code_key(current), set())
+        keep = bool(current) and current != self._auto_project and (
+            not owners or self._client_key(client_name) in owners)
         self._project.clear()
-        for code in projects:
+        for code in items:
             self._project.addItem(code)
-        if not current or current == self._auto_project:
-            self._auto_project = projects[0] if projects else ""
-            self._project.setCurrentText(self._auto_project)
-        else:
+        if keep:
             self._project.setCurrentText(current)
-        self._desc_model.setStringList(hist.get("descriptions", []))
+        else:
+            self._auto_project = pool[0] if len(pool) == 1 else ""
+            self._project.setCurrentText(self._auto_project)
+        self._desc_model.setStringList(self._hist_for(client_name).get("descriptions", []))
+
+    def _blocks(self) -> list[tuple[str, str]]:
+        return [(s.hhmm(), e.hhmm()) for s, e, _row in self._time_rows]
+
+    def _ask(self, text: str) -> bool:
+        return QMessageBox.question(self, self.windowTitle(), text,
+                                    QMessageBox.Yes | QMessageBox.No,
+                                    QMessageBox.No) == QMessageBox.Yes
 
     def _validate_accept(self) -> None:
-        for s, e, _row in self._time_rows:
-            start = util.format_time_hhmm(s.text())
-            end = util.format_time_hhmm(e.text())
-            if not (util.time_hhmm_ok(start) and util.time_hhmm_ok(end)):
-                QMessageBox.warning(self, self.windowTitle(),
-                                    "Informe início e fim no formato HH:MM "
-                                    "em todos os blocos de horário.")
+        title = self.windowTitle()
+        blocks = self._blocks()
+        for start, end in blocks:
+            # forma COMPLETA HH:MM: a máscara deixa "08:1" (tecla perdida) e
+            # "8:30", que o strptime aceita e quebrariam a ordenação como texto
+            if not all(_HHMM.fullmatch(t) and util.time_hhmm_ok(t) for t in (start, end)):
+                QMessageBox.warning(self, title, "Informe início e fim no formato HH:MM "
+                                                 "em todos os blocos de horário.")
+                return
+            if end <= start:
+                QMessageBox.warning(self, title, f"O fim ({end}) deve ser depois do "
+                                                 f"início ({start}).")
+                return
+        ordered = sorted(blocks)
+        for (s0, e0), (s1, e1) in zip(ordered, ordered[1:]):
+            if s1 < e0:
+                QMessageBox.warning(self, title, f"Os blocos {s0}-{e0} e {s1}-{e1} se "
+                                                 "sobrepõem.")
+                return
+        client = self._client.currentText().strip()
+        if not client:
+            QMessageBox.warning(self, title, "Informe o cliente.")
+            return
+        self._register_client = False
+        if tsdb._fold(client) not in self._reg:
+            if not self._ask(f"“{client}” não está no cadastro de clientes.\n\n"
+                             "Cadastrar como cliente novo? (Se for outra grafia de um "
+                             "cliente existente, escolha Não e corrija o nome.)"):
+                return
+            self._register_client = True
+        project = self._project.currentText().strip()
+        if project:
+            owners = self._code_clients.get(self._code_key(project), set())
+            mine = self._client_key(client)
+            if owners and mine not in owners:
+                others = sorted({c["name"] for c in self._reg.values()
+                                 if tsdb._fold(c["name"]) in owners} or owners)
+                if not self._ask(f"A OS {tsdb.normalize_project_code(project)} é de "
+                                 f"{', '.join(others)}, não de {client}.\n\n"
+                                 "Salvar mesmo assim?"):
+                    return
+        day = self._date.date().toPython().isoformat()
+        clash = [e for e in self._data.get("entries", ())
+                 if e["work_date"] == day and e["status"] == "confirmed"
+                 and e["id"] not in self._exclude
+                 and any(s < e["end_time"] and e["start_time"] < t for s, t in blocks)]
+        if clash:
+            lines = "\n".join(
+                f"  {e['start_time']}-{e['end_time']}  "
+                f"{e['client_name'] or e['client_text'] or '-'}  {e['description'][:50]}"
+                for e in clash)
+            if not self._ask(f"Este horário se sobrepõe a:\n{lines}\n\n"
+                             "As horas vão contar em dobro. Salvar mesmo assim?"):
                 return
         self.accept()
 
@@ -1164,10 +1498,10 @@ class _EntryDialog(QDialog):
         return {
             "work_date": self._date.date().toPython().isoformat(),
             # cada bloco (início, fim) vira UM apontamento no salvar
-            "blocks": [(util.format_time_hhmm(s.text()), util.format_time_hhmm(e.text()))
-                       for s, e, _row in self._time_rows],
+            "blocks": self._blocks(),
             "_client": self._client.currentText().strip(),
             "_project": self._project.currentText().strip(),
+            "_register_client": self._register_client,
             # quebras de linha viram espaço: a descrição é um texto único na
             # grade, no Excel e no Multi Dados (precedente do _bigtext do settings)
             "description": " ".join(self._desc.toPlainText().split()),

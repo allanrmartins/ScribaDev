@@ -16,6 +16,11 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+try:
+    from PySide6.QtWidgets import QDialog
+except ImportError:  # sem o extra 'qt': a classe inteira é pulada
+    QDialog = None
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -260,7 +265,7 @@ class TimesheetWindowTests(unittest.TestCase):
                         project_text="", description="", overtime=0, location="")
         dlg = _EntryDialog(win, None, win._data, defaults=defaults)
         self.assertEqual(dlg.windowTitle(), "Novo apontamento")
-        self.assertEqual(dlg._time_rows[0][0].text(), "")  # início vazio: obriga preencher
+        self.assertEqual(dlg._time_rows[0][0].hhmm(), "")  # início vazio: obriga preencher
         self.assertEqual(dlg._client.currentText(), "Vetra")
         names = [dlg._client.itemText(i) for i in range(dlg._client.count())]
         self.assertIn("Cliente Novo", names)
@@ -433,6 +438,249 @@ class TimesheetWindowTests(unittest.TestCase):
         # (não abre diálogo nem toca no banco)
         win._group_entries(rows)
         self.assertEqual(len(tsdb.list_entries(day="2026-07-20", status="confirmed")), 1)
+
+    # -- revisão out/2026: hora, exclusão em lote, mistura de clientes e OS ------
+    def _dialog(self, win, entry=None, **kw):
+        from scriba.qt.timesheet_ui import _EntryDialog
+
+        defaults = dict(work_date="2026-07-15", start_time="", end_time="",
+                        client_name=None, client_text="", project_code=None,
+                        project_text="", description="", overtime=0, location="")
+        defaults.update(kw)
+        return _EntryDialog(win, entry, win._data, defaults=None if entry else defaults,
+                            exclude_ids={entry["id"]} if entry else None)
+
+    def test_hora_mascara_fixa_e_digitar_substitui(self):
+        """Bug real: clicar no fim de "15:15" e digitar "12:15" gravava 15:15
+        (a máscara antiga guardava os 4 PRIMEIROS dígitos). Agora o ':' é fixo
+        e o clique que entra no campo seleciona tudo: digitar substitui."""
+        from PySide6.QtCore import QPoint, Qt
+        from PySide6.QtTest import QTest
+
+        self._seed()
+        win = self._data_window()
+        dlg = self._dialog(win, client_text="Vetra", start_time="08:00", end_time="15:15")
+        dlg.show()
+        start, end = dlg._time_rows[0][0], dlg._time_rows[0][1]
+        dlg._add_time_row()
+        self.assertEqual(dlg._time_rows[1][0].displayText(), "__:__")   # ':' sempre visível
+        self.assertEqual(dlg._time_rows[1][0].hhmm(), "")
+        start.setFocus()
+        self.qapp.processEvents()
+        # clique no FIM do campo de fim (onde o cursor ia parar) e digita por cima
+        QTest.mouseClick(end, Qt.LeftButton, pos=QPoint(end.width() - 4, end.height() // 2))
+        QTest.keyClicks(end, "1215")
+        self.assertEqual(end.hhmm(), "12:15")
+        # Tab também seleciona tudo
+        QTest.keyClick(end, Qt.Key_Backtab)
+        self.qapp.processEvents()
+        if start.hasFocus():   # foco offscreen pode não andar; o clique acima é o essencial
+            QTest.keyClicks(start, "0815")
+            self.assertEqual(start.hhmm(), "08:15")
+        dlg.close()
+
+    def test_salvar_valida_fim_e_blocos(self):
+        from unittest import mock
+
+        self._seed()
+        win = self._data_window()
+        dlg = self._dialog(win, client_text="Vetra", start_time="14:00", end_time="13:00")
+        with mock.patch("scriba.qt.timesheet_ui.QMessageBox.warning") as warn:
+            dlg._validate_accept()
+        self.assertIn("deve ser depois", warn.call_args[0][2])
+        self.assertNotEqual(dlg.result(), QDialog.Accepted)
+        dlg._time_rows[0][1].setText("16:00")
+        dlg._add_time_row("15:00", "17:00")
+        with mock.patch("scriba.qt.timesheet_ui.QMessageBox.warning") as warn:
+            dlg._validate_accept()
+        self.assertIn("se sobrepõem", warn.call_args[0][2])
+        # hora incompleta na máscara: "9" → "9:", "081" → "08:1" (o strptime
+        # aceitaria "08:1" e "8:30" - e "8:30" < "10:00" falha como texto)
+        for typed in ("9", "081", "8_30"):
+            dlg._time_rows[1][0].setText(typed)
+            with mock.patch("scriba.qt.timesheet_ui.QMessageBox.warning") as warn:
+                dlg._validate_accept()
+            self.assertIn("HH:MM", warn.call_args[0][2], typed)
+
+    def test_salvar_avisa_sobreposicao_com_o_dia(self):
+        from unittest import mock
+
+        self._seed()   # 13/07 08:00-13:00 confirmado (Vetra)
+        win = self._data_window()
+        dlg = self._dialog(win, work_date="2026-07-13", client_text="Vetra",
+                           start_time="12:00", end_time="14:00")
+        with mock.patch("scriba.qt.timesheet_ui.QMessageBox.question",
+                        return_value=mock.Mock()) as ask:
+            dlg._validate_accept()
+        self.assertIn("08:00-13:00", ask.call_args[0][2])
+        # editar o PRÓPRIO apontamento não conta como sobreposição
+        own = tsdb.list_entries(day="2026-07-13", status="confirmed")[0]
+        dlg2 = self._dialog(win, entry=own)
+        dlg2._time_rows[0][1].setText("12:00")
+        with mock.patch("scriba.qt.timesheet_ui.QMessageBox.question") as ask:
+            dlg2._validate_accept()
+        ask.assert_not_called()
+        self.assertEqual(dlg2.result(), QDialog.Accepted)
+
+    def test_os_segue_o_cliente(self):
+        """Simpar com 3 OS: nada preenchido sozinho (adivinhar a mais recente
+        lançava na OS errada). Delta com 1 OS: preenche. OS da Simpar digitada
+        e cliente trocado para Delta: a OS da Simpar SAI. OS nova (de ninguém)
+        digitada fica."""
+        simpar = tsdb.add_client("Simpar")
+        for code in ("100041", "20990", "21312"):
+            tsdb.add_project(simpar, code)
+        delta = tsdb.add_client("Delta")
+        tsdb.add_project(delta, "OC 20933")
+        win = self._data_window()
+        dlg = self._dialog(win, client_text="Simpar")
+        self.assertEqual(dlg._project.currentText(), "")
+        self.assertEqual(sorted(dlg._project.itemText(i) for i in range(dlg._project.count())),
+                         ["100041", "20990", "21312"])
+        dlg._project.setCurrentText("21312")
+        dlg._client.setCurrentText("Delta")
+        self.assertEqual(dlg._project.currentText(), "20933")
+        self.assertEqual([dlg._project.itemText(i) for i in range(dlg._project.count())],
+                         ["20933"])
+        dlg._project.setCurrentText("55555")       # OS nova
+        dlg._client.setCurrentText("Simpar")
+        self.assertEqual(dlg._project.currentText(), "55555")
+        # redigitar o cliente letra a letra não apaga a OS no caminho
+        dlg._project.setCurrentText("21312")
+        for i in range(1, len("Simpar") + 1):
+            dlg._client.setCurrentText("Simpar"[:i])
+        self.assertEqual(dlg._project.currentText(), "21312")
+        # OS desativada sai do combo e libera o preenchimento automático
+        for p in tsdb.list_projects(simpar):
+            if p["code"] != "21312":
+                tsdb.set_project_active(p["id"], False)
+        win.refresh()
+        dlg2 = self._dialog(win, client_text="Simpar")
+        self.assertEqual(dlg2._project.currentText(), "21312")
+
+    def test_salvar_os_de_outro_cliente_e_cliente_novo(self):
+        from unittest import mock
+
+        from PySide6.QtWidgets import QMessageBox
+
+        simpar = tsdb.add_client("Simpar")
+        tsdb.add_project(simpar, "100041")
+        tsdb.add_client("Delta")
+        win = self._data_window()
+        dlg = self._dialog(win, client_text="Delta", start_time="08:00", end_time="09:00")
+        dlg._project.setCurrentText("100041")
+        with mock.patch("scriba.qt.timesheet_ui.QMessageBox.question",
+                        return_value=QMessageBox.No) as ask:
+            dlg._validate_accept()
+        self.assertIn("é de Simpar", ask.call_args[0][2])
+        self.assertNotEqual(dlg.result(), QDialog.Accepted)
+        # cliente fora do cadastro: pergunta; Sim cadastra e a OS vira dele
+        dlg = self._dialog(win, client_text="La Moda", start_time="08:00", end_time="09:00")
+        dlg._project.setCurrentText("OC 777")
+        with mock.patch("scriba.qt.timesheet_ui.QMessageBox.question",
+                        return_value=QMessageBox.Yes) as ask:
+            dlg._validate_accept()
+        self.assertIn("não está no cadastro", ask.call_args[0][2])
+        self.assertEqual(dlg.result(), QDialog.Accepted)
+        win._save_entry_fields(dlg.fields())
+        row = tsdb.list_entries(day="2026-07-15")[0]
+        self.assertEqual((row["client_name"], row["project_code"]), ("La Moda", "777"))
+
+    def test_excluir_varios_selecionados(self):
+        """Bug real: a grade deixava selecionar vários mas o Excluir agia só na
+        linha do clique. Agora a seleção inteira sai numa confirmação; o que
+        veio de reunião é descartado (tombstone), o manual é apagado."""
+        from unittest import mock
+
+        from PySide6.QtWidgets import QMessageBox
+
+        self._seed()
+        win = self._data_window()
+        day13 = win._tree.topLevelItem(1)
+        for i in range(day13.childCount()):
+            day13.child(i).setSelected(True)
+        self.assertEqual(len(win._selected_entries()), 2)
+        with mock.patch("scriba.qt.timesheet_ui.QMessageBox.question",
+                        return_value=QMessageBox.Yes) as ask:
+            win._delete_selected()
+        self.assertIn("2 apontamentos", ask.call_args[0][2])
+        rows = tsdb.list_entries(day="2026-07-13")
+        self.assertEqual([r["status"] for r in rows], ["discarded"])   # manual apagado
+        # selecionar o DIA vale pelo dia inteiro
+        win._tree.clearSelection()
+        win._tree.topLevelItem(0).setSelected(True)
+        with mock.patch("scriba.qt.timesheet_ui.QMessageBox.question",
+                        return_value=QMessageBox.Yes):
+            win._delete_selected()
+        self.assertEqual(tsdb.list_entries(day="2026-07-14"), [])
+
+    def test_agrupar_recusa_clientes_ou_os_diferentes(self):
+        from scriba.qt.timesheet_ui import _group_conflict
+
+        base = dict(work_date="2026-07-20", client_name=None, client_text="",
+                    project_code=None, project_text="")
+        delta = dict(base, client_text="Delta")
+        simpar = dict(base, client_name="Simpar", project_code="100041")
+        self.assertIn("clientes diferentes", _group_conflict([delta, simpar]))
+        self.assertIn("OS diferentes", _group_conflict(
+            [simpar, dict(simpar, project_code=None, project_text="OC 21312")]))
+        # sem cliente/sem OS pode entrar (herda e o diálogo mostra); grafias iguais
+        self.assertIsNone(_group_conflict([simpar, base, dict(base, client_text="SIMPAR")]))
+        self.assertIn("mesmo dia", _group_conflict([simpar, dict(simpar, work_date="2026-07-21")]))
+
+    def test_dia_com_sugestao_sem_cliente_nao_consolida(self):
+        from unittest import mock
+
+        from PySide6.QtCore import Qt
+
+        tsdb.add_entry(work_date="2026-07-13", start_time="08:00", end_time="09:00",
+                       client_text="Vetra")
+        tsdb.upsert_suggestion({
+            "work_date": "2026-07-13", "start_time": "10:00", "end_time": "11:00",
+            "description": "call sem cliente", "meeting_started_at": "2026-07-13T10:00:00"})
+        win = self._data_window()
+        day = win._tree.topLevelItem(0)
+        with mock.patch("scriba.qt.timesheet_ui.QMessageBox.warning") as warn:
+            day.setCheckState(6, Qt.Checked)
+            self.qapp.processEvents()
+        self.assertIn("sem cliente", warn.call_args[0][2])
+        self.assertEqual(tsdb.list_entries(posted=True), [])
+        self.assertEqual(win._tree.topLevelItem(0).checkState(6), Qt.Unchecked)
+
+    def test_sobreposicao_marcada_na_grade(self):
+        from PySide6.QtGui import QColor
+
+        from scriba.qt import theme
+
+        tsdb.add_entry(work_date="2026-07-13", start_time="08:00", end_time="10:45",
+                       client_text="Delta")
+        tsdb.add_entry(work_date="2026-07-13", start_time="10:00", end_time="15:15",
+                       client_text="Simpar")
+        tsdb.add_entry(work_date="2026-07-13", start_time="15:15", end_time="17:00",
+                       client_text="Simpar")   # encosta, não sobrepõe
+        win = self._data_window()
+        day = win._tree.topLevelItem(0)
+        red = QColor(theme.active().rec)
+        marks = [day.child(i).foreground(0).color() == red for i in range(3)]
+        self.assertEqual(marks, [True, True, False])
+        self.assertIn("10:00-15:15", day.child(0).toolTip(0))
+
+    def test_cadastrar_a_partir_do_historico(self):
+        from unittest import mock
+
+        from PySide6.QtWidgets import QMessageBox
+
+        tsdb.add_entry(work_date="2026-07-13", start_time="08:00", end_time="09:00",
+                       client_text="Simpar", project_text="OC 100041")
+        win = self._data_window()
+        with mock.patch("scriba.qt.timesheet_ui.QMessageBox.question",
+                        return_value=QMessageBox.Yes) as ask:
+            win._seed_registry()
+        self.assertIn("Clientes novos: Simpar", ask.call_args[0][2])
+        self.assertIn("Simpar 100041", ask.call_args[0][2])
+        row = tsdb.list_entries()[0]
+        self.assertEqual((row["client_name"], row["project_code"]), ("Simpar", "100041"))
+        self.assertEqual(win._reg_list.count(), 1)
 
     def test_restyle_theme_re_renderiza_do_cache(self):
         self._seed()
