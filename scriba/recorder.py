@@ -354,6 +354,7 @@ class Recording:
         # pílula aparece); o título é capturado em thread e regrava o meta ao chegar.
         self.meeting_title = ""
         self._title_marks: list[dict] = []  # trocas de título no meio da call (#35 Uso C)
+        self._screenshots: list[dict] = []  # prints da tela = momentos-chave (#229)
         self._meta_lock = threading.Lock()
         self._meta_final = False  # stop() já gravou o meta final — não sobrescrever
         self._write_meta("recording")
@@ -395,6 +396,20 @@ class Recording:
                 self.meeting_title = title
             self._title_marks.append({"at": when.isoformat(timespec="seconds"), "title": title})
             self._write_meta("recording")
+
+    def note_screenshot(self, path: Path, when: datetime, source: str, offset: float) -> bool:
+        """Registra um print já salvo em <pasta>/prints/ (#229). `offset` é a posição
+        na gravação no momento da captura (`duration_seconds()`, a mesma linha do tempo
+        da transcrição). Devolve False se a gravação já fechou o meta: o print chegou
+        tarde e não entra."""
+        from . import prints
+
+        with self._meta_lock:
+            if self._meta_final:
+                return False
+            self._screenshots.append(prints.entry(path, self.folder, when, offset, source))
+            self._write_meta("recording")
+        return True
 
     def _new_folder(self) -> Path:
         # árvore ano/mês/dia + pasta HH-MM da gravação (":" não é válido em nome
@@ -460,6 +475,8 @@ class Recording:
             meta["meeting_title"] = self.meeting_title
         if getattr(self, "_title_marks", None):
             meta["title_marks"] = self._title_marks
+        if getattr(self, "_screenshots", None):
+            meta["screenshots"] = self._screenshots
         if getattr(self, "_switches", None):
             meta["device_switches"] = self._switches  # trocas de dispositivo no meio (#22)
         if extra:

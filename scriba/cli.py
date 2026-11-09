@@ -755,7 +755,7 @@ def cmd_show(args) -> int:
 def cmd_update(args) -> int:
     """`scribadev update`: checa a última versão no GitHub e, se for instalação via git,
     aplica com `git pull`. `--check` só informa, sem aplicar."""
-    from . import __version__, updates
+    from . import updates
 
     latest = updates.latest_version()
     if latest is None:

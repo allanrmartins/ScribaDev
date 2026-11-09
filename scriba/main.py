@@ -17,6 +17,7 @@ import queue
 import sys
 import threading
 import time
+from pathlib import Path
 
 from . import plat, util
 from .config import load
@@ -305,6 +306,7 @@ class ScribaApp:
             return
         log.info("gravação iniciada (%s): %s", source, rec.folder.name)
         self._start_live_transcription(rec)
+        self._start_print_watch(rec)
         self._toast("Gravando reunião", "O áudio está sendo capturado localmente.")
         if self.tray:
             self.tray.set_recording(True, self.status_text())
@@ -352,6 +354,9 @@ class ScribaApp:
                 return
         if rec is None:
             return
+        watch = getattr(rec, "print_watch", None)
+        if watch is not None:
+            watch.stop()
         if self.tray:
             self.tray.set_recording(False, self.status_text())
 
@@ -885,6 +890,97 @@ class ScribaApp:
         self.start_recording("manual", probe=False)   # parte 2 já em andamento
         self._toast("Gravação dividida", "Nova gravação em andamento.")
 
+    # ------------------------------------------------------- prints (#229) --
+
+    def _start_print_watch(self, rec) -> None:
+        """Prints feitos pelo SISTEMA enquanto esta gravação dura (#229), sem roubar o
+        atalho de ninguém. Windows: gancho que só escuta o Print Screen, e o app faz a
+        própria captura. macOS: Cmd+Shift+3/4/5 salvam arquivo, e o observador da
+        pasta de capturas guarda uma cópia. Ligado só durante a gravação; nunca
+        atrapalha a gravação."""
+        if not getattr(self.cfg.ui, "print_key", True):
+            return
+        try:
+            if sys.platform == "win32":
+                from .printkey_win import PrintKeyHook
+
+                def on_key() -> None:
+                    if self.rec is rec:
+                        self.ui(lambda: self._take_print("tecla"))
+
+                hook = PrintKeyHook(on_key)
+                if hook.start():
+                    rec.print_watch = hook
+            elif sys.platform == "darwin":
+                from . import printwatch
+
+                rec.print_watch = printwatch.start_for(
+                    rec, on_saved=lambda: self.ui(lambda: self._print_saved(rec)))
+        except Exception:
+            log.exception("observador de prints do sistema não subiu (segue só a gravação)")
+
+    def _take_print(self, source: str) -> None:
+        """(GUI) Print da tela inteira para a pasta da gravação ativa. Qualquer falha
+        só avisa: a gravação nunca é afetada."""
+        import datetime as _dt
+
+        from .qt import screenshot
+
+        with self.rec_lock:
+            rec = self.rec
+        if rec is None:
+            return
+        if not screenshot.has_permission():
+            # 1ª vez: o diálogo do sistema; depois disso ele não volta a aparecer,
+            # então abre direto o painel de privacidade
+            if util.read_state().get("screen_capture_asked"):
+                screenshot.open_privacy_settings()
+            else:
+                util.update_state(screen_capture_asked=True)
+                screenshot.request_permission()
+            self._toast("Print não salvo: falta permissão",
+                        "Ligue o ScribaDev em Ajustes do Sistema > Privacidade e Segurança > "
+                        "Gravação de Tela e Áudio do Sistema, e tente de novo.")
+            return
+        when = _dt.datetime.now()
+        offset = rec.duration_seconds()
+        # a pílula não sai no print: ela já é excluída de captura (exclude_from_capture,
+        # a mesma proteção do compartilhamento de tela; conferido no macOS 26)
+        try:
+            img = screenshot.grab_all_screens()
+        except Exception:
+            log.exception("captura da tela falhou")
+            img = None
+        if img is None:
+            self._toast("Print não salvo", "Não consegui capturar a tela.")
+            return
+        threading.Thread(target=self._save_print, args=(rec, img, when, offset, source),
+                         daemon=True, name="print").start()
+
+    def _save_print(self, rec, img, when, offset: float, source: str) -> None:
+        """(thread) Grava o PNG e registra no meta da gravação."""
+        from . import prints
+
+        try:
+            path = prints.unique_path(rec.folder, when)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not img.save(str(path), "PNG"):
+                raise OSError(f"falha ao gravar {path.name}")
+        except Exception:
+            log.exception("não consegui salvar o print")
+            self._toast("Print não salvo", "Falha ao gravar o arquivo na pasta da reunião.")
+            return
+        if not rec.note_screenshot(path, when, source, offset):
+            path.unlink(missing_ok=True)  # a gravação fechou nesse meio tempo
+            return
+        log.info("print salvo (%s): %s", source, path.name)
+        self.ui(lambda: self._print_saved(rec))
+
+    def _print_saved(self, rec) -> None:
+        """(GUI) Retorno visual na pílula: a câmera acende e o total vai para a dica."""
+        if self.pill is not None and self.rec is rec:
+            self.pill.flash_print(len(getattr(rec, "_screenshots", []) or []))
+
     # ---------------------------------------------------------------- pill --
 
     def _ensure_pill(self):
@@ -906,6 +1002,7 @@ class ScribaApp:
                 on_split=lambda: threading.Thread(  # #38: ✂ fecha esta call e começa outra
                     target=self._split_now, daemon=True
                 ).start(),
+                on_print=lambda: self._take_print("pilula"),  # #229: print = momento-chave
             )
         return self.pill
 
@@ -916,6 +1013,7 @@ class ScribaApp:
         pill = self._ensure_pill()
         pill.set_mode("recording")
         pill.reset_speakers(util.read_state().get("last_num_speakers") or 0)  # #13: sugere o último
+        pill.reset_prints()
         pill.show()
         self._tick_pill()
 

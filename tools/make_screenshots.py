@@ -368,7 +368,6 @@ def shoot(win: tk.Misc, out_path: Path) -> None:
 def main() -> int:
     notes_dir, rec_dir = build_demo_dirs()
 
-    import dataclasses
 
     from scriba import config as config_mod
     from scriba import util

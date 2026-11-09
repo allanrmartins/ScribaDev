@@ -27,7 +27,6 @@ from PySide6.QtGui import QColor, QKeySequence, QShortcut, QTextCharFormat, QTex
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
-    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -167,6 +166,12 @@ def delete_meeting(note_path: Path | None, folder: Path, also_audio: bool) -> No
             note_path.unlink(missing_ok=True)
         except OSError as e:
             log.warning("exclusão: %s: %s", note_path.name, e)
+        # cópia dos prints ao lado da nota exportada (#229): sai junto com ela
+        import shutil
+
+        from .. import prints
+
+        shutil.rmtree(note_path.parent / prints.export_dir_name(note_path), ignore_errors=True)
     if also_audio and folder.is_dir() and not util.is_locked(folder):
         import shutil
 
@@ -849,7 +854,43 @@ class NotesWindow(QWidget):
         elif self._transcript_md and self._transcript_shown:
             md += (f"\n\n---\n\n[Ocultar transcrição completa]({_TOGGLE_ANCHOR})"
                    f"\n\n## Transcrição completa\n\n{self._transcript_md}")
+        # prints da call (#229): links relativos à nota resolvem pela pasta dela
+        if self._current_key is not None:
+            from PySide6.QtCore import QUrl
+
+            self._view.document().setBaseUrl(QUrl.fromLocalFile(str(Path(self._current_key).parent) + "/"))
         self._view.setMarkdown(md)
+        self._fit_images()
+
+    def _fit_images(self) -> None:
+        """Prints (#229) entram no tamanho real (um monitor 4K inteiro): reduz cada
+        imagem à largura do leitor, mantendo a proporção. A imagem original segue
+        intacta e abre no clique."""
+        from PySide6.QtGui import QImageReader, QTextCursor
+
+        doc = self._view.document()
+        base = doc.baseUrl().toLocalFile()
+        maxw = max(160, min(720, self._view.viewport().width() - 48))
+        block = doc.begin()
+        while block.isValid():
+            it = block.begin()
+            while not it.atEnd():
+                frag = it.fragment()
+                fmt = frag.charFormat()
+                if frag.isValid() and fmt.isImageFormat():
+                    img = fmt.toImageFormat()
+                    size = QImageReader(str(Path(base) / img.name())).size() if base else None
+                    if size is not None and size.isValid() and size.width() > 0:
+                        dpr = self._view.devicePixelRatioF() or 1.0
+                        w = min(size.width() / dpr, maxw)
+                        img.setWidth(w)
+                        img.setHeight(size.height() * w / size.width())
+                        cur = QTextCursor(doc)
+                        cur.setPosition(frag.position())
+                        cur.setPosition(frag.position() + frag.length(), QTextCursor.KeepAnchor)
+                        cur.setCharFormat(img)
+                it += 1
+            block = block.next()
 
     def _on_anchor(self, url) -> None:
         """Clique num link do leitor: o link interno alterna a transcrição SEM navegar
@@ -861,6 +902,14 @@ class NotesWindow(QWidget):
             from PySide6.QtGui import QDesktopServices
 
             QDesktopServices.openUrl(url)
+            return
+        if url.scheme() in ("", "file"):
+            # print da call (#229): abre a imagem no visualizador do sistema
+            from PySide6.QtGui import QDesktopServices
+
+            target = self._view.document().baseUrl().resolved(url)
+            if target.isLocalFile() and Path(target.toLocalFile()).is_file():
+                QDesktopServices.openUrl(target)
 
     def _toggle_transcript_view(self) -> None:
         """Mostra/oculta a transcrição preservando a posição de leitura: o resumo acima

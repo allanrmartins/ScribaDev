@@ -109,6 +109,16 @@ def split_meta(
         st["offset_seconds"] = 0.0  # o -ss do corte zera o início do stream 2
     for k in _CLEAR:
         meta2.pop(k, None)
+    # prints da tela (#229): cada um fica na parte em que foi feito
+    from . import prints
+
+    if meta.get("screenshots"):
+        shots1, shots2 = prints.split_shots(prints.shots_of(meta), offset)
+        for m, shots in ((meta1, shots1), (meta2, shots2)):
+            if shots:
+                m["screenshots"] = shots
+            else:
+                m.pop("screenshots", None)
     return meta1, meta2
 
 
@@ -398,6 +408,12 @@ def _cut(folder: Path, meta: dict, offset: float, ff: list[str]) -> tuple[Path, 
     _write_json(folder2 / "transcript.json", part2_turns)
     _write_json(meta_path, meta1)
     _write_json(folder2 / "meta.json", meta2)
+    # prints da parte 2 (#229) mudam de pasta junto com ela
+    for shot in meta2.get("screenshots") or []:
+        src_shot = folder / shot["file"]
+        if src_shot.is_file():
+            (folder2 / shot["file"]).parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src_shot), str(folder2 / shot["file"]))
     # voices.json (reconhecimento de voz) segue válido: copia p/ a parte 2, mantém na 1
     voices = folder / "voices.json"
     if voices.exists():

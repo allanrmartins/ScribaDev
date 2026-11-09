@@ -25,15 +25,16 @@ from . import theme, widgets
 
 log = logging.getLogger("scriba.qt.overlay")
 
-_W, _H, _R = 304, 44, 21          # dimensões da pílula (idênticas ao tkinter)
+_W, _H, _R = 334, 44, 21          # dimensões da pílula (+30 px do botão de print, #229)
 _CY = _H // 2
 _EDGE_GAP_Y = 8                    # margem da borda da tela na posição-padrão
 _POS_KEY = "overlay_pos"           # px LÓGICOS do Qt (decisão do #45); a pílula é dona
 
 # Regiões clicáveis (retângulo generoso atrás de cada glifo — trackpad-friendly).
-_R_SPLIT = QRect(196, 0, 24, _H)
-_R_STOP = QRect(228, 0, 26, _H)
-_R_DISCARD = QRect(262, 0, 26, _H)
+_R_PRINT = QRect(198, 0, 26, _H)   # print da tela = momento-chave (#229)
+_R_SPLIT = QRect(231, 0, 24, _H)   # centros a cada 32 px: 211 · 243 · 275 · 307
+_R_STOP = QRect(262, 0, 26, _H)
+_R_DISCARD = QRect(294, 0, 26, _H)
 _R_SPK_MINUS = QRect(141, 0, 18, _H)
 _R_SPK_COUNT = QRect(159, 0, 18, _H)
 _R_SPK_PLUS = QRect(177, 0, 18, _H)
@@ -106,8 +107,8 @@ def _fmt_elapsed(seconds: float) -> str:
 class RecordingPill(QWidget):
     """Janela-pílula da call.
 
-    Modos: "recording" (● pulsante, cronômetro, ✂ nova call, ■ encerrar, × descartar,
-    stepper − N + de participantes), "idle" (⏺ Gravar reunião), "processing" (● âmbar +
+    Modos: "recording" (● pulsante, cronômetro, 📷 print da tela, ✂ nova call, ■ encerrar,
+    × descartar, stepper − N + de participantes), "idle" (⏺ Gravar reunião), "processing" (● âmbar +
     estágio do pipeline). `set_status`/`clear_status` sobrepõem um texto fixo (ex.:
     "finalizando…") no modo gravação, escondendo os botões.
     """
@@ -121,6 +122,7 @@ class RecordingPill(QWidget):
         on_record: Callable[[], None] | None = None,
         on_speakers: Callable[[int], None] | None = None,
         on_split: Callable[[], None] | None = None,
+        on_print: Callable[[], None] | None = None,
     ):
         super().__init__(parent)
         self.on_stop = on_stop
@@ -128,6 +130,9 @@ class RecordingPill(QWidget):
         self.on_record = on_record
         self.on_speakers = on_speakers
         self.on_split = on_split
+        self.on_print = on_print
+        self._print_flash = False   # câmera acesa por um instante: print salvo (#229)
+        self._prints = 0            # prints desta gravação (vai no tooltip do botão)
 
         self._mode = "recording"
         self._status: str | None = None   # texto fixo sobreposto (finalizando…/estágio)
@@ -224,6 +229,9 @@ class RecordingPill(QWidget):
         p.drawText(_R_SPK_COUNT, Qt.AlignCenter, str(self._spk))
         # ícones Fluent (#67): nova call (cut) · encerrar (stop) · descartar (dismiss),
         # renderizados via QSvgRenderer nas mesmas regiões clicáveis, cor por hover.
+        if self.on_print is not None:
+            cam = t.ok if self._print_flash else (t.text if self._hover == "print" else t.muted)
+            self._draw_icon(p, "camera", cam, _R_PRINT, 17)
         self._draw_icon(p, "cut", t.text if self._hover == "split" else t.muted, _R_SPLIT, 17)
         self._draw_icon(p, "stop", t.rec if self._hover == "stop" else t.text, _R_STOP, 16)
         self._draw_icon(p, "dismiss", t.text if self._hover == "discard" else t.muted, _R_DISCARD, 16)
@@ -270,8 +278,11 @@ class RecordingPill(QWidget):
         if self._mode == "idle":
             return {"rec": _R_REC}
         if self._mode == "recording" and not self._status:
-            return {"split": _R_SPLIT, "stop": _R_STOP, "discard": _R_DISCARD,
-                    "spk_minus": _R_SPK_MINUS, "spk_count": _R_SPK_COUNT, "spk_plus": _R_SPK_PLUS}
+            regions = {"split": _R_SPLIT, "stop": _R_STOP, "discard": _R_DISCARD,
+                       "spk_minus": _R_SPK_MINUS, "spk_count": _R_SPK_COUNT, "spk_plus": _R_SPK_PLUS}
+            if self.on_print is not None:
+                regions["print"] = _R_PRINT
+            return regions
         return {}  # processing / status fixo: sem botões
 
     def _button_at(self, pos) -> str | None:
@@ -320,6 +331,8 @@ class RecordingPill(QWidget):
             self.on_discard()
         elif region == "split" and self.on_split:
             self.on_split()
+        elif region == "print" and self.on_print:
+            self.on_print()
         elif region == "rec" and self.on_record:
             self.on_record()
         elif region == "spk_minus":
@@ -333,6 +346,9 @@ class RecordingPill(QWidget):
         btn = self._button_at(pos)
         self.setCursor(Qt.PointingHandCursor if btn else Qt.SizeAllCursor)
         if btn != self._hover:
+            if "print" in (btn, self._hover):  # a dica muda entre a geral e a do print
+                self._tip_hide()
+                self._tip_timer.start()
             self._hover = btn
             self.update()
 
@@ -345,6 +361,25 @@ class RecordingPill(QWidget):
         if self._hover is not None:
             self._hover = None
             self.update()
+
+    # -- print da tela (#229) ------------------------------------------------
+
+    def flash_print(self, total: int) -> None:
+        """Print salvo: a câmera acende em verde por um instante (retorno sem tirar o
+        foco da call) e o total da gravação vai para a dica do botão."""
+        self._prints = int(total)
+        self._print_flash = True
+        self.update()
+        QTimer.singleShot(1200, self._end_print_flash)
+
+    def _end_print_flash(self) -> None:
+        self._print_flash = False
+        self.update()
+
+    def reset_prints(self) -> None:
+        self._prints = 0
+        self._print_flash = False
+        self.update()
 
     # -- participantes (#13) -------------------------------------------------
 
@@ -479,7 +514,12 @@ class RecordingPill(QWidget):
         from PySide6.QtWidgets import QLabel
 
         t = theme.active()
-        tip = QLabel(self._TIP_TEXT)
+        text = self._TIP_TEXT
+        if self._hover == "print":
+            text = "Print da tela: marca este momento como ponto-chave do resumo"
+            if self._prints:
+                text += f"  ·  {self._prints} nesta gravação"
+        tip = QLabel(text)
         tip.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.ToolTip)
         tip.setWordWrap(True)
         tip.setMaximumWidth(240)

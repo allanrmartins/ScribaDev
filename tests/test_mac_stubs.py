@@ -9,7 +9,6 @@ testes de template recarregam o módulo sob o sys.platform desejado.
 
 import builtins
 import importlib
-import subprocess as subprocess_mod
 import sys
 import unittest
 from unittest import mock

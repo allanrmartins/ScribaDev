@@ -97,7 +97,6 @@ def purge_old_recordings(cfg, dry_run: bool = False) -> list[tuple[Path, float]]
     2. re-leitura do meta.json: status pode ter mudado desde find_purgeable — guarda
        complementar para o caso em que o .lock ainda não existe mas o status já mudou.
     """
-    from . import util as util_mod
 
     rec_dir = cfg.output.resolved_recordings_dir()
     affected: list[tuple[Path, float]] = []

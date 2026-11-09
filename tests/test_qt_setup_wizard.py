@@ -154,7 +154,6 @@ class SetupWizardTests(unittest.TestCase):
 
     # -- gate + estado --------------------------------------------------------
     def test_finish_marca_done_e_should_run(self):
-        from scriba import updates
 
         w = self._win()
         self.assertFalse(self.swz.is_done())
@@ -251,7 +250,6 @@ class AddonsTests(unittest.TestCase):
 
     def tearDown(self):
         util.APP_DIR = self._app0
-        from scriba import addons
 
         p = str(self.tmp / "addons")
         if p in sys.path:

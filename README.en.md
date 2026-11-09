@@ -11,7 +11,7 @@
 > ⚠️ **Important notice:** call-recording laws **vary by country**, and company/client policies may require **explicit consent**. Depending on your context, **let participants know the call is being recorded for transcription**. The app records locally and does not notify anyone for you — you are responsible for how you use it. See the [Legal notice](#legal-notice).
 
 <p align="center">
-  <img src="docs/pilula.png" alt="Recording pill" width="300">
+  <img src="docs/pilula.png" alt="Recording pill" width="330">
   <br><br>
   <img src="docs/janela.png" alt="ScribaDev — main window with recent meetings, action items and service status" width="480">
   <br><br>
@@ -163,9 +163,12 @@ scribadev autostart on   # optional: start with Windows
 Join a Teams call (or a Meet in the browser) and the pill shows up at the top of the screen, **staying for the whole call**:
 
 - **● 12:34** — recording, with a timer (drag it anywhere; position is remembered)
+- **📷** - screenshot: marks a key moment. The image goes to the recording folder and the summary gets a **Momentos-chave** (key moments) section with what was being discussed and the image
 - **■** — stop now and process
 - **×** — discard this recording (calls that shouldn't become notes)
 - **⏺ Record** — idle mode: shown when auto-record is off, or after you stop/discard mid-call; one click starts a (new) recording
+
+While recording, screenshots taken with the system shortcut (Print Screen on Windows; Cmd+Shift+3/4/5 on Mac) become key moments too: the screenshot still goes where it always did and a copy is kept with the meeting.
 
 The pill only disappears when the call ends. With `auto_record` off (Settings), nothing is recorded until you click ⏺. When you leave the call: a "Transcribing…" toast, then "Notes ready" with a button that opens the `.md`.
 
@@ -309,6 +312,7 @@ model = "claude-sonnet-4-6"  # or claude-opus-4-8 (dropdown in the Summary tab)
 [ui]
 overlay = true           # floating pill
 hotkey = "ctrl+alt+r"    # global record/stop hotkey; empty disables
+print_key = true         # system screenshots during the call become key moments
 
 [output]
 export_dir = ""          # empty = %LOCALAPPDATA%\ScribaDev\Notas

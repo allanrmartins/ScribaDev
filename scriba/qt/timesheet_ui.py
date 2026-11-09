@@ -264,7 +264,8 @@ class TimesheetWindow(QWidget):
                 fn()
             except Exception as e:
                 log.exception("timesheet UI: operação falhou")
-                self.app.ui(lambda: QMessageBox.warning(self, "Apontamento de horas", str(e)))
+                msg = str(e)  # `e` deixa de existir ao sair do except; o lambda roda depois
+                self.app.ui(lambda: QMessageBox.warning(self, "Apontamento de horas", msg))
             self.app.ui(self.refresh)
 
         if self._inline_bg:
@@ -914,7 +915,8 @@ class TimesheetWindow(QWidget):
                 report = tsdb.seed_registry(dry_run=True)
             except Exception as e:
                 log.exception("prévia do cadastro falhou")
-                self.app.ui(lambda: QMessageBox.warning(self, "Cadastro", str(e)))
+                msg = str(e)  # `e` deixa de existir ao sair do except; o lambda roda depois
+                self.app.ui(lambda: QMessageBox.warning(self, "Cadastro", msg))
                 return
             self.app.ui(lambda: self._confirm_seed(report))
 

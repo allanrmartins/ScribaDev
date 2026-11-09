@@ -134,6 +134,30 @@ class PillSmokeTests(unittest.TestCase):
         pill._fire("split")
         self.assertEqual(self.events, ["stop", "discard", "split"])
 
+    def test_botao_de_print_so_com_callback_e_nao_se_sobrepoe(self):
+        """#229: a câmera aparece só quando o app liga o print (a contagem regressiva do
+        `scriba record` não liga) e cabe na pílula sem invadir outro botão."""
+        from scriba.qt import overlay
+
+        pill = self._pill()
+        pill.set_mode("recording")
+        self.assertNotIn("print", pill._regions())
+        pill.on_print = lambda: self.events.append("print")
+        regs = pill._regions()
+        self.assertIn("print", regs)
+        rects = list(regs.values())
+        for i, a in enumerate(rects):
+            self.assertLessEqual(a.right(), overlay._W - 8)
+            for b in rects[i + 1:]:
+                self.assertFalse(a.intersects(b), (a, b))
+        pill._fire("print")
+        self.assertEqual(self.events, ["print"])
+        pill.flash_print(2)
+        self.assertTrue(pill._print_flash)
+        pill.repaint()
+        pill.reset_prints()
+        self.assertEqual((pill._prints, pill._print_flash), (0, False))
+
     def test_record_so_no_idle(self):
         pill = self._pill()
         pill.set_mode("idle")
@@ -194,7 +218,6 @@ class PillSmokeTests(unittest.TestCase):
         import json
 
         from scriba import util
-        from scriba.qt import overlay
 
         orig = util.STATE_PATH
         util.STATE_PATH = Path(tempfile.mkdtemp(prefix="scriba_qt_pill_")) / "state.json"

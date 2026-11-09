@@ -111,6 +111,16 @@ class UiConfigTests(unittest.TestCase):
         util.LOGS_DIR = d / "logs"
         util.CONFIG_PATH = d / "config.toml"
 
+    def test_print_key_ligado_por_padrao_e_persiste(self):
+        """#229: o checkbox das Configurações precisa sobreviver ao save (o config.toml
+        é escrito por modelo; chave fora dele some ao salvar)."""
+        import dataclasses
+
+        self.assertTrue(config.load().ui.print_key)
+        cfg = config.load()
+        config.save(dataclasses.replace(cfg, ui=dataclasses.replace(cfg.ui, print_key=False)))
+        self.assertFalse(config.load().ui.print_key)
+
     def test_default_pending_window_days(self):
         self.assertEqual(config.load().ui.pending_window_days, 30)
 

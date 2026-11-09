@@ -11,7 +11,7 @@
 > ⚠️ **Aviso importante:** as leis sobre gravação de conversas **variam por país**, e políticas de empresas/clientes podem exigir **consentimento explícito**. Dependendo do seu contexto, **informe os participantes de que a call está sendo gravada para transcrição**. O app grava localmente e não avisa por você — a responsabilidade pelo uso é sua. Veja o [Aviso legal](#aviso-legal).
 
 <p align="center">
-  <img src="docs/pilula.png" alt="Pílula de gravação" width="300">
+  <img src="docs/pilula.png" alt="Pílula de gravação" width="330">
   <br><br>
   <img src="docs/janela.png" alt="ScribaDev — janela principal com reuniões recentes, pendências e status dos serviços" width="480">
   <br><br>
@@ -163,9 +163,12 @@ scribadev autostart on   # opcional: iniciar junto com o Windows
 Pronto. Entre numa call do Teams (ou num Meet no navegador) e a pílula aparece no topo da tela, **acompanhando a call inteira**:
 
 - **● 12:34** — gravando, com cronômetro (arraste para onde quiser; a posição fica salva)
+- **📷** - print da tela: marca um momento-chave. O print vai para a pasta da gravação e o resumo ganha a seção **Momentos-chave**, com o assunto daquele momento e a imagem
 - **■** — encerra a gravação agora e processa
 - **×** — descarta esta gravação (call que não deve virar nota)
 - **⏺ Gravar reunião** — modo espera: aparece quando a gravação automática está desligada, ou depois de você parar/descartar no meio da call; um clique inicia (outra) gravação
+
+Durante a gravação, o print feito pelo próprio sistema (Print Screen no Windows; Cmd+Shift+3/4/5 no Mac) também vira momento-chave: o print continua indo para onde já ia e uma cópia fica na reunião.
 
 A pílula só some quando a call termina. Com `auto_record` desligado (Configurações), nada é gravado sem você clicar no ⏺. Ao sair da call: toast "Transcrevendo…", e em seguida "Notas prontas" com botão para abrir o `.md`.
 
@@ -309,6 +312,7 @@ model = "claude-sonnet-4-6"  # ou claude-opus-4-8 (dropdown na aba Resumo)
 [ui]
 overlay = true           # pílula flutuante
 hotkey = "ctrl+alt+r"    # atalho global gravar/parar; vazio desativa
+print_key = true         # prints do sistema durante a call viram momentos-chave
 
 [output]
 export_dir = ""          # vazio = %LOCALAPPDATA%\ScribaDev\Notas

@@ -9,6 +9,7 @@ import shutil
 from pathlib import Path
 
 from . import merge as merge_mod
+from . import prints as _prints
 from . import util
 from .config import load
 
@@ -382,7 +383,7 @@ _MAP_SYSTEM = (
     "discutidos, regras de negócio, números, prazos, valores, nomes próprios e de objetos, e quem "
     "falou. Preserve os carimbos [HH:MM:SS] dos pontos importantes. NÃO produza o resumo final nem "
     "formate em seções — produza notas densas, fiéis e completas DESTE trecho, em português."
-)
+) + _prints.MAP_RULE
 
 
 def _vocabulary_block() -> str:
@@ -403,7 +404,8 @@ def _vocabulary_block() -> str:
             "claro que é o termo; não invente ocorrências: " + ", ".join(termos))
 
 
-def _summary_call(body: str, meeting: str, timeout: int, folder: Path, *, notes_mode: bool = False) -> str | None:
+def _summary_call(body: str, meeting: str, timeout: int, folder: Path, *, notes_mode: bool = False,
+                  shots: list[dict] | None = None) -> str | None:
     """Chamada de resumo estruturado (single-shot OU reduce final): aplica TITLE_INSTRUCTION +
     prompt.md sobre `body`. `notes_mode=False` → `body` é a transcrição crua; `True` → são as
     notas das partes (map-reduce), rotuladas como cobrindo a reunião inteira.
@@ -413,7 +415,7 @@ def _summary_call(body: str, meeting: str, timeout: int, folder: Path, *, notes_
     CREATE_NO_WINDOW dispararia o bug do Windows Terminal (ver promptgen._call_claude)."""
     from . import ai
 
-    payload = f"{TITLE_INSTRUCTION}{load_summary_prompt()}{_vocabulary_block()}"
+    payload = f"{TITLE_INSTRUCTION}{load_summary_prompt()}{_vocabulary_block()}{_prints.prompt_block(shots or [])}"
     if meeting:
         payload += f"\n\n=== NOME DA REUNIÃO (do título da janela; pista, pode estar incompleto) ===\n{meeting}"
     if notes_mode:
@@ -508,6 +510,7 @@ def generate_summary(transcript_md: str, folder: Path) -> tuple[str | None, str 
     except Exception:
         meta = {}
     meeting = (meta.get("meeting_title") or "").strip()
+    shots = _prints.shots_of(meta)  # prints da tela = momentos-chave (#229)
 
     # piso = config; escala pela duração do áudio; teto p/ não pendurar o worker. No map-reduce
     # vale POR chamada (cada parte é menor que a call inteira, então há folga de sobra).
@@ -515,7 +518,7 @@ def generate_summary(transcript_md: str, folder: Path) -> tuple[str | None, str 
     timeout = min(_SUMMARY_TIMEOUT_CEILING, max(int(cfg.timeout_seconds), int(audio_min * _SUMMARY_S_PER_AUDIO_MIN)))
 
     if len(transcript_md) <= _SINGLE_SHOT_CHARS:
-        out = _summary_call(transcript_md, meeting, timeout, folder)
+        out = _summary_call(transcript_md, meeting, timeout, folder, shots=shots)
     else:
         n_parts = len(transcript_md) // _MAP_CHUNK_CHARS + 1
         print(f"resumo: transcrição longa ({len(transcript_md)} chars) — map-reduce em ~{n_parts} "
@@ -528,7 +531,7 @@ def generate_summary(transcript_md: str, folder: Path) -> tuple[str | None, str 
             print("resumo: uma parte falhou — abortado (transcrição preservada; rode "
                   "'scribadev summarize' de novo)")
             return None, None, None
-        out = _summary_call(combined, meeting, timeout, folder, notes_mode=True)
+        out = _summary_call(combined, meeting, timeout, folder, notes_mode=True, shots=shots)
 
     if not out:
         return None, None, None
@@ -658,7 +661,10 @@ def build_notes(folder: Path) -> Path | None:
         return None
     meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
     turns = [merge_mod.Turn(**d) for d in json.loads(transcript_path.read_text(encoding="utf-8"))]
-    transcript_md = merge_mod.render_markdown(turns)
+    # prints da tela (#229) entram como marcas no ponto em que foram feitos; o
+    # transcript.json segue só com falas
+    shots = [s for s in _prints.shots_of(meta) if (folder / s["file"]).is_file()]
+    transcript_md = _prints.interleave(merge_mod.render_markdown(turns), [t.start for t in turns], shots)
 
     # estágio para a UI: "Gerando resumo…"
     meta["status"] = "summarizing"
@@ -683,6 +689,9 @@ def build_notes(folder: Path) -> Path | None:
         else:
             summary = ('> Resumo indisponível - a IA não respondeu. Clique com o botão '
                        'direito na reunião → Reprocessar → Refazer o resumo.')
+
+    # todo print aparece no resumo com a imagem, mesmo se a IA falhou ou esqueceu
+    summary = _prints.attach(summary, shots)
 
     started = meta.get("started_at", "")
     duration_min = int(float(meta.get("duration_seconds", 0)) // 60)
@@ -735,7 +744,7 @@ def build_notes(folder: Path) -> Path | None:
             shutil.copyfile(export_path, export_path.with_suffix(".md.bak"))
         except OSError as e:
             print(f"AVISO: não guardei o .bak da nota anterior ({e})")
-    shutil.copyfile(md_path, export_path)
+    _export_note(md, md_path, export_path, folder, shots)
 
     meta["status"] = "done"
     meta["title"] = title
@@ -753,6 +762,35 @@ def build_notes(folder: Path) -> Path | None:
         pass
     print(f"notas prontas: {export_path}")
     return export_path
+
+
+def _export_note(md: str, md_path: Path, export_path: Path, folder: Path, shots: list[dict]) -> None:
+    """Grava a cópia exportada. Com prints (#229), eles vão para uma pasta irmã da
+    nota (`<data>_prints/`) e os links da cópia apontam para lá: a pasta da gravação
+    é renomeada depois do resumo, e a tela de Notas abre a cópia exportada."""
+    pdir = export_path.parent / _prints.export_dir_name(export_path)
+    if not shots:
+        shutil.copyfile(md_path, export_path)
+        shutil.rmtree(pdir, ignore_errors=True)  # reprocessada sem prints: sem sobra
+        return
+    pdir.mkdir(parents=True, exist_ok=True)
+    keep = set()
+    for s in shots:
+        src = folder / s["file"]
+        dst = pdir / src.name
+        keep.add(dst.name)
+        try:
+            if not dst.exists() or dst.stat().st_size != src.stat().st_size:
+                shutil.copyfile(src, dst)
+        except OSError as e:
+            print(f"AVISO: não copiei o print {src.name} para junto da nota ({e})")
+    for old in pdir.iterdir():
+        if old.name not in keep:
+            try:
+                old.unlink(missing_ok=True)  # aberto num visualizador no Windows: fica
+            except OSError:
+                pass
+    util.atomic_write_text(export_path, _prints.relink(md, pdir.name))
 
 
 # Antigo default de export (pré-migração): Documentos\<nome>, que na maioria das máquinas
