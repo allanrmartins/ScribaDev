@@ -781,7 +781,7 @@ def _export_note(md: str, md_path: Path, export_path: Path, folder: Path, shots:
         keep.add(dst.name)
         try:
             if not dst.exists() or dst.stat().st_size != src.stat().st_size:
-                shutil.copyfile(src, dst)
+                shutil.copy2(src, dst)  # preserva o horário: a retenção dos prints usa
         except OSError as e:
             print(f"AVISO: não copiei o print {src.name} para junto da nota ({e})")
     for old in pdir.iterdir():

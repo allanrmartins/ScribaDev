@@ -5,6 +5,10 @@ Só remove pastas em `recordings_dir` cujo `meta.json` está com `status="done"`
 A nota final (.md), que vive na pasta de notas (`output.export_dir`), é separada
 e **nunca** é tocada aqui. `retention_days = 0` desliga a limpeza.
 
+Prints da call (#229) têm regra própria: a limpeza da gravação apaga tudo da
+pasta MENOS `prints/`, que fica para consulta. Eles só saem pela
+`purge_old_prints`, com `[audio].prints_retention_days` (0 = nunca, o padrão).
+
 Duas camadas fecham a janela TOCTOU entre find_purgeable e o rmtree:
   1. Re-leitura (guarda complementar): reler o meta.json imediatamente antes do
      rmtree e pular se o status mudou para em-andamento. Cobre o caso comum.
@@ -126,12 +130,14 @@ def purge_old_recordings(cfg, dry_run: bool = False) -> list[tuple[Path, float]]
             continue
 
         try:
-            shutil.rmtree(folder)
+            kept = remove_keeping_prints(folder)
         except Exception:
             log.exception("retenção: falha ao remover %s", folder)
             continue
-        _prune_empty_dirs(rec_dir, folder.parent)
-        log.info("retenção: removida %s (%.0f dias)", folder.name, age)
+        if not kept:
+            _prune_empty_dirs(rec_dir, folder.parent)
+        log.info("retenção: removida %s (%.0f dias)%s", folder.name, age,
+                 " - prints mantidos" if kept else "")
         # remove do índice de busca (#10): a pasta (fonte da verdade) já foi apagada
         try:
             from . import meetings_index
@@ -141,3 +147,86 @@ def purge_old_recordings(cfg, dry_run: bool = False) -> list[tuple[Path, float]]
             pass
         affected.append((folder, age))
     return affected
+
+
+# ------------------------------------------------------------- prints (#229) --
+
+def remove_keeping_prints(folder: Path) -> bool:
+    """Apaga a pasta da gravação, menos a subpasta `prints/` (se tiver algum print).
+    Sem o meta.json, a pasta deixa de ser uma reunião para o índice e para esta
+    limpeza; os prints seguem só a regra deles. Devolve True se manteve prints."""
+    from .prints import PRINTS_DIR
+
+    pdir = folder / PRINTS_DIR
+    if not (pdir.is_dir() and any(p.is_file() for p in pdir.iterdir())):
+        shutil.rmtree(folder)
+        return False
+    for child in folder.iterdir():
+        if child.name == PRINTS_DIR:
+            continue
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+    return True
+
+
+def _old_files(folder: Path, days: int, now: float) -> list[Path]:
+    out = []
+    try:
+        for f in folder.iterdir():
+            try:
+                if f.is_file() and (now - f.stat().st_mtime) / 86400.0 >= days:
+                    out.append(f)
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return out
+
+
+def purge_old_prints(cfg, dry_run: bool = False, now: float | None = None) -> list[Path]:
+    """Apaga os prints da call com mais de `[audio].prints_retention_days` dias (0 =
+    nunca). Vale para `prints/` das gravações e para a cópia ao lado das notas
+    exportadas (`<data>_prints/`). A idade é a do próprio arquivo (o horário do print).
+    Pasta que fica vazia sai junto. Pasta com processamento em andamento (.lock) é
+    pulada. Devolve os arquivos removidos (ou que seriam, com dry_run)."""
+    import time
+
+    from .prints import PRINTS_DIR
+
+    days = int(getattr(cfg.audio, "prints_retention_days", 0) or 0)
+    if days <= 0:
+        return []
+    now = time.time() if now is None else now
+    rec_dir = cfg.output.resolved_recordings_dir()
+    dirs: list[tuple[Path, Path | None]] = []  # (pasta de prints, raiz p/ podar vazias)
+    for pdir in sorted(rec_dir.rglob(PRINTS_DIR)):
+        if pdir.is_dir() and not util.is_locked(pdir.parent):
+            dirs.append((pdir, rec_dir))
+    try:
+        export_dir = cfg.output.resolved_export_dir()
+        dirs += [(d, None) for d in sorted(export_dir.glob("*_prints")) if d.is_dir()]
+    except Exception:
+        pass
+    removed: list[Path] = []
+    for pdir, root in dirs:
+        for f in _old_files(pdir, days, now):
+            if not dry_run:
+                try:
+                    f.unlink()
+                except OSError:
+                    log.warning("retenção de prints: não consegui apagar %s", f)
+                    continue
+            removed.append(f)
+        if dry_run:
+            continue
+        try:
+            pdir.rmdir()  # só sai se ficou vazia
+        except OSError:
+            continue
+        if root is not None:
+            _prune_empty_dirs(root, pdir.parent)
+    if removed and not dry_run:
+        log.info("retenção de prints: %d print(s) > %d dias removido(s)", len(removed), days)
+    return removed

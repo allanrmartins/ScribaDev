@@ -930,3 +930,130 @@ def reprocess_submenu(menu, folder, app):
         tudo.setToolTip("O áudio desta gravação já foi apagado "
                         "(retenção ou keep_audio desligado).")
     return sub
+
+
+class KeyCaptureField(QWidget):
+    """Campo de tecla única (a tecla de print, #229): mostra a tecla atual e o botão
+    "Trocar…" captura a PRÓXIMA tecla pressionada. Esc cancela, Backspace desliga e
+    "Padrão" volta à tecla padrão.
+
+    Fala o protocolo de um QLineEdit (`text()`/`setText()` com o spec, ex.:
+    "printscreen", "ctrl+shift+p"), então entra nas Configurações como um campo de
+    texto comum."""
+
+    def __init__(self, default: str = "printscreen", parent=None):
+        from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QVBoxLayout
+
+        super().__init__(parent)
+        self._default = default
+        self._spec = default
+        self._capturing = False
+        self.setFocusPolicy(Qt.StrongFocus)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(2)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        self._display = QLineEdit()
+        self._display.setReadOnly(True)
+        self._display.setFocusPolicy(Qt.NoFocus)
+        self._change = ModernButton("Trocar…", self.start_capture)
+        self._reset = ModernButton("Padrão", lambda: self.setText(self._default))
+        row.addWidget(self._display, 1)
+        row.addWidget(self._change)
+        row.addWidget(self._reset)
+        outer.addLayout(row)
+        self._msg = QLabel("")
+        self._msg.setProperty("role", "muted")
+        self._msg.setWordWrap(True)
+        self._msg.setVisible(False)
+        outer.addWidget(self._msg)
+        self._refresh()
+
+    # protocolo de QLineEdit (settings_ui: kind "text")
+    def text(self) -> str:  # noqa: D401
+        return self._spec
+
+    def setText(self, spec: str) -> None:  # noqa: N802
+        from .. import printkey
+
+        self._spec = printkey.normalize(spec) if spec else ""
+        self._refresh()
+
+    def _refresh(self) -> None:
+        from .. import printkey
+
+        if self._capturing:
+            self._display.setText("Pressione a tecla…")
+        else:
+            self._display.setText(printkey.label(self._spec))
+        self._reset.setEnabled(not self._capturing and self._spec != self._default)
+        self._change.setText("Cancelar" if self._capturing else "Trocar…")
+
+    def _say(self, text: str) -> None:
+        self._msg.setText(text)
+        self._msg.setVisible(bool(text))
+
+    def start_capture(self) -> None:
+        if self._capturing:
+            self._finish()
+            return
+        self._capturing = True
+        self._say("Pressione a tecla (pode combinar com Ctrl/Alt/Shift). Esc cancela, Backspace desliga.")
+        self._refresh()
+        self.setFocus()
+        self.grabKeyboard()
+
+    def _finish(self, spec: str | None = None) -> None:
+        self.releaseKeyboard()
+        self._capturing = False
+        if spec is not None:
+            self._spec = spec
+        self._say("")
+        self._refresh()
+
+    def _take(self, e) -> bool:
+        """Trata a tecla do evento; True se encerrou a captura."""
+        import sys
+
+        from .. import printkey
+
+        k = e.key()
+        if k == Qt.Key_Escape:
+            self._finish()
+            return True
+        if k == Qt.Key_Backspace:
+            self._finish("")
+            return True
+        if k in (Qt.Key_Control, Qt.Key_Alt, Qt.Key_Shift, Qt.Key_Meta, Qt.Key_AltGr):
+            return False  # só o modificador: espera a tecla
+        m = e.modifiers()
+        spec = printkey.from_qt(k, bool(m & Qt.ControlModifier), bool(m & Qt.AltModifier),
+                                bool(m & Qt.ShiftModifier), bool(m & Qt.MetaModifier),
+                                mac=sys.platform == "darwin")
+        if not spec:
+            self._say("Essa tecla não serve. Use Print Screen, uma tecla de função (F1 a F24) ou "
+                      "uma combinação com Ctrl/Alt (Cmd no Mac). Esc cancela.")
+            return False
+        self._finish(spec)
+        return True
+
+    def keyPressEvent(self, e) -> None:  # noqa: N802
+        if not self._capturing:
+            return super().keyPressEvent(e)
+        if not e.isAutoRepeat():
+            self._take(e)
+        e.accept()
+
+    def keyReleaseEvent(self, e) -> None:  # noqa: N802
+        # Windows: a Print Screen só chega ao app na SOLTURA (o sistema fica com a descida)
+        if self._capturing and e.key() == Qt.Key_Print and not e.isAutoRepeat():
+            self._take(e)
+            e.accept()
+            return
+        super().keyReleaseEvent(e)
+
+    def focusOutEvent(self, e) -> None:  # noqa: N802
+        if self._capturing:
+            self._finish()
+        super().focusOutEvent(e)

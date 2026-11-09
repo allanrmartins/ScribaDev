@@ -168,7 +168,9 @@ Pronto. Entre numa call do Teams (ou num Meet no navegador) e a pílula aparece 
 - **×** — descarta esta gravação (call que não deve virar nota)
 - **⏺ Gravar reunião** — modo espera: aparece quando a gravação automática está desligada, ou depois de você parar/descartar no meio da call; um clique inicia (outra) gravação
 
-Durante a gravação, o print feito pelo próprio sistema (Print Screen no Windows; Cmd+Shift+3/4/5 no Mac) também vira momento-chave: o print continua indo para onde já ia e uma cópia fica na reunião.
+Durante a gravação, a tecla **Print Screen** também tira um print que vira momento-chave, sem perder a função normal da tecla (dá para trocar a tecla em Configurações, no botão **Trocar…**). No Mac, os prints de Cmd+Shift+3/4/5 também contam: o original fica onde o sistema salvou e uma cópia vai para a reunião.
+
+Os prints ficam guardados na pasta da gravação: a limpeza de gravações antigas apaga o áudio, mas **não apaga os prints**. Eles têm limpeza própria ("Apagar prints da call após"), desligada por padrão.
 
 A pílula só some quando a call termina. Com `auto_record` desligado (Configurações), nada é gravado sem você clicar no ⏺. Ao sair da call: toast "Transcrevendo…", e em seguida "Notas prontas" com botão para abrir o `.md`.
 
@@ -292,7 +294,8 @@ auto_record = true       # gravar sozinho ao detectar a call; desligado, a pílu
 loopback_device = ""     # vazio = saída padrão; senão, parte do nome (scribadev devices)
 keep_audio = true        # manter o áudio da reunião após transcrever
 archive_format = "opus"  # opus (~20 MB/h) | flac (lossless ~110 MB/h) | wav (cru ~1,3 GB/h)
-retention_days = 30      # apaga gravações já transcritas após N dias (0 = nunca)
+retention_days = 30      # apaga gravações já transcritas após N dias (0 = nunca); os prints da call ficam
+prints_retention_days = 0  # apaga os prints da call após N dias (0 = nunca)
 
 [whisper]
 model = "large-v3-turbo" # qualquer modelo do faster-whisper
@@ -312,7 +315,7 @@ model = "claude-sonnet-4-6"  # ou claude-opus-4-8 (dropdown na aba Resumo)
 [ui]
 overlay = true           # pílula flutuante
 hotkey = "ctrl+alt+r"    # atalho global gravar/parar; vazio desativa
-print_key = true         # prints do sistema durante a call viram momentos-chave
+print_key = "printscreen"  # tecla que tira o print na call (vira momento-chave); vazio desliga
 
 [output]
 export_dir = ""          # vazio = %LOCALAPPDATA%\ScribaDev\Notas

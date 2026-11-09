@@ -354,9 +354,11 @@ class ScribaApp:
                 return
         if rec is None:
             return
-        watch = getattr(rec, "print_watch", None)
-        if watch is not None:
-            watch.stop()
+        for watch in getattr(rec, "print_watches", None) or []:
+            try:
+                watch.stop()
+            except Exception:
+                log.exception("falha ao desligar a tecla de print")
         if self.tray:
             self.tray.set_recording(False, self.status_text())
 
@@ -893,31 +895,61 @@ class ScribaApp:
     # ------------------------------------------------------- prints (#229) --
 
     def _start_print_watch(self, rec) -> None:
-        """Prints feitos pelo SISTEMA enquanto esta gravação dura (#229), sem roubar o
-        atalho de ninguém. Windows: gancho que só escuta o Print Screen, e o app faz a
-        própria captura. macOS: Cmd+Shift+3/4/5 salvam arquivo, e o observador da
-        pasta de capturas guarda uma cópia. Ligado só durante a gravação; nunca
-        atrapalha a gravação."""
-        if not getattr(self.cfg.ui, "print_key", True):
+        """Tecla de print enquanto esta gravação dura (#229; [ui].print_key, padrão
+        Print Screen, vazio desliga). Nunca rouba a tecla fora da gravação e nunca
+        atrapalha a gravação.
+
+        Windows: gancho que só escuta a tecla; o app faz a própria captura.
+        macOS: a tecla vira atalho global (a "printscreen" de teclado de PC chega
+        como F13) e o observador da pasta de capturas guarda uma cópia do que os
+        atalhos do sistema (Cmd+Shift+3/4/5) salvarem."""
+        from . import printkey
+
+        spec = printkey.normalize(getattr(self.cfg.ui, "print_key", printkey.DEFAULT) or "")
+        if not spec:
             return
+        rec.print_watches = []
+
+        def on_key() -> None:
+            if self.rec is rec:
+                self.ui(lambda: self._take_print("tecla"))
+
         try:
             if sys.platform == "win32":
                 from .printkey_win import PrintKeyHook
 
-                def on_key() -> None:
-                    if self.rec is rec:
-                        self.ui(lambda: self._take_print("tecla"))
-
-                hook = PrintKeyHook(on_key)
+                hook = PrintKeyHook(on_key, spec)
                 if hook.start():
-                    rec.print_watch = hook
+                    rec.print_watches.append(hook)
             elif sys.platform == "darwin":
                 from . import printwatch
 
-                rec.print_watch = printwatch.start_for(
-                    rec, on_saved=lambda: self.ui(lambda: self._print_saved(rec)))
+                rec.print_watches.append(printwatch.start_for(
+                    rec, on_saved=lambda: self.ui(lambda: self._print_saved(rec))))
+                binding = printkey.mac_binding(spec)
+                if binding is not None:
+                    self.ui(lambda: self._register_mac_print_key(rec, binding, on_key, spec))
         except Exception:
-            log.exception("observador de prints do sistema não subiu (segue só a gravação)")
+            log.exception("tecla de print não subiu (segue só a gravação)")
+
+    def _register_mac_print_key(self, rec, binding, on_key, spec: str) -> None:
+        """(GUI) Carbon exige a thread principal. A gravação pode ter acabado no meio."""
+        from . import hotkey_mac
+
+        if self.rec is not rec:
+            return
+        hk_id = hotkey_mac.register_code(binding[0], binding[1], on_key, label=spec)
+        if hk_id is None:
+            return
+        log.info("tecla de print ativa durante a gravação: %s", spec)
+
+        class _Unreg:
+            def stop(self_inner) -> None:
+                self.ui(lambda: hotkey_mac.unregister(hk_id))
+
+        rec.print_watches.append(_Unreg())
+        if self.rec is not rec:  # a gravação acabou entre o registro e o append
+            hotkey_mac.unregister(hk_id)
 
     def _take_print(self, source: str) -> None:
         """(GUI) Print da tela inteira para a pasta da gravação ativa. Qualquer falha
@@ -1539,7 +1571,8 @@ class ScribaApp:
             self._toast("Processando pendentes", f"{count} reunião(ões) na fila")
 
     def purge_old(self) -> None:
-        """Apaga gravações já transcritas além do prazo ([audio].retention_days)."""
+        """Apaga gravações já transcritas além do prazo ([audio].retention_days) e os
+        prints da call além do prazo deles ([audio].prints_retention_days)."""
         try:
             from .retention import purge_old_recordings
 
@@ -1551,6 +1584,13 @@ class ScribaApp:
             days = int(getattr(self.cfg.audio, "retention_days", 0) or 0)
             log.info("retenção: %d gravação(ões) > %d dias removida(s)", len(removed), days)
             self._toast("Limpeza de gravações", f"{len(removed)} além de {days} dias removida(s)")
+        # prints da call (#229): regra própria, a limpeza acima não os apaga
+        try:
+            from .retention import purge_old_prints
+
+            purge_old_prints(self.cfg)
+        except Exception:
+            log.exception("retenção de prints falhou")
 
     def _purge_loop(self) -> None:
         """Roda a retenção (em thread, fora da UI) e reagenda a cada 6 h."""

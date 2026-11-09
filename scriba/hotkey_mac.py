@@ -124,17 +124,24 @@ def _ensure_handler() -> bool:
 def register(spec: str, callback: Callable[[], None]) -> int | None:
     """Registra o atalho; devolve o id p/ unregister(), ou None (spec inválido,
     combinação já em uso por outro app, handler indisponível)."""
-    global _next_id
     parsed = parse_mac(spec)
-    if parsed is None or not _ensure_handler():
+    if parsed is None:
         return None
-    mods, key = parsed
+    return register_code(parsed[0], parsed[1], callback, label=spec)
+
+
+def register_code(mods: int, key: int, callback: Callable[[], None], label: str = "") -> int | None:
+    """Como register(), com modificadores Carbon e keycode já resolvidos. Aceita
+    tecla sem modificador (a tecla de print, #229: F13, F9...)."""
+    global _next_id
+    if not _ensure_handler():
+        return None
     hotkey_id = _next_id
     ref = ctypes.c_void_p()
     st = _carbon.RegisterEventHotKey(key, mods, _EventHotKeyID(_SIGNATURE, hotkey_id),
                                      _carbon.GetEventDispatcherTarget(), 0, ctypes.byref(ref))
     if st != 0:
-        log.warning("RegisterEventHotKey falhou para '%s' (OSStatus=%s — combinação em uso?)", spec, st)
+        log.warning("RegisterEventHotKey falhou para '%s' (OSStatus=%s - combinação em uso?)", label, st)
         return None
     _next_id += 1
     _hotkeys[hotkey_id] = (ref, callback)

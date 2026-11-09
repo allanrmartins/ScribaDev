@@ -427,7 +427,9 @@ class SettingsWindow(QWidget):
         self._check(au, "Manter o áudio após transcrever", "audio", "keep_audio")
         self._choice(au, "Formato do áudio", "audio", "archive_format", _ARCHIVE)
         self._int(au, "Apagar gravação após (dias)", "audio", "retention_days", 0, 3650,
-                  hint="0 = nunca; só a pasta da gravação, a nota .md não é tocada")
+                  hint="0 = nunca; só a pasta da gravação, a nota .md e os prints da call não são tocados")
+        self._int(au, "Apagar prints da call após (dias)", "audio", "prints_retention_days", 0, 3650,
+                  hint="0 = nunca: os prints ficam na pasta da gravação para consulta")
         mic = QWidget(); mr = QHBoxLayout(mic); mr.setContentsMargins(0, 0, 0, 0)
         self._mic_btn = widgets.ModernButton("Testar microfone", self._toggle_mic_test)
         mr.addWidget(self._mic_btn)
@@ -463,9 +465,11 @@ class SettingsWindow(QWidget):
                    tooltip="Atalho global de gravar/parar. Vazio desativa.")
         self._text(ui, "Atalho nova call (dividir)", "ui", "hotkey_split", placeholder="ex.: ctrl+alt+n",
                    tooltip="Divide a call atual em duas. Vazio desativa.")
-        self._check(ui, "Guardar prints do sistema na call", "ui", "print_key",
-                    hint="Print Screen no Windows; Cmd+Shift+3/4/5 no Mac. O print segue indo para "
-                         "onde já ia e uma cópia vira momento-chave no resumo")
+        key = widgets.KeyCaptureField(default="printscreen")
+        self._fields.append((key, "ui", "print_key", "text", None))
+        self._row(ui, "Tecla de print na call", key,
+                  "Na gravação, tira um print que vira momento-chave do resumo (como a câmera "
+                  "da pílula), sem perder a função normal da tecla. No Mac, Cmd+Shift+3/4/5 também contam.")
         self._int(ui, "Pendências ativas: últimos (dias)", "ui", "pending_window_days", 0, 3650,
                   hint="0 = sem recorte (conta todas); idade conta pela data da reunião")
 

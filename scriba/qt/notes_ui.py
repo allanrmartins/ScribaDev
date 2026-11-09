@@ -146,7 +146,8 @@ def confirm_delete(parent, nome: str, n: int) -> tuple[bool, bool]:
     box.setWindowTitle("Excluir nota" + ("s" if n > 1 else ""))
     box.setIcon(QMessageBox.Warning)
     box.setText(text)
-    box.setInformativeText("A nota sai da lista e do índice de busca. Esta ação não pode ser desfeita.")
+    box.setInformativeText("A nota sai da lista e do índice de busca. Esta ação não pode ser desfeita.\n"
+                           "Prints da call ficam guardados (têm limpeza própria nas Configurações).")
     also = widgets.AnimatedCheckBox("Excluir também o áudio/gravação (sem volta)")
     box.setCheckBox(also)
     box.setStandardButtons(QMessageBox.Cancel | QMessageBox.Yes)
@@ -156,7 +157,7 @@ def confirm_delete(parent, nome: str, n: int) -> tuple[bool, bool]:
 
 def delete_meeting(note_path: Path | None, folder: Path, also_audio: bool) -> None:
     """Exclui UMA reunião: apaga a nota exportada e, com `also_audio`, a pasta da
-    gravação inteira (senão fica o tombstone #16, que preserva o áudio como backup
+    gravação inteira menos os prints da call, que só saem pela limpeza deles (senão fica o tombstone #16, que preserva o áudio como backup
     e impede o reindex de ressuscitar a nota). O índice é atualizado nos dois
     caminhos. Erros de I/O só logam - a UI segue e o reindex reconcilia."""
     from .. import meetings_index
@@ -166,18 +167,14 @@ def delete_meeting(note_path: Path | None, folder: Path, also_audio: bool) -> No
             note_path.unlink(missing_ok=True)
         except OSError as e:
             log.warning("exclusão: %s: %s", note_path.name, e)
-        # cópia dos prints ao lado da nota exportada (#229): sai junto com ela
-        import shutil
-
-        from .. import prints
-
-        shutil.rmtree(note_path.parent / prints.export_dir_name(note_path), ignore_errors=True)
+        # a cópia dos prints ao lado da nota (#229) fica: prints só saem pela
+        # limpeza própria deles (Configurações > Apagar prints após)
     if also_audio and folder.is_dir() and not util.is_locked(folder):
-        import shutil
+        from ..retention import remove_keeping_prints
 
         meetings_index.remove_meeting(folder)
         try:
-            shutil.rmtree(folder)
+            remove_keeping_prints(folder)   # prints da call ficam (#229)
         except OSError as e:
             log.warning("exclusão gravação: %s: %s", folder.name, e)
     else:

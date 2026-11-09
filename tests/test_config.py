@@ -111,15 +111,21 @@ class UiConfigTests(unittest.TestCase):
         util.LOGS_DIR = d / "logs"
         util.CONFIG_PATH = d / "config.toml"
 
-    def test_print_key_ligado_por_padrao_e_persiste(self):
-        """#229: o checkbox das Configurações precisa sobreviver ao save (o config.toml
-        é escrito por modelo; chave fora dele some ao salvar)."""
+    def test_tecla_de_print_e_limpeza_dos_prints_persistem(self):
+        """#229: os campos precisam sobreviver ao save (o config.toml é escrito por
+        modelo; chave fora dele some ao salvar)."""
         import dataclasses
 
-        self.assertTrue(config.load().ui.print_key)
         cfg = config.load()
-        config.save(dataclasses.replace(cfg, ui=dataclasses.replace(cfg.ui, print_key=False)))
-        self.assertFalse(config.load().ui.print_key)
+        self.assertEqual(cfg.ui.print_key, "printscreen")
+        self.assertEqual(cfg.audio.prints_retention_days, 0)  # padrão: prints ficam
+        config.save(dataclasses.replace(
+            cfg, ui=dataclasses.replace(cfg.ui, print_key="ctrl+shift+p"),
+            audio=dataclasses.replace(cfg.audio, prints_retention_days=90)))
+        cfg = config.load()
+        self.assertEqual((cfg.ui.print_key, cfg.audio.prints_retention_days), ("ctrl+shift+p", 90))
+        config.save(dataclasses.replace(cfg, ui=dataclasses.replace(cfg.ui, print_key="")))
+        self.assertEqual(config.load().ui.print_key, "")  # desligada
 
     def test_default_pending_window_days(self):
         self.assertEqual(config.load().ui.pending_window_days, 30)

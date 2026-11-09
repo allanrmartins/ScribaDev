@@ -101,6 +101,9 @@ archive_format = "opus"  # opus | flac | wav
 # Apaga a gravação já transcrita (status done) após N dias. 0 = nunca apagar.
 # Remove só a pasta em recordings_dir; a nota .md exportada não é tocada.
 retention_days = 30
+# Prints da call (pasta prints/ da gravação) têm regra própria: a limpeza acima
+# nunca os apaga. Apaga os prints com mais de N dias. 0 = nunca (ficam para consulta).
+prints_retention_days = 0
 
 [whisper]
 model = "large-v3-turbo"
@@ -167,7 +170,7 @@ timeout_seconds = 600
 overlay = true           # pílula flutuante durante a gravação
 hotkey = ""              # atalho global gravar/parar (ex.: "ctrl+alt+r"); vazio desativa
 hotkey_split = ""        # atalho global "nova call" (divide a gravação, #38); vazio desativa
-print_key = true         # prints do sistema durante a call viram momentos-chave do resumo (#229)
+print_key = "printscreen"  # tecla que tira o print durante a call, vira momento-chave do resumo (#229); vazio desliga
 
 [output]
 # Pasta para onde o notas.md final é copiado. Vazio = {_H["dir_notas"]}
@@ -221,6 +224,9 @@ class Audio:
     # Apaga a pasta da gravação já transcrita (status=done) após N dias. 0 = nunca.
     # A nota .md exportada (em output.export_dir) nunca é tocada.
     retention_days: int = 30
+    # Prints da call (#229) têm regra própria: a limpeza acima NUNCA os apaga.
+    # Apaga os prints com mais de N dias. 0 = nunca (ficam para consulta).
+    prints_retention_days: int = 0
 
 
 @dataclass(frozen=True)
@@ -297,7 +303,7 @@ class Ui:
     overlay: bool = True
     hotkey: str = ""
     hotkey_split: str = ""  # atalho global "nova call" / dividir a gravação (#38)
-    print_key: bool = True  # guardar na reunião os prints feitos pelo sistema durante a call (#229)
+    print_key: str = "printscreen"  # tecla que tira o print durante a call (#229); vazio desliga
     pending_window_days: int = 30  # recorte da capa: só pendências dos últimos N dias contam (0 = tudo)
 
 
@@ -440,6 +446,7 @@ loopback_device = {_s(a.loopback_device)}     # vazio = {_H["padrao_saida"]} (ve
 keep_audio = {_b(a.keep_audio)}        # manter o áudio depois de transcrever
 archive_format = {_s(a.archive_format)}  # opus (~20 MB/h) | flac (~110 MB/h) | wav (cru ~1,3 GB/h)
 retention_days = {_n(a.retention_days)}  # apaga gravação transcrita após N dias (0 = nunca)
+prints_retention_days = {_n(a.prints_retention_days)}  # apaga os prints da call após N dias (0 = nunca; a limpeza da gravação não os toca)
 
 [whisper]
 model = {_s(w.model)}
@@ -493,7 +500,7 @@ timeout_seconds = {_n(s.timeout_seconds)}
 overlay = {_b(u.overlay)}           # pílula flutuante durante a gravação
 hotkey = {_s(u.hotkey)}              # atalho global gravar/parar (ex.: "ctrl+alt+r"); vazio desativa
 hotkey_split = {_s(u.hotkey_split)}        # atalho global "nova call" (divide a gravação, #38); vazio desativa
-print_key = {_b(u.print_key)}         # prints do sistema durante a call viram momentos-chave do resumo (#229)
+print_key = {_s(u.print_key)}  # tecla que tira o print durante a call, vira momento-chave do resumo (#229); vazio desliga
 pending_window_days = {_n(u.pending_window_days)}       # capa: só pendências de reuniões dos últimos N dias contam (0 = sem recorte)
 
 [output]

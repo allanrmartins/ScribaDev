@@ -13,8 +13,8 @@ from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
-from scriba import notes, prints, printwatch, recorder, split
-from scriba.printkey_win import VK_SNAPSHOT, is_print_down
+from scriba import notes, printkey, prints, printwatch, recorder, retention, split
+from scriba.printkey_win import VK_SNAPSHOT, _Edge
 
 _SHOT_A = {"at": "2026-11-09T10:02:00", "offset_seconds": 120.0,
            "file": "prints/print-10h02m00s.png", "source": "pilula"}
@@ -334,20 +334,175 @@ class PastaDoSistemaTests(unittest.TestCase):
 
 
 class TeclaWindowsTests(unittest.TestCase):
-    def test_reconhece_print_screen_descendo(self):
-        self.assertTrue(is_print_down(0x0100, VK_SNAPSHOT))
-        self.assertTrue(is_print_down(0x0104, VK_SNAPSHOT))  # Alt+Print Screen
-        self.assertFalse(is_print_down(0x0101, VK_SNAPSHOT))  # soltando
-        self.assertFalse(is_print_down(0x0100, 0x41))
-
-    def test_segurar_a_tecla_dispara_uma_vez(self):
-        from scriba.printkey_win import _Edge
-
+    def test_print_screen_dispara_uma_vez_por_toque(self):
         e = _Edge()
         disparos = [e.feed(0x0100, VK_SNAPSHOT) for _ in range(5)]  # auto-repetição
         self.assertEqual(disparos, [True, False, False, False, False])
-        e.feed(0x0101, VK_SNAPSHOT)  # soltou
+        self.assertFalse(e.feed(0x0101, VK_SNAPSHOT))  # soltou
         self.assertTrue(e.feed(0x0100, VK_SNAPSHOT))
+        self.assertFalse(e.feed(0x0100, 0x41))  # outra tecla
+
+    def test_padrao_vale_com_alt_e_combinacao_exige_os_modificadores(self):
+        e = _Edge()
+        self.assertTrue(e.feed(0x0104, VK_SNAPSHOT, frozenset({"alt"})))  # Alt+Print Screen
+        mods, vk = printkey.win_binding("ctrl+shift+p")
+        e = _Edge(vk, mods)
+        self.assertFalse(e.feed(0x0100, vk, frozenset({"ctrl"})))
+        e.feed(0x0101, vk)
+        self.assertTrue(e.feed(0x0100, vk, frozenset({"ctrl", "shift"})))
+
+
+class TeclaConfiguravelTests(unittest.TestCase):
+    def test_normaliza_e_rotula(self):
+        self.assertEqual(printkey.normalize("Shift + Ctrl + P"), "ctrl+shift+p")
+        self.assertEqual(printkey.label("printscreen"), "Print Screen")
+        self.assertEqual(printkey.label("ctrl+shift+p"), "Ctrl+Shift+P")
+        self.assertEqual(printkey.label("f9"), "F9")
+        self.assertEqual(printkey.label(""), "Desligada")
+
+    def test_letra_sozinha_nao_vale(self):
+        for spec in ("p", "shift+p", "5", "space", "ctrl+p+q", "hyper+f1"):
+            self.assertEqual(printkey.normalize(spec), "", spec)
+        self.assertEqual(printkey.normalize("alt+5"), "alt+5")
+        self.assertEqual(printkey.normalize("f13"), "f13")
+
+    def test_codigos_por_sistema(self):
+        self.assertEqual(printkey.win_binding("printscreen"), (frozenset(), 0x2C))
+        self.assertEqual(printkey.win_binding("cmd+f9"), (frozenset({"win"}), 0x78))
+        self.assertEqual(printkey.mac_binding("printscreen"), (0, 0x69))  # F13 no Mac
+        self.assertEqual(printkey.mac_binding("cmd+shift+p"), (0x0300, 0x23))
+        self.assertIsNone(printkey.mac_binding("f24"))  # não existe no Mac
+
+    def test_do_evento_do_qt(self):
+        from PySide6.QtCore import Qt
+
+        self.assertEqual(printkey.from_qt(Qt.Key_Print, False, False, False, False, mac=False), "printscreen")
+        self.assertEqual(printkey.from_qt(Qt.Key_P, True, False, True, False, mac=False), "ctrl+shift+p")
+        # no Mac o Qt chama a Cmd de Control
+        self.assertEqual(printkey.from_qt(Qt.Key_P, True, False, True, False, mac=True), "shift+cmd+p")
+        self.assertEqual(printkey.from_qt(Qt.Key_F9, False, False, False, False, mac=True), "f9")
+        self.assertEqual(printkey.from_qt(Qt.Key_P, False, False, False, False, mac=False), "")
+
+
+class LimpezaTests(unittest.TestCase):
+    """A limpeza das gravações nunca leva os prints; eles têm regra própria."""
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp(prefix="scriba_ret_"))
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.rec_dir = self.d / "gravacoes"
+        self.export = self.d / "notas"
+        self.export.mkdir()
+        self.folder = self.rec_dir / "2026" / "01" / "05" / "10-00"
+        (self.folder / "prints").mkdir(parents=True)
+        (self.folder / "mic.opus").write_bytes(b"a")
+        (self.folder / "notas.md").write_text("n", encoding="utf-8")
+        (self.folder / "prints" / "print-10h02m00s.png").write_bytes(b"p")
+        (self.folder / "meta.json").write_text(json.dumps(
+            {"status": "done", "started_at": "2026-01-05T10:00:00", "ended_at": "2026-01-05T11:00:00"}),
+            encoding="utf-8")
+
+    def _cfg(self, rec_days=30, print_days=0):
+        rec_dir, export = self.rec_dir, self.export
+        return types.SimpleNamespace(
+            audio=types.SimpleNamespace(retention_days=rec_days, prints_retention_days=print_days),
+            output=types.SimpleNamespace(resolved_recordings_dir=lambda: rec_dir,
+                                         resolved_export_dir=lambda: export))
+
+    def test_limpeza_da_gravacao_mantem_so_os_prints(self):
+        with mock.patch("scriba.meetings_index.remove_meeting"):
+            removed = retention.purge_old_recordings(self._cfg())
+        self.assertEqual(len(removed), 1)
+        self.assertEqual(sorted(p.name for p in self.folder.iterdir()), ["prints"])
+        self.assertTrue((self.folder / "prints" / "print-10h02m00s.png").is_file())
+        # sem meta.json a pasta não é mais reunião: a limpeza não volta nela
+        self.assertEqual(retention.find_purgeable(self._cfg()), [])
+
+    def test_gravacao_sem_prints_sai_inteira(self):
+        shutil.rmtree(self.folder / "prints")
+        with mock.patch("scriba.meetings_index.remove_meeting"):
+            retention.purge_old_recordings(self._cfg())
+        self.assertFalse(self.folder.exists())
+        self.assertFalse((self.rec_dir / "2026").exists())  # dia/mês/ano vazios podados
+
+    def test_prints_com_zero_dias_nunca_saem(self):
+        self.assertEqual(retention.purge_old_prints(self._cfg(print_days=0)), [])
+        self.assertTrue((self.folder / "prints" / "print-10h02m00s.png").exists())
+
+    def test_prints_velhos_saem_pela_regra_deles(self):
+        import os
+        import time
+
+        velho = self.folder / "prints" / "print-10h02m00s.png"
+        novo = self.folder / "prints" / "print-10h05m00s.png"
+        novo.write_bytes(b"n")
+        copia = self.export / "2026-01-05_10-00_prints"
+        copia.mkdir()
+        (copia / velho.name).write_bytes(b"p")
+        agora = time.time()
+        for f in (velho, copia / velho.name):
+            os.utime(f, (agora - 40 * 86400, agora - 40 * 86400))
+        removidos = retention.purge_old_prints(self._cfg(print_days=30), now=agora)
+        self.assertEqual(sorted(p.parent.name for p in removidos), ["2026-01-05_10-00_prints", "prints"])
+        self.assertTrue(novo.exists())
+        self.assertFalse(copia.exists())  # cópia vazia sai junto
+
+    def test_pasta_que_so_tinha_prints_some_quando_eles_vencem(self):
+        import os
+        import time
+
+        with mock.patch("scriba.meetings_index.remove_meeting"):
+            retention.purge_old_recordings(self._cfg())
+        f = self.folder / "prints" / "print-10h02m00s.png"
+        os.utime(f, (time.time() - 99 * 86400,) * 2)
+        retention.purge_old_prints(self._cfg(print_days=30))
+        self.assertFalse((self.rec_dir / "2026").exists())
+
+    def test_excluir_a_reuniao_pela_tela_mantem_os_prints(self):
+        from scriba.qt.notes_ui import delete_meeting
+
+        note = self.export / "2026-01-05_10-00_reuniao.md"
+        note.write_text("n", encoding="utf-8")
+        copia = self.export / "2026-01-05_10-00_prints"
+        copia.mkdir()
+        (copia / "print-10h02m00s.png").write_bytes(b"p")
+        with mock.patch("scriba.meetings_index.remove_meeting"):
+            delete_meeting(note, self.folder, also_audio=True)
+        self.assertFalse(note.exists())
+        self.assertTrue((copia / "print-10h02m00s.png").exists())
+        self.assertEqual(sorted(p.name for p in self.folder.iterdir()), ["prints"])
+
+
+class CampoDaTeclaTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_trocar_captura_a_proxima_tecla(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+
+        from scriba.qt.widgets import KeyCaptureField
+
+        f = KeyCaptureField()
+        self.assertEqual((f.text(), f._display.text()), ("printscreen", "Print Screen"))
+        self.assertFalse(f._reset.isEnabled())  # já está no padrão
+        f.start_capture()
+        QTest.keyClick(f, Qt.Key_P)  # letra sozinha: recusada, segue capturando
+        self.assertTrue(f._capturing)
+        QTest.keyClick(f, Qt.Key_F9)
+        self.assertEqual((f.text(), f._display.text(), f._capturing), ("f9", "F9", False))
+        self.assertTrue(f._reset.isEnabled())
+        f.start_capture()
+        QTest.keyClick(f, Qt.Key_Escape)  # cancela: mantém a anterior
+        self.assertEqual(f.text(), "f9")
+        f.start_capture()
+        QTest.keyClick(f, Qt.Key_Backspace)  # desliga
+        self.assertEqual((f.text(), f._display.text()), ("", "Desligada"))
+        f._reset.click()
+        self.assertEqual(f.text(), "printscreen")
 
 
 if __name__ == "__main__":

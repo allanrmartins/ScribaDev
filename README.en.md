@@ -168,7 +168,9 @@ Join a Teams call (or a Meet in the browser) and the pill shows up at the top of
 - **×** — discard this recording (calls that shouldn't become notes)
 - **⏺ Record** — idle mode: shown when auto-record is off, or after you stop/discard mid-call; one click starts a (new) recording
 
-While recording, screenshots taken with the system shortcut (Print Screen on Windows; Cmd+Shift+3/4/5 on Mac) become key moments too: the screenshot still goes where it always did and a copy is kept with the meeting.
+While recording, the **Print Screen** key also takes a screenshot that becomes a key moment, and the key keeps doing what it normally does (you can pick another key in Settings, with the **Trocar…** button). On Mac, Cmd+Shift+3/4/5 screenshots count too: the original stays where the system saved it and a copy goes to the meeting.
+
+Screenshots stay in the recording folder: the old-recordings cleanup deletes the audio but **never the screenshots**. They have their own cleanup ("Apagar prints da call após"), off by default.
 
 The pill only disappears when the call ends. With `auto_record` off (Settings), nothing is recorded until you click ⏺. When you leave the call: a "Transcribing…" toast, then "Notes ready" with a button that opens the `.md`.
 
@@ -292,7 +294,8 @@ auto_record = true       # record on call detection; when off, the pill waits fo
 loopback_device = ""     # empty = default output; otherwise part of the name (scribadev devices)
 keep_audio = true        # keep the meeting audio after transcribing
 archive_format = "opus"  # opus (~20 MB/h) | flac (lossless ~110 MB/h) | wav (raw ~1.3 GB/h)
-retention_days = 30      # delete already-transcribed recordings after N days (0 = never)
+retention_days = 30      # delete already-transcribed recordings after N days (0 = never); call screenshots are kept
+prints_retention_days = 0  # delete call screenshots after N days (0 = never)
 
 [whisper]
 model = "large-v3-turbo" # any faster-whisper model
@@ -312,7 +315,7 @@ model = "claude-sonnet-4-6"  # or claude-opus-4-8 (dropdown in the Summary tab)
 [ui]
 overlay = true           # floating pill
 hotkey = "ctrl+alt+r"    # global record/stop hotkey; empty disables
-print_key = true         # system screenshots during the call become key moments
+print_key = "printscreen"  # key that takes a screenshot during the call (key moment); empty disables
 
 [output]
 export_dir = ""          # empty = %LOCALAPPDATA%\ScribaDev\Notas
