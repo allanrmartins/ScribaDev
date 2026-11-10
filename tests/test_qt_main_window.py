@@ -3,6 +3,7 @@
 import importlib.util
 import os
 import sys
+import threading
 import unittest
 from pathlib import Path
 
@@ -32,7 +33,14 @@ class _FakeApp:
     def show_log(self): pass
     def start_recording(self, *a): pass
     def stop_recording(self, **k): pass
-    def ui(self, fn): fn()
+    def ui(self, fn):
+        # Como o app real: render SÓ na thread da GUI. A capa coleta em threads (home,
+        # status, live); com cfg falso, a coleta chega aqui de fora da GUI, e mexer em
+        # widget de lá derrubava o processo de vez em quando ("QObject::setParent ...
+        # different thread" e Abort trap no CI da v1.4.28). Fora da GUI, descarta:
+        # os testes chamam _collect_* direto, na thread principal, quando querem o render.
+        if threading.current_thread() is threading.main_thread():
+            fn()
 
 
 @unittest.skipUnless(_HAS_PYSIDE, "PySide6 não instalado (extra 'qt')")
