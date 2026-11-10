@@ -43,8 +43,11 @@ class MakeSourceAppTests(unittest.TestCase):
             subprocess.run(["codesign", "--verify", str(app)], check=True)
             exe = app / "Contents" / "MacOS" / "ScribaDev"
             # nativo (Mach-O), não script: é ELE que hospeda o Python - a Acessibilidade
-            # é checada contra este executável, e não contra o Python.app
-            self.assertEqual(exe.read_bytes()[:4], bytes.fromhex("cffaedfe"))
+            # é checada contra este executável, e não contra o Python.app. Com o Python
+            # universal2 (o do CI) o python3-config pede as duas arquiteturas e sai um
+            # binário universal; com o do Homebrew, só arm64.
+            self.assertIn(exe.read_bytes()[:4], (bytes.fromhex("cffaedfe"),   # Mach-O 64
+                                                 bytes.fromhex("cafebabe")))  # universal
             env = {**os.environ, "PYTHONPATH": str(REPO)}
             out = subprocess.run([str(exe), "--launcher-check"], check=True, capture_output=True,
                                  text=True, env=env, timeout=60).stdout

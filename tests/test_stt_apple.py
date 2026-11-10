@@ -213,8 +213,8 @@ class HelperRealTests(unittest.TestCase):
             ok, detalhe = stt_apple.check("pt")
         finally:
             util.APP_DIR = orig
-        if not ok and "Command Line Tools" in detalhe:
-            self.skipTest(detalhe)
+        if not ok and ("Command Line Tools" in detalhe or "indisponível neste Mac" in detalhe):
+            self.skipTest(detalhe)  # Mac sem compilador, ou VM sem o motor (o runner do CI)
         self.assertTrue(ok, detalhe)
         self.assertIn("pt-BR", detalhe)
 
