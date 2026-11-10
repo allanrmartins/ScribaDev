@@ -68,14 +68,14 @@ def _add_minutes(hhmm: str, minutes: int) -> str:
 def suggestion_from_meta(meta: dict, ts_cfg) -> dict | None:
     """Monta o dict de sugestão a partir de um meta.json. PURA: sem IO/banco.
 
-    None quando a reunião não deve virar apontamento: status != 'done', horários
+    None quando a reunião não deve virar apontamento: gravação de teste, status != 'done', horários
     ausentes/ilegíveis, ou duração real menor que min_meeting_minutes. O cliente
     sai cru em client_text (a resolução contra o cadastro é de quem tem banco —
     suggest_for_folder). Call cruzando a meia-noite: fim clampado em 23:59 do dia
     de início + flag na descrição para revisão manual.
     """
-    if (meta or {}).get("status") != "done":
-        return None
+    if (meta or {}).get("status") != "done" or (meta or {}).get("test"):
+        return None  # gravação de teste nunca vira apontamento
     try:
         started = datetime.fromisoformat(meta["started_at"])
         ended = datetime.fromisoformat(meta["ended_at"])

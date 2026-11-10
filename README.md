@@ -215,7 +215,7 @@ Na primeira execução, o **Assistente de perfil** abre sozinho: você descreve 
 | `scribadev reindex` | reconstrói o índice de busca a partir das pastas |
 | `scribadev timesheet list\|add\|export\|import` | apontamento de horas (opcional — ver [Apontamento de horas](#apontamento-de-horas-opcional)) |
 
-Menu da bandeja: **Gravar agora/Parar** (cobre reuniões presenciais ou apps fora da detecção), **Tema** (troca rápida entre os temas), **Abrir pasta de reuniões/notas**, **Processar pendentes** (retoma o que ficou pela metade se o PC desligou no meio) e **Sair**.
+Menu da bandeja: **Gravar agora/Parar** (cobre reuniões presenciais ou apps fora da detecção), **Gravar teste** (para experimentar o app: a gravação passa pelo processamento todo, mas não vira horas, pendência nem resultado de busca, e é apagada 24 h depois), **Tema** (troca rápida entre os temas), **Abrir pasta de reuniões/notas**, **Processar pendentes** (retoma o que ficou pela metade se o PC desligou no meio) e **Sair**.
 
 ### Apontamento de horas (opcional)
 

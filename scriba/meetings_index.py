@@ -151,14 +151,15 @@ def _transcript_text(md: str) -> str:
 
 def _extract(folder: Path) -> dict | None:
     """Lê `meta.json` (+ `notas.md`) de uma pasta e monta o registro a indexar.
-    None se não há `meta.json` (não é pasta de reunião) ou se a nota foi excluída pela
-    UI (#16) mantendo o áudio — o tombstone `.deleted` impede o reindex de ressuscitá-la."""
+    None se não há `meta.json` (não é pasta de reunião), se é uma gravação de teste ou
+    se a nota foi excluída pela UI (#16) mantendo o áudio — o tombstone `.deleted`
+    impede o reindex de ressuscitá-la."""
     folder = Path(folder)
     if (folder / _DELETED_MARKER).exists():
         return None
     meta = _read_json(folder / "meta.json")
-    if not meta:
-        return None
+    if not meta or meta.get("test"):
+        return None  # gravação de teste: fora da busca, da capa e das pendências
     md = ""
     notas = folder / "notas.md"
     if notas.exists():

@@ -215,7 +215,7 @@ On first run, the **profile assistant** opens by itself: describe your role, are
 | `scribadev reindex` | rebuild the search index from the recording folders |
 | `scribadev timesheet list\|add\|export\|import` | timesheet module (optional — see [Timesheet](#timesheet-optional)) |
 
-Tray menu: **Record now/Stop** (covers in-person meetings and apps outside detection), **Theme** (quick switch between themes), **Open meetings/notes folder**, **Process pending** (resumes work interrupted by a shutdown) and **Quit**.
+Tray menu: **Record now/Stop** (covers in-person meetings and apps outside detection), **Record test** (to try the app out: it goes through the whole pipeline but never becomes a timesheet entry, an action item or a search result, and is deleted after 24 h), **Theme** (quick switch between themes), **Open meetings/notes folder**, **Process pending** (resumes work interrupted by a shutdown) and **Quit**.
 
 ### Timesheet (optional)
 

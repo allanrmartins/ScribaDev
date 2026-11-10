@@ -302,7 +302,7 @@ class _LevelProbeWin:
 class Recording:
     """Uma gravação de reunião: mic + loopback numa pasta com meta.json."""
 
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, test: bool = False):
         if sys.platform not in ("win32", "darwin"):
             # protege também o caminho da GUI (start_recording): erro claro em
             # vez de ModuleNotFoundError de pyaudiowpatch/sounddevice
@@ -311,6 +311,9 @@ class Recording:
         self.cfg = cfg.audio
         self.base_dir = cfg.output.resolved_recordings_dir()  # cria se não existir
         self.started_at = datetime.now()
+        # gravação de teste: não vira horas, pendência, busca nem vocabulário, e some
+        # 24 h depois (retention.purge_test_meetings). Vai no meta desde o 1º write.
+        self.test = bool(test)
         self.folder = self._new_folder()
         if sys.platform == "win32":
             import pyaudiowpatch as pyaudio
@@ -471,6 +474,8 @@ class Recording:
                 "loopback": self._stream_meta(self.loopback),
             },
         }
+        if getattr(self, "test", False):
+            meta["test"] = True
         if getattr(self, "meeting_title", ""):
             meta["meeting_title"] = self.meeting_title
         if getattr(self, "_title_marks", None):

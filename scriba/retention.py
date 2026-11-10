@@ -9,6 +9,9 @@ Prints da call (#229) têm regra própria: a limpeza da gravação apaga tudo da
 pasta MENOS `prints/`, que fica para consulta. Eles só saem pela
 `purge_old_prints`, com `[audio].prints_retention_days` (0 = nunca, o padrão).
 
+Gravações de teste (bandeja > "Gravar teste") somem inteiras 24 h depois, com a
+nota exportada e os prints: `purge_test_meetings`.
+
 Duas camadas fecham a janela TOCTOU entre find_purgeable e o rmtree:
   1. Re-leitura (guarda complementar): reler o meta.json imediatamente antes do
      rmtree e pular se o status mudou para em-andamento. Cobre o caso comum.
@@ -229,4 +232,59 @@ def purge_old_prints(cfg, dry_run: bool = False, now: float | None = None) -> li
             _prune_empty_dirs(root, pdir.parent)
     if removed and not dry_run:
         log.info("retenção de prints: %d print(s) > %d dias removido(s)", len(removed), days)
+    return removed
+
+
+# --------------------------------------------------------- gravações de teste --
+
+TEST_TTL_HOURS = 24
+# terminais: a gravação já virou nota (ou falhou de vez); as outras ainda andam
+_TEST_FINAL_STATUSES = ("done", "failed", "no_audio")
+
+
+def purge_test_meetings(cfg, now: datetime | None = None) -> list[Path]:
+    """Apaga as gravações de teste (`"test": true` no meta) com mais de 24 h: a pasta
+    da gravação inteira (prints incluídos), a nota exportada, o .bak dela e a cópia
+    dos prints ao lado, e a entrada no índice. Pula as que ainda processam (.lock ou
+    status não terminal). Devolve as pastas removidas. Vale mesmo com a retenção
+    normal desligada: teste nunca é trabalho a guardar."""
+    from . import meetings_index, prints
+
+    now = now or datetime.now()
+    rec_dir = cfg.output.resolved_recordings_dir()
+    removed: list[Path] = []
+    for meta_path in sorted(rec_dir.rglob("meta.json")):
+        folder = meta_path.parent
+        if folder == rec_dir:
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not meta.get("test") or meta.get("status") not in _TEST_FINAL_STATUSES:
+            continue
+        stamp = meta.get("ended_at") or meta.get("started_at") or ""
+        try:
+            age_h = (now - datetime.fromisoformat(stamp)).total_seconds() / 3600.0
+        except ValueError:
+            continue
+        if age_h < TEST_TTL_HOURS or util.is_locked(folder):
+            continue
+        note = Path(meta["export_path"]) if meta.get("export_path") else None
+        if note is not None:
+            for f in (note, note.with_suffix(".md.bak")):
+                try:
+                    f.unlink(missing_ok=True)
+                except OSError as e:
+                    log.warning("teste: não apaguei %s: %s", f.name, e)
+            shutil.rmtree(note.parent / prints.export_dir_name(note), ignore_errors=True)
+        meetings_index.remove_meeting(folder)
+        try:
+            shutil.rmtree(folder)
+        except OSError:
+            log.exception("teste: falha ao remover %s", folder)
+            continue
+        _prune_empty_dirs(rec_dir, folder.parent)
+        log.info("teste: gravação removida após %d h: %s", TEST_TTL_HOURS, folder.name)
+        removed.append(folder)
     return removed

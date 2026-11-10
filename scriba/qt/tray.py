@@ -94,6 +94,9 @@ class Tray:
 
         # ações só-em-gravação (visibilidade alternada em _sync)
         self._act_record = m.addAction("Gravar agora", lambda: self._bg(self.app.start_recording, "manual"))
+        # teste: não vira horas, pendência nem busca, e some em 24 h
+        self._act_record_test = m.addAction(
+            "Gravar teste", lambda: self._bg(self.app.start_recording, "manual", True, True))
         self._act_split = m.addAction("Nova call (dividir gravação)", lambda: self._bg(self.app._split_now))
         self._act_stop = m.addAction("Parar gravação", lambda: self._bg(self.app.stop_recording, False, True))
         self._act_discard = m.addAction("Descartar gravação", self._discard)
@@ -161,6 +164,7 @@ class Tray:
         self._status.setText(self.app.status_text())
         self._act_timesheet.setVisible(self.app.cfg.timesheet.enabled)
         self._act_record.setVisible(not rec)
+        self._act_record_test.setVisible(not rec)
         for act in (self._act_split, self._act_stop, self._act_discard, self._act_speakers):
             act.setVisible(rec)
         if rec:

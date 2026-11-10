@@ -263,7 +263,10 @@ class ScribaApp:
 
     # ----------------------------------------------------------- gravação --
 
-    def start_recording(self, source: str = "auto", probe: bool = True) -> None:
+    def start_recording(self, source: str = "auto", probe: bool = True, test: bool = False) -> None:
+        """Começa a gravar. `test`: gravação de teste (bandeja > "Gravar teste"), que
+        passa pelo processamento inteiro mas não entra no trabalho do usuário (horas,
+        pendências, busca, vocabulário) e é apagada 24 h depois."""
         # pré-checagem em subprocesso: se o PortAudio estiver num estado que
         # aborta (assert de troca de dispositivo), morre a sonda — não o app.
         # probe=False no split de calls consecutivas (#34): os dispositivos
@@ -285,7 +288,7 @@ class ScribaApp:
             self._pending_stop = None
         rec = None
         try:
-            rec = Recording(self.cfg)
+            rec = Recording(self.cfg, test=test)
         except Exception as e:
             log.exception("falha ao iniciar gravação")
             self._toast("ScribaDev: erro ao iniciar gravação",
@@ -304,10 +307,14 @@ class ScribaApp:
             log.info("stop chegou durante o início da gravação — encerrando já")
             self.stop_recording(**pending)
             return
-        log.info("gravação iniciada (%s): %s", source, rec.folder.name)
+        log.info("gravação iniciada (%s%s): %s", source, ", teste" if test else "", rec.folder.name)
         self._start_live_transcription(rec)
         self._start_print_watch(rec)
-        self._toast("Gravando reunião", "O áudio está sendo capturado localmente.")
+        if test:
+            self._toast("Gravando teste",
+                        "Não vira horas, pendência nem busca, e é apagada em 24 h.")
+        else:
+            self._toast("Gravando reunião", "O áudio está sendo capturado localmente.")
         if self.tray:
             self.tray.set_recording(True, self.status_text())
             self.ui(self._tick_tray)  # #14: tooltip da bandeja com o tempo ao vivo
@@ -888,8 +895,10 @@ class ScribaApp:
         if not self.is_recording():
             self.start_recording("manual")  # nada gravando ainda: só começa
             return
+        with self.rec_lock:
+            test = bool(getattr(self.rec, "test", False))  # teste dividido segue teste
         self.stop_recording(keep=True)                # parte 1 -> fila (intenção explícita)
-        self.start_recording("manual", probe=False)   # parte 2 já em andamento
+        self.start_recording("manual", probe=False, test=test)   # parte 2 já em andamento
         self._toast("Gravação dividida", "Nova gravação em andamento.")
 
     # ------------------------------------------------------- prints (#229) --
@@ -1573,8 +1582,9 @@ class ScribaApp:
             self._toast("Processando pendentes", f"{count} reunião(ões) na fila")
 
     def purge_old(self) -> None:
-        """Apaga gravações já transcritas além do prazo ([audio].retention_days) e os
-        prints da call além do prazo deles ([audio].prints_retention_days)."""
+        """Apaga gravações já transcritas além do prazo ([audio].retention_days), os
+        prints da call além do prazo deles ([audio].prints_retention_days) e as
+        gravações de teste com mais de 24 h."""
         try:
             from .retention import purge_old_recordings
 
@@ -1593,6 +1603,13 @@ class ScribaApp:
             purge_old_prints(self.cfg)
         except Exception:
             log.exception("retenção de prints falhou")
+        # gravações de teste: somem 24 h depois, com nota e prints
+        try:
+            from .retention import purge_test_meetings
+
+            purge_test_meetings(self.cfg)
+        except Exception:
+            log.exception("limpeza das gravações de teste falhou")
 
     def _purge_loop(self) -> None:
         """Roda a retenção (em thread, fora da UI) e reagenda a cada 6 h."""

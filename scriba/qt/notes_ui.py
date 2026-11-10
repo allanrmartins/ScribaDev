@@ -1260,6 +1260,8 @@ class NotesWindow(QWidget):
                 md = f.read_text(encoding="utf-8")
             except OSError:
                 continue
+            if notes.is_test_note(md):
+                continue  # gravação de teste não gera pendência
             items = notes.parse_action_items(md)
             if not items:
                 continue

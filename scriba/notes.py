@@ -545,8 +545,8 @@ def _learn_terms(folder: Path, meta: dict, terms: list[str]) -> None:
     de virar sugestão vão p/ o meta, e o app avisa o usuário ao fim do processamento."""
     from . import vocab_learn
 
-    if not terms:
-        return
+    if not terms or meta.get("test"):
+        return  # gravação de teste não ensina vocabulário
     novos = vocab_learn.record(meta.get("started_at") or folder.name, terms, load().whisper.hotwords)
     if novos:
         print(f"vocabulário: {len(novos)} termo(s) novo(s) para revisar: {', '.join(novos)}")
@@ -651,6 +651,17 @@ def scan_meetings_by_status(recordings_dir, statuses) -> list[dict]:
     return out
 
 
+# gravação de teste (bandeja > "Gravar teste"): etiqueta no título da nota
+TEST_TITLE_PREFIX = "TESTE - "
+_FRONT_TEST = re.compile(r"^teste:\s*sim\s*$", re.M)
+
+
+def is_test_note(md: str) -> bool:
+    """A nota exportada é de uma gravação de teste? (frontmatter `teste: sim`)"""
+    head = md[:600]
+    return head.startswith("---") and bool(_FRONT_TEST.search(head))
+
+
 def build_notes(folder: Path) -> Path | None:
     """Monta o notas.md (frontmatter + resumo + transcrição) e exporta a cópia final."""
     folder = Path(folder)
@@ -700,6 +711,9 @@ def build_notes(folder: Path) -> Path | None:
         title = meta.get("title") or f"Reunião {when[-5:] if when else ''}".strip()
     if not client:
         client = meta.get("client") or ""  # preserva cliente editado à mão
+    test = bool(meta.get("test"))
+    if test and not title.startswith(TEST_TITLE_PREFIX):
+        title = TEST_TITLE_PREFIX + title  # a etiqueta que a lista de Notas mostra
 
     # O enquadramento só faz sentido quando há resumo estruturado de verdade;
     # com o placeholder de falha ele referenciaria seções inexistentes.
@@ -718,7 +732,8 @@ def build_notes(folder: Path) -> Path | None:
         f"fim: {meta.get('ended_at', '')}\n"
         f"duracao_minutos: {duration_min}\n"
         "origem: scriba\n"
-        f"whisper: {meta.get('whisper_model', '')} ({meta.get('whisper_device', '')})\n"
+        + ("teste: sim\n" if test else "")
+        + f"whisper: {meta.get('whisper_model', '')} ({meta.get('whisper_device', '')})\n"
         "---\n\n"
         f"# {title}\n\n"
         f"{meta_line}\n\n"
