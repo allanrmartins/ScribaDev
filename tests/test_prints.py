@@ -547,7 +547,9 @@ class MonitorAtivoTests(unittest.TestCase):
 
         telas = QGuiApplication.screens()
         boom = mock.Mock(side_effect=RuntimeError("sem Quartz"))
-        with mock.patch.object(QGuiApplication, "screens", return_value=telas * 2), \
+        # fixa o Mac: no Linux (CI) não há caminho de janela ativa, e nada falharia
+        with mock.patch.object(screenshot.sys, "platform", "darwin"), \
+                mock.patch.object(QGuiApplication, "screens", return_value=telas * 2), \
                 mock.patch.object(screenshot, "_mac_active_window", boom), \
                 mock.patch.object(screenshot, "_win_active_monitor", boom), \
                 mock.patch.object(QGuiApplication, "screenAt", return_value=None), \
