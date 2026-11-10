@@ -21,6 +21,41 @@ TODOS = (MAC, WIN)
 
 NOVIDADES: list[dict] = [
     {
+        "versao": "1.4.28",
+        "data": "10/11/2026",
+        "destaques": [
+            {
+                "titulo": "Prints da tela viram momentos-chave do resumo",
+                "texto": "Durante a call, clique na câmera da pílula ou aperte a Print Screen: o "
+                         "print do monitor que você está usando vai para a pasta da reunião, e o "
+                         "resumo ganha a seção Momentos-chave, com o assunto daquele momento e a "
+                         "imagem. A tecla é configurável, e os prints ficam guardados mesmo "
+                         "quando a gravação antiga é apagada.",
+                "onde": "Gravação → Tecla de print na call",
+                "abrir": "Gravação",
+                "so": TODOS,
+            },
+        ],
+        "melhorias": [
+            {"texto": "Os prints do próprio sistema (Cmd+Shift+3, 4 ou 5) feitos durante a "
+                      "gravação também entram na reunião", "so": (MAC,)},
+            {"texto": "Call em espera seguida de outra call vira duas notas, uma para cada "
+                      "reunião", "so": TODOS},
+            {"texto": "Novo \"Gravar teste\" na bandeja: experimente o app sem gerar horas, "
+                      "pendências nem resultados de busca; o teste é apagado em 24 h", "so": TODOS},
+            {"texto": "Apontamento de horas: excluir e marcar como lançado valem para vários "
+                      "itens de uma vez, e a OS segue o cliente escolhido", "so": TODOS},
+        ],
+        "correcoes": [
+            {"texto": "Apontamento de horas: o horário digitado é gravado como foi digitado, e "
+                      "blocos sobrepostos ficam em vermelho", "so": TODOS},
+            {"texto": "O número de participantes escolhido na pílula não se perde no meio "
+                      "da call", "so": TODOS},
+            {"texto": "Clicar no ícone do Dock abre a janela quando o app foi iniciado só na "
+                      "barra de menus", "so": (MAC,)},
+        ],
+    },
+    {
         "versao": "1.4.27",
         "data": "20/10/2026",
         "destaques": [],
