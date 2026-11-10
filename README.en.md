@@ -163,7 +163,7 @@ scribadev autostart on   # optional: start with Windows
 Join a Teams call (or a Meet in the browser) and the pill shows up at the top of the screen, **staying for the whole call**:
 
 - **● 12:34** — recording, with a timer (drag it anywhere; position is remembered)
-- **📷** - screenshot: marks a key moment. The image goes to the recording folder and the summary gets a **Momentos-chave** (key moments) section with what was being discussed and the image
+- **📷** - screenshot: marks a key moment. With more than one monitor, it captures only the one with the active window (the app you last clicked). The image goes to the recording folder and the summary gets a **Momentos-chave** (key moments) section with what was being discussed and the image
 - **■** — stop now and process
 - **×** — discard this recording (calls that shouldn't become notes)
 - **⏺ Record** — idle mode: shown when auto-record is off, or after you stop/discard mid-call; one click starts a (new) recording

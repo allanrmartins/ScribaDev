@@ -505,5 +505,55 @@ class CampoDaTeclaTests(unittest.TestCase):
         self.assertEqual(f.text(), "printscreen")
 
 
+class MonitorAtivoTests(unittest.TestCase):
+    """O print sai só do monitor da janela ativa (três monitores do Allan)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_monitor_com_a_maior_parte_da_janela(self):
+        from PySide6.QtCore import QRect
+
+        from scriba.qt.screenshot import pick_screen
+
+        telas = [QRect(0, 0, 1920, 1080), QRect(-1710, 209, 1710, 1107),
+                 QRect(1920, -314, 1080, 1920)]
+        self.assertEqual(pick_screen(QRect(0, 30, 1920, 984), telas), 0)
+        self.assertEqual(pick_screen(QRect(-900, 300, 800, 600), telas), 1)
+        # janela entre dois monitores: vence o que tem mais dela
+        self.assertEqual(pick_screen(QRect(1700, 100, 600, 400), telas), 2)
+        self.assertIsNone(pick_screen(QRect(5000, 5000, 300, 300), telas))
+
+    def test_sem_janela_ativa_vale_o_monitor_do_mouse(self):
+        from PySide6.QtGui import QGuiApplication
+
+        from scriba.qt import screenshot
+
+        telas = QGuiApplication.screens()
+        with mock.patch.object(QGuiApplication, "screens", return_value=telas * 2), \
+                mock.patch.object(screenshot, "_mac_active_window", return_value=None), \
+                mock.patch.object(screenshot, "_win_active_monitor", return_value=None), \
+                mock.patch.object(QGuiApplication, "screenAt", return_value=telas[0]) as at:
+            self.assertIs(screenshot.active_screen(skip_own=True), telas[0])
+        at.assert_called_once()
+
+    def test_falha_ao_achar_a_janela_nao_impede_o_print(self):
+        from PySide6.QtGui import QGuiApplication
+
+        from scriba.qt import screenshot
+
+        telas = QGuiApplication.screens()
+        boom = mock.Mock(side_effect=RuntimeError("sem Quartz"))
+        with mock.patch.object(QGuiApplication, "screens", return_value=telas * 2), \
+                mock.patch.object(screenshot, "_mac_active_window", boom), \
+                mock.patch.object(screenshot, "_win_active_monitor", boom), \
+                mock.patch.object(QGuiApplication, "screenAt", return_value=None), \
+                self.assertLogs("scriba.qt.screenshot", "ERROR"):
+            self.assertIs(screenshot.active_screen(), QGuiApplication.primaryScreen())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -163,7 +163,7 @@ scribadev autostart on   # opcional: iniciar junto com o Windows
 Pronto. Entre numa call do Teams (ou num Meet no navegador) e a pílula aparece no topo da tela, **acompanhando a call inteira**:
 
 - **● 12:34** — gravando, com cronômetro (arraste para onde quiser; a posição fica salva)
-- **📷** - print da tela: marca um momento-chave. O print vai para a pasta da gravação e o resumo ganha a seção **Momentos-chave**, com o assunto daquele momento e a imagem
+- **📷** - print da tela: marca um momento-chave. Com mais de um monitor, o print pega só o da janela ativa (o app em que você clicou por último). O print vai para a pasta da gravação e o resumo ganha a seção **Momentos-chave**, com o assunto daquele momento e a imagem
 - **■** — encerra a gravação agora e processa
 - **×** — descarta esta gravação (call que não deve virar nota)
 - **⏺ Gravar reunião** — modo espera: aparece quando a gravação automática está desligada, ou depois de você parar/descartar no meio da call; um clique inicia (outra) gravação

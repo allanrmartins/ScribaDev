@@ -1,12 +1,18 @@
 """Captura da tela para os prints da call (#229).
 
-Captura TODOS os monitores numa imagem só (como o Print Screen clássico do
-Windows): o botão fica na pílula, que costuma morar num monitor diferente do da
-call, então escolher "o monitor certo" erraria justo no caso comum.
+Captura só o monitor da janela ATIVA, ou seja, a do app em que o usuário clicou
+por último. Com três monitores, um print de todos levava junto o WhatsApp, o
+terminal e o que mais estivesse aberto ao lado da call.
+
+- Pela tecla: a janela em foco. Se for do próprio ScribaDev (as Notas, por
+  exemplo), vale ela: quem apertou a tecla estava olhando para lá.
+- Pela pílula: o clique pode trazer o ScribaDev para frente, então as janelas
+  dele são ignoradas e vale a janela de outro app mais à frente.
+- Sem como descobrir a janela: o monitor onde está o mouse.
 
 macOS: capturar outros apps exige a permissão de Gravação de Tela. Sem ela o
 sistema entrega só o papel de parede e as janelas do próprio app, e um print
-assim é pior que nenhum: `ensure_permission` pede a permissão e o print é pulado.
+assim é pior que nenhum: o print é pulado e a permissão é pedida.
 
 Chamar na thread da GUI (QScreen.grabWindow).
 """
@@ -16,10 +22,11 @@ from __future__ import annotations
 import ctypes
 import ctypes.util
 import logging
+import os
 import sys
 
-from PySide6.QtCore import QRect, Qt
-from PySide6.QtGui import QGuiApplication, QImage, QPainter
+from PySide6.QtCore import QRect
+from PySide6.QtGui import QCursor, QGuiApplication, QImage, QScreen
 
 log = logging.getLogger("scriba.qt.screenshot")
 
@@ -66,34 +73,141 @@ def open_privacy_settings() -> None:
                               "?Privacy_ScreenCapture"])
 
 
-def grab_all_screens() -> QImage | None:
-    """Uma imagem com todos os monitores, na posição real de cada um (área virtual).
-    Com um monitor só, sai na resolução nativa. Com vários, a montagem usa a MENOR
-    densidade: juntar três monitores em escala Retina dava 36 megapixels (~1 s só
-    para gravar o PNG) para um print que serve de contexto. None se falhar."""
-    screens = QGuiApplication.screens()
-    if not screens:
+_MIN_SIDE = 100  # janela menor que isso não é "a janela ativa" (ícone, balão, barra)
+
+
+def pick_screen(window: QRect, screens: list[QRect]) -> int | None:
+    """Índice do monitor que contém a maior parte da janela; None se ela não toca
+    nenhum. Coordenadas globais do Qt (no Mac, em pontos, iguais às do CoreGraphics)."""
+    best, best_area = None, 0
+    for i, g in enumerate(screens):
+        inter = window.intersected(g)
+        area = inter.width() * inter.height() if not inter.isEmpty() else 0
+        if area > best_area:
+            best, best_area = i, area
+    return best
+
+
+def _mac_active_window(skip_own: bool) -> QRect | None:
+    """Retângulo da janela ativa no macOS: a janela normal (camada 0) mais à frente
+    do app em primeiro plano. A lista do CoreGraphics vem da frente para trás e
+    não precisa de permissão para expor a posição das janelas."""
+    import Quartz
+    from AppKit import NSWorkspace
+
+    me = os.getpid()
+    front = NSWorkspace.sharedWorkspace().frontmostApplication()
+    front_pid = int(front.processIdentifier()) if front is not None else None
+    opts = Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements
+    normals = []
+    for w in Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID) or []:
+        b = w.get("kCGWindowBounds") or {}
+        if (w.get("kCGWindowLayer", 0) != 0 or float(w.get("kCGWindowAlpha", 1)) <= 0
+                or b.get("Width", 0) < _MIN_SIDE or b.get("Height", 0) < _MIN_SIDE):
+            continue
+        pid = int(w.get("kCGWindowOwnerPID", 0))
+        if skip_own and pid == me:
+            continue
+        normals.append((pid, QRect(int(b["X"]), int(b["Y"]), int(b["Width"]), int(b["Height"]))))
+    for pid, rect in normals:  # 1º: a janela do app em foco
+        if pid == front_pid:
+            return rect
+    return normals[0][1] if normals else None  # o foco é nosso (pílula): a de outro app mais à frente
+
+
+def _win_active_monitor(skip_own: bool) -> str | None:
+    """Nome do monitor (\\\\.\\DISPLAYn, o mesmo do QScreen.name()) da janela em
+    foco no Windows. Se o foco é do ScribaDev e `skip_own`, sobe a ordem Z até a
+    primeira janela visível de outro app."""
+    from ctypes import wintypes
+
+    u = ctypes.WinDLL("user32", use_last_error=True)
+    HWND = wintypes.HWND
+    u.GetForegroundWindow.restype = HWND
+    u.GetTopWindow.argtypes = [HWND]
+    u.GetTopWindow.restype = HWND
+    u.GetWindow.argtypes = [HWND, wintypes.UINT]
+    u.GetWindow.restype = HWND
+    u.GetWindowThreadProcessId.argtypes = [HWND, ctypes.POINTER(wintypes.DWORD)]
+    u.IsWindowVisible.argtypes = [HWND]
+    u.IsIconic.argtypes = [HWND]
+    u.GetWindowLongW.argtypes = [HWND, ctypes.c_int]
+    u.GetWindowRect.argtypes = [HWND, ctypes.POINTER(wintypes.RECT)]
+    u.MonitorFromWindow.argtypes = [HWND, wintypes.DWORD]
+    u.MonitorFromWindow.restype = wintypes.HMONITOR
+
+    class MONITORINFOEXW(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                    ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD),
+                    ("szDevice", wintypes.WCHAR * 32)]
+
+    u.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.POINTER(MONITORINFOEXW)]
+    me = os.getpid()
+
+    def pid_of(h) -> int:
+        p = wintypes.DWORD()
+        u.GetWindowThreadProcessId(h, ctypes.byref(p))
+        return p.value
+
+    def cloaked(h) -> bool:  # janela "visível" mas escondida pelo DWM (apps UWP suspensos)
+        try:
+            v = wintypes.DWORD()
+            ctypes.windll.dwmapi.DwmGetWindowAttribute(h, 14, ctypes.byref(v), ctypes.sizeof(v))
+            return bool(v.value)
+        except Exception:
+            return False
+
+    def usable(h) -> bool:
+        if not h or not u.IsWindowVisible(h) or u.IsIconic(h) or cloaked(h):
+            return False
+        if u.GetWindowLongW(h, -20) & 0x80:  # WS_EX_TOOLWINDOW: pílula, balões, barra
+            return False
+        r = wintypes.RECT()
+        u.GetWindowRect(h, ctypes.byref(r))
+        if r.right - r.left < _MIN_SIDE or r.bottom - r.top < _MIN_SIDE:
+            return False
+        return not (skip_own and pid_of(h) == me)
+
+    h = u.GetForegroundWindow()
+    if not usable(h):
+        h = u.GetTopWindow(None)
+        while h and not usable(h):
+            h = u.GetWindow(h, 2)  # GW_HWNDNEXT: a próxima atrás na ordem Z
+    if not h:
         return None
-    if len(screens) == 1:
-        pm = screens[0].grabWindow(0)
-        return None if pm.isNull() else pm.toImage()
-    virt = QRect()
-    for s in screens:
-        virt = virt.united(s.geometry())
-    scale = min(s.devicePixelRatio() for s in screens)
-    canvas = QImage(int(virt.width() * scale), int(virt.height() * scale), QImage.Format_RGB32)
-    canvas.fill(Qt.black)
-    p = QPainter(canvas)
-    p.setRenderHint(QPainter.SmoothPixmapTransform)
+    mi = MONITORINFOEXW()
+    mi.cbSize = ctypes.sizeof(mi)
+    if not u.GetMonitorInfoW(u.MonitorFromWindow(h, 2), ctypes.byref(mi)):  # NEAREST
+        return None
+    return mi.szDevice
+
+
+def active_screen(skip_own: bool = False) -> QScreen | None:
+    """O monitor da janela ativa (ver o docstring do módulo)."""
+    screens = QGuiApplication.screens()
+    if len(screens) <= 1:
+        return screens[0] if screens else None
     try:
-        for s in screens:
-            pm = s.grabWindow(0)
-            if pm.isNull():
-                continue
-            g = s.geometry()
-            target = QRect(int((g.x() - virt.x()) * scale), int((g.y() - virt.y()) * scale),
-                           int(g.width() * scale), int(g.height() * scale))
-            p.drawPixmap(target, pm)
-    finally:
-        p.end()
-    return canvas
+        if sys.platform == "darwin":
+            rect = _mac_active_window(skip_own)
+            if rect is not None:
+                i = pick_screen(rect, [s.geometry() for s in screens])
+                if i is not None:
+                    return screens[i]
+        elif sys.platform == "win32":
+            name = _win_active_monitor(skip_own)
+            for s in screens:
+                if name and s.name() == name:
+                    return s
+    except Exception:
+        log.exception("não consegui achar a janela ativa; vale o monitor do mouse")
+    return QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
+
+
+def grab_active_screen(skip_own: bool = False) -> QImage | None:
+    """Print do monitor da janela ativa, na resolução nativa dele. None se falhar."""
+    screen = active_screen(skip_own)
+    if screen is None:
+        return None
+    pm = screen.grabWindow(0)
+    return None if pm.isNull() else pm.toImage()

@@ -952,8 +952,8 @@ class ScribaApp:
             hotkey_mac.unregister(hk_id)
 
     def _take_print(self, source: str) -> None:
-        """(GUI) Print da tela inteira para a pasta da gravação ativa. Qualquer falha
-        só avisa: a gravação nunca é afetada."""
+        """(GUI) Print do monitor da janela ativa para a pasta da gravação ativa.
+        Qualquer falha só avisa: a gravação nunca é afetada."""
         import datetime as _dt
 
         from .qt import screenshot
@@ -979,7 +979,9 @@ class ScribaApp:
         # a pílula não sai no print: ela já é excluída de captura (exclude_from_capture,
         # a mesma proteção do compartilhamento de tela; conferido no macOS 26)
         try:
-            img = screenshot.grab_all_screens()
+            # pela pílula o clique pode trazer o ScribaDev para frente: as janelas
+            # dele não contam na escolha do monitor
+            img = screenshot.grab_active_screen(skip_own=(source == "pilula"))
         except Exception:
             log.exception("captura da tela falhou")
             img = None
