@@ -34,10 +34,33 @@ func resolveLocale(_ code: String) async throws -> Locale {
     return locale
 }
 
-func makeTranscriber(_ locale: Locale) -> SpeechTranscriber {
-    // só trechos finalizados (sem resultados voláteis) e com o tempo de cada trecho
-    SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [],
+func makeTranscriber(_ locale: Locale, volatile: Bool = false) -> SpeechTranscriber {
+    // arquivo: só trechos finalizados. Ao vivo com canal do provisório: também os
+    // resultados voláteis (a frase ainda sendo dita), sempre com o tempo de cada trecho
+    SpeechTranscriber(locale: locale, transcriptionOptions: [],
+                      reportingOptions: volatile ? [.volatileResults] : [],
                       attributeOptions: [.audioTimeRange])
+}
+
+/// Canal do texto PROVISÓRIO (ao vivo): um descritor herdado do app, em memória (pipe),
+/// nunca o disco. Cada linha substitui a anterior; texto vazio = o trecho fixou.
+final class PartialChannel: @unchecked Sendable {
+    private let handle: FileHandle?
+    private let lock = NSLock()
+    private var broken = false
+    init(fd: Int32?) { handle = fd.map { FileHandle(fileDescriptor: $0, closeOnDealloc: false) } }
+    func send(_ obj: [String: Any]) {
+        guard let handle else { return }
+        lock.lock(); defer { lock.unlock() }
+        if broken { return }
+        do {
+            var data = try JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys])
+            data.append(0x0A)
+            try handle.write(contentsOf: data)
+        } catch {
+            broken = true   // o app fechou o canal: segue só com os trechos fixados
+        }
+    }
 }
 
 func ensureAssets(_ transcriber: SpeechTranscriber) async throws {
@@ -46,11 +69,17 @@ func ensureAssets(_ transcriber: SpeechTranscriber) async throws {
     }
 }
 
-/// Consome os resultados e escreve um trecho por linha, já no relógio do áudio.
-func collect(_ transcriber: SpeechTranscriber) -> Task<Void, Error> {
+/// Consome os resultados e escreve um trecho FIXADO por linha (stdout), já no relógio
+/// do áudio. Os voláteis (só com `partial`) vão para o canal do provisório.
+func collect(_ transcriber: SpeechTranscriber, partial: PartialChannel? = nil) -> Task<Void, Error> {
     Task {
         for try await result in transcriber.results {
             let text = String(result.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !result.isFinal {
+                partial?.send(["start": result.range.start.seconds, "text": text])
+                continue
+            }
+            partial?.send(["start": result.range.start.seconds, "text": ""])
             if text.isEmpty { continue }
             emit(["start": result.range.start.seconds, "end": result.range.end.seconds, "text": text])
         }
@@ -115,8 +144,9 @@ final class StopFlag: @unchecked Sendable {
     func set() { lock.lock(); stopped = true; lock.unlock() }
 }
 
-func transcribeLive(_ code: String, _ path: String) async throws {
-    let transcriber = makeTranscriber(try await resolveLocale(code))
+func transcribeLive(_ code: String, _ path: String, partialFd: Int32? = nil) async throws {
+    let partial = partialFd.map { PartialChannel(fd: $0) }
+    let transcriber = makeTranscriber(try await resolveLocale(code), volatile: partial != nil)
     try await ensureAssets(transcriber)
     let analyzer = SpeechAnalyzer(modules: [transcriber])
     guard let target = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
@@ -147,7 +177,7 @@ func transcribeLive(_ code: String, _ path: String) async throws {
     }
 
     let (inputs, feed) = AsyncStream<AnalyzerInput>.makeStream()
-    let collector = collect(transcriber)
+    let collector = collect(transcriber, partial: partial)
     try await analyzer.start(inputSequence: inputs)
 
     let bytesPerFrame = UInt64(fmt.channels) * 2
@@ -198,6 +228,7 @@ do {
     case ("check", 3): await check(args[2])
     case ("file", 4): try await transcribeFile(args[2], args[3])
     case ("live", 4): try await transcribeLive(args[2], args[3])
+    case ("live", 5): try await transcribeLive(args[2], args[3], partialFd: Int32(args[4]))
     default:
         FileHandle.standardError.write("uso: apple-stt check|file|live <idioma> [audio.wav]\n".data(using: .utf8)!)
         exit(2)

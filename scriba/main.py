@@ -268,6 +268,15 @@ class ScribaApp:
             rec = self.rec
         return rec.folder if rec is not None and getattr(rec, "live", None) is not None else None
 
+    def live_partials(self) -> dict:
+        """Texto provisório da gravação atual ({stream: (início, texto)}), só em memória."""
+        with self.rec_lock:
+            live = getattr(self.rec, "live", None) if self.rec is not None else None
+        try:
+            return live.partials() if live is not None else {}
+        except Exception:
+            return {}
+
     # ----------------------------------------------------------- gravação --
 
     def start_recording(self, source: str = "auto", probe: bool = True, test: bool = False) -> None:

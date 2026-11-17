@@ -165,6 +165,16 @@ def _clear_layout(lay) -> None:
 
 
 _LT_HEIGHT = 200   # altura do painel da transcrição ao vivo (px)
+_LT_FIX_HOLD = 6.0   # s com a correção do vocabulário bem visível (riscado + destaque)
+_LT_FIX_FADE = 3.0   # s para o riscado e o destaque sumirem devagar
+
+
+def _mix(a: str, b: str, f: float) -> str:
+    """Cor entre `a` (f=0) e `b` (f=1), em #rrggbb: o rich text do Qt não tem
+    transparência confiável, então o "sumir" é misturar com o fundo do painel."""
+    ca = [int(a[i:i + 2], 16) for i in (1, 3, 5)]
+    cb = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x + (y - x) * f):02x}" for x, y in zip(ca, cb))
 
 
 class _ClickRow(QFrame):
@@ -200,6 +210,10 @@ class MainWindow(QWidget):
         self._lt_tail = None
         self._lt_busy = False
         self._lt_grown = None            # (altura somada, tamanho depois) do alongamento automático
+        self._lt_partials: dict = {}     # texto provisório (memória do app), por stream
+        self._lt_fading = False          # alguma correção do vocabulário ainda sumindo
+        self._lt_vocab_ready = False
+        self._lt_scroll_pending = False  # render pediu "rolar até o fim" e ainda não rolou
 
         self.setWindowTitle(f"ScribaDev v{__version__}")
         self.setMinimumSize(520, 560)
@@ -242,7 +256,7 @@ class MainWindow(QWidget):
         self._live_timer.start(1200)
         self._lt_timer = QTimer(self)
         self._lt_timer.timeout.connect(self._poll_transcript)
-        self._lt_timer.start(1500)
+        self._lt_timer.start(500)
 
     # ---- construção da UI ------------------------------------------------------
 
@@ -356,7 +370,7 @@ class MainWindow(QWidget):
         lv = QVBoxLayout(self._lt_panel)
         lv.setContentsMargins(0, 4, 0, 0)
         lv.setSpacing(4)
-        self._lt_hint = QLabel("Transcrição ao vivo · cada trecho aparece uns segundos depois da fala")
+        self._lt_hint = QLabel("Transcrição ao vivo · em cinza, a frase ainda sendo dita")
         self._lt_hint.setProperty("role", "muted")
         lv.addWidget(self._lt_hint)
         self._lt_view = QTextBrowser()
@@ -842,9 +856,10 @@ class MainWindow(QWidget):
     # ---- transcrição ao vivo no card de gravação -----------------------------
 
     def _poll_transcript(self) -> None:
-        """Timer (1,5 s): com gravação + ao vivo, lê os .live.jsonl novos FORA da GUI e
-        re-renderiza só quando chega trecho. Sem ao vivo, o painel some e o card fica
-        como sempre. App sem o método (harness/testes antigos) = nunca mostra."""
+        """Timer (0,5 s): com gravação + ao vivo, lê os trechos fixados (.live.jsonl) FORA
+        da GUI e o texto provisório da memória do app, e re-renderiza só quando algo muda
+        (ou enquanto uma correção do vocabulário está sumindo). Sem ao vivo, o painel some
+        e o card fica como sempre. App sem os métodos (harness/testes) = nunca mostra."""
         if not self.isVisible():
             return
         fn = getattr(self.app, "live_transcript_folder", None)
@@ -855,23 +870,47 @@ class MainWindow(QWidget):
         if folder is None:
             if self._lt_tail is not None or not self._lt_panel.isHidden():
                 self._lt_tail = None
+                self._lt_partials = {}
                 self._show_transcript(False)
             return
         if self._lt_tail is None or self._lt_tail.folder != Path(folder):
             from ..live_tail import LiveTail
 
             self._lt_tail = LiveTail(folder)   # outra gravação (ou capa aberta no meio)
+            self._lt_partials = {}
+            self._lt_vocab_ready = False       # o vocabulário carrega na 1ª leitura (thread)
             self._render_transcript(force_bottom=True)
             self._show_transcript(True)
+        pfn = getattr(self.app, "live_partials", None)
+        try:
+            partials = pfn() if callable(pfn) else {}
+        except Exception:
+            partials = {}
+        mudou = partials != self._lt_partials
+        self._lt_partials = partials
+        if mudou or self._lt_fading:
+            self._render_transcript(force_bottom=False)
         if self._lt_busy:
             return
         self._lt_busy = True
         tail = self._lt_tail
-        threading.Thread(target=self._read_transcript, args=(tail,), daemon=True,
+        hotwords = None
+        if not self._lt_vocab_ready:
+            self._lt_vocab_ready = True
+            cfg = getattr(self.app, "cfg", None)
+            hotwords = getattr(getattr(cfg, "whisper", None), "hotwords", None) if cfg is not None else None
+        threading.Thread(target=self._read_transcript, args=(tail, hotwords), daemon=True,
                          name="live-transcript").start()
 
-    def _read_transcript(self, tail) -> None:
+    def _read_transcript(self, tail, hotwords=None) -> None:
         try:
+            if hotwords is not None:   # 1ª leitura desta gravação: monta o corretor fora da GUI
+                from ..live_tail import corretor_do_vocabulario
+
+                try:
+                    tail._corretor = corretor_do_vocabulario(hotwords)
+                except Exception as e:
+                    log.debug("vocabulário da transcrição ao vivo indisponível: %s", e)
             novo = tail.poll()
         except Exception as e:
             log.debug("leitura da transcrição ao vivo falhou: %s", e)
@@ -883,25 +922,65 @@ class MainWindow(QWidget):
 
     def _render_transcript(self, *, force_bottom: bool) -> None:
         import html
+        import time
 
         t = theme.active()
         lines = self._lt_tail.lines if self._lt_tail is not None else []
+        partials = sorted((self._lt_partials or {}).items(), key=lambda kv: kv[1][0])
         bar = self._lt_view.verticalScrollBar()
-        no_fim = force_bottom or bar.value() >= bar.maximum() - 4
-        if not lines:
-            self._lt_view.setHtml(f"<span style='color:{t.muted}'>Ouvindo… o primeiro trecho "
-                                  "aparece em uns 15 segundos.</span>")
+        # "no fim" também se a rolagem da atualização anterior ainda não aconteceu (duas
+        # atualizações no mesmo ciclo perdiam o "grudado no fim")
+        no_fim = force_bottom or self._lt_scroll_pending or bar.value() >= bar.maximum() - 4
+        if not lines and not partials:
+            self._lt_fading = False
+            self._lt_view.setHtml(f"<span style='color:{t.muted}'>Ouvindo… o texto aparece "
+                                  "aqui enquanto as pessoas falam.</span>")
             return
+
+        def rotulo(stream: str, cor: str) -> str:
+            return f"<b style='color:{cor}'>{'Você' if stream == 'mic' else 'Outros'}</b>"
+
+        def hora(start: float) -> str:
+            m, sec = divmod(int(start), 60)
+            return f"<span style='color:{t.faint}'>{m:02d}:{sec:02d}</span>"
+
+        agora = time.monotonic()
+        fading = False
         rows = []
         for ln in lines:
-            quem, cor = ("Você", t.accent_hover) if ln.stream == "mic" else ("Outros", t.ok)
-            m, s = divmod(int(ln.start), 60)
-            rows.append(f"<p style='margin:0 0 6px 0'><span style='color:{t.faint}'>{m:02d}:{s:02d}</span>"
-                        f"&nbsp; <b style='color:{cor}'>{quem}</b>&nbsp; {html.escape(ln.text)}</p>")
+            # correção do vocabulário: riscado + palavra nova destacada, que somem devagar
+            # entre _LT_FIX_HOLD e _LT_FIX_HOLD + _LT_FIX_FADE segundos (sem piscar)
+            idade = agora - ln.chegou if ln.chegou else 1e9
+            f = 0.0 if idade <= _LT_FIX_HOLD else min(1.0, (idade - _LT_FIX_HOLD) / _LT_FIX_FADE)
+            if ln.corrigido and f < 1.0:
+                fading = True
+            partes = []
+            for texto, orig in (ln.pieces or ((ln.text, None),)):
+                if orig is None or f >= 1.0:
+                    partes.append(html.escape(texto))
+                    continue
+                fundo = _mix(t.ok, t.field, 0.72 + 0.28 * f)
+                risco = _mix(t.muted, t.field, f)
+                partes.append(f"<s style='color:{risco}'>{html.escape(orig)}</s>&nbsp;"
+                              f"<span style='background-color:{fundo}'>{html.escape(texto)}</span>")
+            cor = t.accent_hover if ln.stream == "mic" else t.ok
+            rows.append(f"<p style='margin:0 0 6px 0'>{hora(ln.start)}&nbsp; {rotulo(ln.stream, cor)}"
+                        f"&nbsp; {' '.join(partes)}</p>")
+        for stream, (start, texto) in partials:
+            cor = _mix(t.accent_hover if stream == "mic" else t.ok, t.field, 0.45)
+            rows.append(f"<p style='margin:0 0 6px 0'>{hora(start)}&nbsp; {rotulo(stream, cor)}"
+                        f"&nbsp; <i style='color:{t.faint}'>{html.escape(texto)}</i></p>")
+        self._lt_fading = fading
         valor = bar.value()
         self._lt_view.setHtml("".join(rows))
         # o máximo da barra só se atualiza depois do layout do documento: rola na volta do loop
-        QTimer.singleShot(0, lambda: bar.setValue(bar.maximum() if no_fim else valor))
+        self._lt_scroll_pending = no_fim
+
+        def _rola() -> None:
+            bar.setValue(bar.maximum() if no_fim else valor)
+            self._lt_scroll_pending = False
+
+        QTimer.singleShot(0, _rola)
 
     def _show_transcript(self, on: bool) -> None:
         """Mostra/esconde o painel e alonga a capa para ele caber sem espremer as notas.

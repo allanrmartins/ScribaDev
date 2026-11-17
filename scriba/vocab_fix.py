@@ -195,3 +195,22 @@ def corrigir(texto: str, termos: list[str], sap: bool | None = None) -> tuple[st
         i += n
     out.append(texto[pos:])
     return "".join(out), feitas_z + feitas
+
+
+def corrigir_trechos(texto: str, termos: list[str], sap: bool | None = None) -> list[tuple[str, str | None]]:
+    """O texto corrigido em pedaços, para a tela mostrar o que mudou (transcrição ao
+    vivo na capa: riscar a palavra errada e destacar a do vocabulário). Cada pedaço é
+    (texto, original): original None = ficou igual; senão é o que foi trocado. Os pedaços
+    se juntam com espaço. Usa o MESMO `corrigir` do processamento (a tela mostra o que vai
+    sair na nota) e só compara as palavras de antes e de depois para achar onde trocou."""
+    novo, feitas = corrigir(texto, termos, sap)
+    if not feitas:
+        return [(" ".join(texto.split()), None)] if texto.strip() else []
+    antes, depois = texto.split(), novo.split()
+    out: list[tuple[str, str | None]] = []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, antes, depois, autojunk=False).get_opcodes():
+        if j2 == j1:
+            continue   # nada novo no lugar (o corretor não apaga palavra; defensivo)
+        trecho = " ".join(depois[j1:j2])
+        out.append((trecho, None) if op == "equal" else (trecho, " ".join(antes[i1:i2])))
+    return out

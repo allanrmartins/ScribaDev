@@ -236,9 +236,39 @@ class LiveSession:
         self._procs: list[subprocess.Popen] = []
         self._lock = threading.Lock()
         self._ended: str | None = None   # "stop" | "kill" pedido antes de subir
+        # texto PROVISÓRIO (a frase ainda sendo dita) por stream, só em memória: chega por
+        # um pipe do helper e a capa lê daqui (#capa ao vivo). Nunca vai para o disco.
+        self._partials: dict[str, tuple[float, str]] = {}
         threading.Thread(target=self._launch, daemon=True, name="apple-live").start()
 
+    def partials(self) -> dict[str, tuple[float, str]]:
+        """{stream: (início em s, texto provisório)} do que está sendo dito agora."""
+        with self._lock:
+            return dict(self._partials)
+
+    def _read_partials(self, name: str, fd: int) -> None:
+        try:
+            with os.fdopen(fd, "rb") as f:
+                for raw in f:
+                    try:
+                        obj = json.loads(raw)
+                        start, text = float(obj.get("start", 0.0)), str(obj.get("text", "")).strip()
+                    except (ValueError, TypeError, AttributeError):
+                        continue
+                    with self._lock:
+                        if text:
+                            self._partials[name] = (start, text)
+                        else:
+                            self._partials.pop(name, None)   # o trecho fixou
+        except Exception as e:
+            log.debug("canal do provisório de %s fechou: %s", name, e)
+        finally:
+            with self._lock:
+                self._partials.pop(name, None)
+
     def _launch(self) -> None:
+        import threading
+
         try:
             helper = helper_path()
         except Exception as e:
@@ -248,14 +278,25 @@ class LiveSession:
             with self._lock:
                 if self._ended:
                     break
+                r = w = None
                 try:
+                    r, w = os.pipe()   # canal do provisório: o helper escreve no w herdado
                     with open(self.folder / f"{name}{LIVE_SUFFIX}", "w", encoding="utf-8") as out, \
                             open(self.folder / f"{name}.live.log", "w", encoding="utf-8") as err:
                         self._procs.append(subprocess.Popen(
-                            [str(helper), "live", self.language, str(self.folder / f"{name}.wav")],
-                            stdin=subprocess.PIPE, stdout=out, stderr=err))
+                            [str(helper), "live", self.language, str(self.folder / f"{name}.wav"), str(w)],
+                            stdin=subprocess.PIPE, stdout=out, stderr=err, pass_fds=(w,)))
+                    os.close(w)
+                    w = None
+                    threading.Thread(target=self._read_partials, args=(name, r), daemon=True,
+                                     name=f"apple-live-{name}").start()
+                    r = None
                 except Exception as e:
                     log.warning("transcrição ao vivo de %s não subiu: %s", name, e)
+                finally:
+                    for fd in (r, w):
+                        if fd is not None:
+                            os.close(fd)
         with self._lock:
             if self._procs:
                 log.info("transcrição ao vivo ligada: %s", self.folder.name)

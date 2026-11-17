@@ -63,6 +63,68 @@ class LiveTailTests(unittest.TestCase):
         self.assertEqual([ln.text for ln in self.tail.lines], ["Nova."])
 
 
+class CorrecaoEmPedacosTests(unittest.TestCase):
+    def test_marca_onde_trocou_e_mantem_o_resto(self):
+        from scriba import vocab_fix
+
+        pedacos = vocab_fix.corrigir_trechos("abri a S 80 e o smartformes", ["SE80", "SmartForms"])
+        self.assertEqual(pedacos, [("abri a", None), ("SE80", "S 80"), ("e o", None),
+                                   ("SmartForms", "smartformes")])
+        # juntando os pedaços sai exatamente o que o processamento grava na nota
+        self.assertEqual(" ".join(t for t, _ in pedacos),
+                         vocab_fix.corrigir("abri a S 80 e o smartformes", ["SE80", "SmartForms"])[0])
+
+    def test_sem_correcao_um_pedaco_so(self):
+        from scriba import vocab_fix
+
+        self.assertEqual(vocab_fix.corrigir_trechos("tudo certo", ["SE80"]), [("tudo certo", None)])
+        self.assertEqual(vocab_fix.corrigir_trechos("   ", ["SE80"]), [])
+
+    def test_leitor_aplica_o_corretor_e_sobrevive_a_falha(self):
+        d = Path(tempfile.mkdtemp(prefix="scriba_live_"))
+        (d / "mic.live.jsonl").write_text(_linha(1.0, "na S 80"), encoding="utf-8")
+        from scriba import vocab_fix
+
+        tail = LiveTail(d, corretor=lambda t: vocab_fix.corrigir_trechos(t, ["SE80"]))
+        tail.poll()
+        self.assertTrue(tail.lines[0].corrigido)
+        ruim = LiveTail(d, corretor=lambda t: 1 / 0)
+        ruim.poll()
+        self.assertEqual(ruim.lines[0].pieces, (("na S 80", None),))
+
+
+class CanalDoProvisorioTests(unittest.TestCase):
+    def test_le_o_pipe_e_limpa_quando_fixa(self):
+        """O texto provisório chega por pipe (memória) e some quando o trecho fixa."""
+        import threading
+
+        from scriba.stt_apple import LiveSession
+
+        sess = LiveSession.__new__(LiveSession)   # sem subir helper: só o leitor do canal
+        sess._lock = threading.Lock()
+        sess._partials = {}
+        r, w = os.pipe()
+        th = threading.Thread(target=sess._read_partials, args=("mic", r))
+        th.start()
+        os.write(w, json.dumps({"start": 3.0, "text": "estou falando"}).encode() + b"\n")
+        os.write(w, b"lixo que nao e json\n")
+        os.write(w, json.dumps({"start": 3.0, "text": "estou falando agora"}).encode() + b"\n")
+        import time
+
+        fim = time.monotonic() + 2
+        while sess.partials().get("mic", (0, ""))[1] != "estou falando agora" and time.monotonic() < fim:
+            time.sleep(0.01)
+        self.assertEqual(sess.partials(), {"mic": (3.0, "estou falando agora")})
+        os.write(w, json.dumps({"start": 3.0, "text": ""}).encode() + b"\n")   # fixou
+        fim = time.monotonic() + 2
+        while sess.partials() and time.monotonic() < fim:
+            time.sleep(0.01)
+        self.assertEqual(sess.partials(), {})
+        os.close(w)
+        th.join(2)
+        self.assertFalse(th.is_alive())
+
+
 @unittest.skipUnless(importlib.util.find_spec("PySide6"), "PySide6 ausente")
 class PainelTests(unittest.TestCase):
     @classmethod
@@ -109,10 +171,12 @@ class PainelTests(unittest.TestCase):
             def recording_duration(self): return 30.0
             def call_duration(self): return 30.0
             def live_transcript_folder(self): return self.folder
+            def live_partials(self): return dict(self.partials)
             def ui(self, fn): pump.go.emit(fn)
 
         app = _App()
         app.folder = folder
+        app.partials = {}
         return app
 
     def _espera_leitura(self, win):
@@ -144,6 +208,10 @@ class PainelTests(unittest.TestCase):
         self._espera_leitura(win)
         self.assertFalse(win._lt_panel.isHidden())
         self.assertIn("Ouvindo", win._lt_view.toPlainText())
+        app.partials = {"loopback": (0.5, "Vamos com")}   # frase ainda sendo dita
+        win._poll_transcript()
+        self.assertIn("Vamos com", win._lt_view.toPlainText())
+        app.partials = {}
         (pasta / "mic.live.jsonl").write_text(_linha(4.0, "Pode seguir com o roteiro."), encoding="utf-8")
         (pasta / "loopback.live.jsonl").write_text(_linha(1.0, "Vamos começar."), encoding="utf-8")
         self._espera_leitura(win)
@@ -159,3 +227,29 @@ class PainelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(importlib.util.find_spec("PySide6"), "PySide6 ausente")
+class CorrecaoNaTelaTests(PainelTests):
+    def test_riscado_some_depois_do_tempo(self):
+        import dataclasses
+        import time
+
+        from scriba import vocab_fix
+
+        pasta = Path(tempfile.mkdtemp(prefix="scriba_live_"))
+        win = self._win(self._app(pasta))
+        self._espera_leitura(win)   # cria o leitor (pasta ainda vazia: nada a corrigir)
+        win._lt_tail._corretor = lambda t: vocab_fix.corrigir_trechos(t, ["SE80"])
+        (pasta / "mic.live.jsonl").write_text(_linha(2.0, "abre a S 80"), encoding="utf-8")
+        self._espera_leitura(win)
+        html = win._lt_view.toHtml()
+        self.assertIn("S 80", win._lt_view.toPlainText())   # riscado ainda à vista
+        self.assertIn("line-through", html)
+        self.assertTrue(win._lt_fading)
+        win._lt_tail.lines = [dataclasses.replace(ln, chegou=time.monotonic() - 60)
+                              for ln in win._lt_tail.lines]
+        win._render_transcript(force_bottom=True)
+        self.assertNotIn("S 80", win._lt_view.toPlainText())
+        self.assertIn("abre a SE80", win._lt_view.toPlainText())
+        self.assertFalse(win._lt_fading)
