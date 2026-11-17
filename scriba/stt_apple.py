@@ -11,9 +11,11 @@ da Apple é Swift-only e async, então a transcrição roda num programa Swift p
 
 Transcrição AO VIVO (opcional, whisper.live): `LiveSession` sobe um helper por stream
 no início da gravação; ele lê o .wav enquanto o gravador escreve (nunca toca no
-gravador: se o helper cair, a gravação segue intacta) e grava `<stream>.live.jsonl`.
-Ao fim da call o pipeline usa esse resultado e não transcreve de novo; se ele faltar
-ou vier incompleto, transcreve o arquivo (segundos com este motor).
+gravador: se o helper cair, a gravação segue intacta), grava os trechos fixados em
+`<stream>.live.jsonl` e manda a frase em andamento por um pipe (memória). Tudo isso é
+só para a TELA (capa): roda em modo de baixa latência (.fastResults), que troca ~3%
+das palavras. A nota sempre transcreve o arquivo no modo preciso ao fim da call -
+segundos com este motor (27 min em ~6 s) - e sai idêntica à de quem não usa o ao vivo.
 
 Qualquer falha do motor da Apple (Mac antigo, sem Command Line Tools, idioma sem
 suporte) cai para o motor Whisper desta máquina - mesmo espírito do fallback do MLX.
@@ -29,7 +31,6 @@ import platform
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 from typing import Callable
 
@@ -41,7 +42,6 @@ log = logging.getLogger("scriba.stt_apple")
 
 _SOURCE = Path(__file__).resolve().parent / "apple_stt" / "AppleSTT.swift"
 LIVE_SUFFIX = ".live.jsonl"
-_LIVE_WAIT_S = 20.0   # espera pelo helper ao vivo (fecha em <1 s; o arquivo inteiro leva ~7 s)
 
 
 def macos_suportado() -> bool:
@@ -126,28 +126,6 @@ def _parse(lines: list[str]) -> tuple[list[Segment], bool]:
     return segs, done
 
 
-def live_result(wav: Path, wait_s: float = _LIVE_WAIT_S) -> list[Segment] | None:
-    """Trechos da transcrição ao vivo deste stream, se ela terminou; senão None.
-    Espera um pouco o helper finalizar (ele fecha ~1 s depois da gravação parar)."""
-    stem = wav.name.split(".")[0]
-    path = wav.parent / (stem + LIVE_SUFFIX)
-    if not path.exists():
-        return None
-    errlog = wav.parent / f"{stem}.live.log"
-    deadline = time.monotonic() + wait_s
-    while True:
-        if errlog.exists() and "erro:" in errlog.read_text(encoding="utf-8", errors="replace"):
-            log.warning("transcrição ao vivo de %s falhou; transcrevendo o arquivo", wav.name)
-            return None
-        segs, done = _parse(path.read_text(encoding="utf-8", errors="replace").splitlines())
-        if done:
-            return segs
-        if time.monotonic() >= deadline:
-            log.warning("transcrição ao vivo de %s não terminou; transcrevendo o arquivo", wav.name)
-            return None
-        time.sleep(0.5)
-
-
 class AppleSpeechProvider:
     """Satisfaz TranscriptionProvider (device_used/ensure_loaded/transcribe/close)."""
 
@@ -181,16 +159,12 @@ class AppleSpeechProvider:
             self.ensure_loaded()
         if self._fallback is not None:
             return self._fallback.transcribe(wav, on_progress)
-        live = live_result(wav)
-        if live is not None:
-            print(f"  {len(live)} trechos já transcritos ao vivo")
-            out = live
-        else:
-            try:
-                out = self._transcribe_file(wav)
-            except Exception as e:
-                self._use_fallback(str(e))
-                return self._fallback.transcribe(wav, on_progress)
+        # sempre o arquivo, no modo preciso: o .live.jsonl (baixa latência) é só da tela
+        try:
+            out = self._transcribe_file(wav)
+        except Exception as e:
+            self._use_fallback(str(e))
+            return self._fallback.transcribe(wav, on_progress)
         if on_progress:
             for s in out:
                 on_progress(s.end)
@@ -236,9 +210,39 @@ class LiveSession:
         self._procs: list[subprocess.Popen] = []
         self._lock = threading.Lock()
         self._ended: str | None = None   # "stop" | "kill" pedido antes de subir
+        # texto PROVISÓRIO (a frase ainda sendo dita) por stream, só em memória: chega por
+        # um pipe do helper e a capa lê daqui (#capa ao vivo). Nunca vai para o disco.
+        self._partials: dict[str, tuple[float, str]] = {}
         threading.Thread(target=self._launch, daemon=True, name="apple-live").start()
 
+    def partials(self) -> dict[str, tuple[float, str]]:
+        """{stream: (início em s, texto provisório)} do que está sendo dito agora."""
+        with self._lock:
+            return dict(self._partials)
+
+    def _read_partials(self, name: str, fd: int) -> None:
+        try:
+            with os.fdopen(fd, "rb") as f:
+                for raw in f:
+                    try:
+                        obj = json.loads(raw)
+                        start, text = float(obj.get("start", 0.0)), str(obj.get("text", "")).strip()
+                    except (ValueError, TypeError, AttributeError):
+                        continue
+                    with self._lock:
+                        if text:
+                            self._partials[name] = (start, text)
+                        else:
+                            self._partials.pop(name, None)   # o trecho fixou
+        except Exception as e:
+            log.debug("canal do provisório de %s fechou: %s", name, e)
+        finally:
+            with self._lock:
+                self._partials.pop(name, None)
+
     def _launch(self) -> None:
+        import threading
+
         try:
             helper = helper_path()
         except Exception as e:
@@ -248,14 +252,25 @@ class LiveSession:
             with self._lock:
                 if self._ended:
                     break
+                r = w = None
                 try:
+                    r, w = os.pipe()   # canal do provisório: o helper escreve no w herdado
                     with open(self.folder / f"{name}{LIVE_SUFFIX}", "w", encoding="utf-8") as out, \
                             open(self.folder / f"{name}.live.log", "w", encoding="utf-8") as err:
                         self._procs.append(subprocess.Popen(
-                            [str(helper), "live", self.language, str(self.folder / f"{name}.wav")],
-                            stdin=subprocess.PIPE, stdout=out, stderr=err))
+                            [str(helper), "live", self.language, str(self.folder / f"{name}.wav"), str(w)],
+                            stdin=subprocess.PIPE, stdout=out, stderr=err, pass_fds=(w,)))
+                    os.close(w)
+                    w = None
+                    threading.Thread(target=self._read_partials, args=(name, r), daemon=True,
+                                     name=f"apple-live-{name}").start()
+                    r = None
                 except Exception as e:
                     log.warning("transcrição ao vivo de %s não subiu: %s", name, e)
+                finally:
+                    for fd in (r, w):
+                        if fd is not None:
+                            os.close(fd)
         with self._lock:
             if self._procs:
                 log.info("transcrição ao vivo ligada: %s", self.folder.name)

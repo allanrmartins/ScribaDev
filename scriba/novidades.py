@@ -23,7 +23,18 @@ NOVIDADES: list[dict] = [
     {
         "versao": "1.4.29",
         "data": "",   # preencher no ritual de release
-        "destaques": [],
+        "destaques": [
+            {
+                "titulo": "A call aparece escrita na tela, enquanto acontece",
+                "texto": "Com a transcrição ao vivo ligada, a tela inicial mostra o que você e os "
+                         "outros estão falando: a frase em cinza enquanto é dita, que fixa quando "
+                         "termina. Os termos do seu vocabulário aparecem corrigidos na hora, do "
+                         "jeito que vão sair na nota.",
+                "onde": "Transcrição → Motor: Apple → Transcrever ao vivo",
+                "abrir": "Transcrição",
+                "so": (MAC,),
+            },
+        ],
         "melhorias": [
             {"texto": "O vocabulário ganhou aba própria nas Configurações: os termos aprendidos "
                       "viram etiquetas com filtro, e dá para devolver um termo ignorado", "so": TODOS},

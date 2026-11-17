@@ -261,6 +261,22 @@ class ScribaApp:
         with self.rec_lock:
             return self.rec.duration_seconds() if self.rec else 0.0
 
+    def live_transcript_folder(self):
+        """Pasta da gravação atual SE a transcrição ao vivo estiver ligada nela (a capa
+        acompanha os .live.jsonl dessa pasta); None sem gravação ou sem ao vivo."""
+        with self.rec_lock:
+            rec = self.rec
+        return rec.folder if rec is not None and getattr(rec, "live", None) is not None else None
+
+    def live_partials(self) -> dict:
+        """Texto provisório da gravação atual ({stream: (início, texto)}), só em memória."""
+        with self.rec_lock:
+            live = getattr(self.rec, "live", None) if self.rec is not None else None
+        try:
+            return live.partials() if live is not None else {}
+        except Exception:
+            return {}
+
     # ----------------------------------------------------------- gravação --
 
     def start_recording(self, source: str = "auto", probe: bool = True, test: bool = False) -> None:

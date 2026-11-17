@@ -485,7 +485,7 @@ class SettingsWindow(QWidget):
         if sys.platform == "darwin":
             ap = self._group(f, "Apple")
             self._check(ap, "Transcrever ao vivo", "whisper", "live",
-                        hint="transcreve durante a call; ao fim só faltam as vozes e o resumo")
+                        hint="mostra na tela inicial o que está sendo dito, enquanto a call acontece")
         cl = self._group(f, "Nuvem")
         self._text(cl, "Endpoint", "whisper", "cloud_base_url", placeholder="vazio = Groq",
                    tooltip="URL do serviço compatível com OpenAI. Vazio usa a Groq.")
