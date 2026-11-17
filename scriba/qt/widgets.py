@@ -33,14 +33,17 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QDateEdit,
+    QFrame,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QLineEdit,
     QPushButton,
     QTimeEdit,
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QWidgetItem,
 )
 
 from .. import util
@@ -858,6 +861,109 @@ class Collapsible(QWidget):
         self._render_hdr()
         if self._content is not None:
             self._content.setVisible(self._open)
+
+
+# == etiquetas que quebram linha (vocabulário) ================================
+
+class FlowLayout(QLayout):
+    """Layout que enfileira os widgets e quebra a linha quando acaba a largura
+    (etiquetas de termos). O QFormLayout/QGroupBox pai pergunta a altura pela
+    largura (heightForWidth), então a caixa cresce com o número de linhas."""
+
+    def __init__(self, parent=None, spacing: int = 6):
+        super().__init__(parent)
+        self._items: list = []
+        self._spacing = spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item) -> None:
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientations(0)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self._arrange(QRectF(0, 0, width, 0), apply=False)
+
+    def setGeometry(self, rect) -> None:
+        super().setGeometry(rect)
+        self._arrange(QRectF(rect), apply=True)
+
+    def sizeHint(self) -> QSize:
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:
+        size = QSize()
+        for it in self._items:
+            if not it.isEmpty():
+                size = size.expandedTo(it.minimumSize())
+        m = self.contentsMargins()
+        return size + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _arrange(self, rect: QRectF, *, apply: bool) -> int:
+        m = self.contentsMargins()
+        left, top = rect.x() + m.left(), rect.y() + m.top()
+        right = rect.x() + rect.width() - m.right()
+        x, y, line_h = left, top, 0
+        for it in self._items:
+            if it.isEmpty():   # widget escondido (filtro) não ocupa lugar
+                continue
+            hint = it.sizeHint()
+            if x > left and x + hint.width() > right:
+                x, y, line_h = left, y + line_h + self._spacing, 0
+            if apply:
+                it.setGeometry(QRectF(x, y, hint.width(), hint.height()).toRect())
+            x += hint.width() + self._spacing
+            line_h = max(line_h, hint.height())
+        return int(y + line_h - rect.y() + m.bottom())
+
+
+class TermChip(QFrame):
+    """Etiqueta de um termo com um botão de ação à direita ("×" remove, "+" devolve).
+    QSS por objectName (#termChip): escopado, não vaza borda p/ os filhos (gotcha #70)."""
+
+    def __init__(self, text: str, action_icon: str, action_tip: str,
+                 on_action: Callable[[], None], *, dim: bool = False):
+        super().__init__()
+        self.setObjectName("termChip")
+        self.term = text
+        lay = QHBoxLayout(self); lay.setContentsMargins(9, 2, 3, 2); lay.setSpacing(2)
+        self._label = QLabel(text)
+        self._label.setObjectName("termChipText")
+        lay.addWidget(self._label)
+        self._btn = QToolButton()
+        self._btn.setObjectName("termChipBtn")
+        self._btn.setText(action_icon)
+        self._btn.setCursor(Qt.PointingHandCursor)
+        self._btn.setAutoRaise(True)
+        add_tooltip(self._btn, action_tip)
+        self._btn.clicked.connect(on_action)
+        lay.addWidget(self._btn)
+        self._dim = dim
+        self.restyle()
+
+    def restyle(self) -> None:
+        t = theme.active()
+        fg = t.muted if self._dim else t.text
+        self.setStyleSheet(
+            f"QFrame#termChip {{ background:{t.field}; border:1px solid {t.border};"
+            f" border-radius:{t.radius_sm + 4}px; }}"
+            f"QLabel#termChipText {{ color:{fg}; background:transparent; border:none; }}"
+            f"QToolButton#termChipBtn {{ color:{t.muted}; background:transparent; border:none;"
+            f" padding:0 4px; font-weight:bold; }}"
+            f"QToolButton#termChipBtn:hover {{ color:{t.rec if self._btn.text() == '×' else t.ok}; }}")
 
 
 # == submenu "Reprocessar" (#186) =============================================

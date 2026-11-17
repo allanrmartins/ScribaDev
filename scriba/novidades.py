@@ -85,8 +85,8 @@ NOVIDADES: list[dict] = [
                 "texto": "Os termos técnicos que se repetem nas suas calls viram sugestões; você "
                          "decide quais entram. E a grafia do vocabulário agora é corrigida na "
                          "transcrição (\"S 80\" vira SE80) e respeitada nas notas.",
-                "onde": "Transcrição → Termos aprendidos",
-                "abrir": "Transcrição",
+                "onde": "Vocabulário → Aprendidos com as reuniões",
+                "abrir": "Vocabulário",
                 "so": TODOS,
             },
         ],

@@ -111,6 +111,12 @@ def accepted() -> list[str]:
                   key=str.casefold)
 
 
+def ignored() -> list[str]:
+    """Recusados ("Ignorar" ou removidos do vocabulário) - para poder devolver."""
+    return sorted((v["term"] for v in _load()["terms"].values() if v.get("status") == RECUSADO),
+                  key=str.casefold)
+
+
 def set_status(term: str, status: str) -> None:
     """Aceita/recusa (ou devolve a pendente) um termo pela grafia exibida."""
     with _lock:
