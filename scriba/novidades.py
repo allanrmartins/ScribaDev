@@ -21,6 +21,18 @@ TODOS = (MAC, WIN)
 
 NOVIDADES: list[dict] = [
     {
+        "versao": "1.4.29",
+        "data": "",   # preencher no ritual de release
+        "destaques": [],
+        "melhorias": [
+            {"texto": "O vocabulário ganhou aba própria nas Configurações: os termos aprendidos "
+                      "viram etiquetas com filtro, e dá para devolver um termo ignorado", "so": TODOS},
+            {"texto": "A aba Transcrição mostra só as opções do motor escolhido, logo abaixo "
+                      "dele", "so": TODOS},
+        ],
+        "correcoes": [],
+    },
+    {
         "versao": "1.4.28",
         "data": "10/11/2026",
         "destaques": [
@@ -85,8 +97,8 @@ NOVIDADES: list[dict] = [
                 "texto": "Os termos técnicos que se repetem nas suas calls viram sugestões; você "
                          "decide quais entram. E a grafia do vocabulário agora é corrigida na "
                          "transcrição (\"S 80\" vira SE80) e respeitada nas notas.",
-                "onde": "Transcrição → Termos aprendidos",
-                "abrir": "Transcrição",
+                "onde": "Vocabulário → Aprendidos com as reuniões",
+                "abrir": "Vocabulário",
                 "so": TODOS,
             },
         ],

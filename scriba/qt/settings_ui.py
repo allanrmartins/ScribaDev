@@ -241,6 +241,7 @@ def _clear_layout(lay) -> None:
     while lay.count():
         item = lay.takeAt(0)
         if item.widget():
+            item.widget().hide()   # some já: o deleteLater só roda na volta do loop
             item.widget().deleteLater()
         elif item.layout():
             _clear_layout(item.layout())
@@ -267,7 +268,7 @@ class SettingsWindow(QWidget):
         self._devices_loaded = False
 
         self.setWindowTitle("ScribaDev — Configurações")
-        self.setMinimumSize(760, 480)
+        self.setMinimumSize(760, 480)   # a largura sobe em _fit_tabs (9 abas inteiras)
         self.setWindowOpacity(0.98)
         widgets.remember_geometry(self, "qt_settings", default=(180, 120, 880, 680))
 
@@ -275,17 +276,23 @@ class SettingsWindow(QWidget):
         root.setContentsMargins(14, 10, 14, 10)
 
         self._tabs = QTabWidget()
-        self._tabs.setUsesScrollButtons(False)   # 7 abas: elide em telas estreitas, sem setas ◄►
+        self._tabs.setUsesScrollButtons(False)   # 9 abas: elide em telas estreitas, sem setas ◄►
         self._tabs.setElideMode(Qt.ElideRight)
+        # 9 abas: o padding padrão (14px) pede ~875px e cortava os títulos na largura
+        # de sempre (880); com 10px cabem (~805px). Só a padding: cores seguem o QSS global.
+        self._tabs.tabBar().setObjectName("settingsTabs")
+        self._tabs.tabBar().setStyleSheet("QTabBar#settingsTabs::tab { padding: 6px 10px; }")
         root.addWidget(self._tabs, 1)
         self._build_recording_tab()
         self._build_transcription_tab()
+        self._build_vocabulary_tab()
         self._build_ia_tab()
         self._build_detection_tab()
         self._build_dirs_tab()
         self._build_appearance_tab()
         self._build_timesheet_tab()
         self._build_about_tab()
+        self._fit_tabs()
         self._about_ready.connect(self._show_about_update)
         self._devices_ready.connect(self._fill_devices)
         self._ts_done.connect(self._on_timesheet_done)
@@ -298,6 +305,14 @@ class SettingsWindow(QWidget):
         root.addLayout(foot)
 
         self._load()
+
+    def _fit_tabs(self) -> None:
+        """Largura mínima = a soma dos títulos das abas: com a fonte/zoom de cada máquina,
+        nenhum título sai cortado ("Transcriç…"). Recalcula na troca de tema/zoom."""
+        bar = self._tabs.tabBar()
+        abas = sum(bar.tabSizeHint(i).width() for i in range(bar.count()))
+        m = self.layout().contentsMargins()
+        self.setMinimumWidth(max(760, abas + m.left() + m.right() + 8))
 
     # -- helpers de construção -----------------------------------------------
 
@@ -339,19 +354,6 @@ class SettingsWindow(QWidget):
             self._row(form, label, _wrap_secret(e), hint)   # campo + botão de olho (#71)
         else:
             self._row(form, label, e, hint)
-        return e
-
-    def _bigtext(self, form, label, section, attr, placeholder="", tooltip="", rows=3):
-        """Campo de VÁRIAS linhas (QPlainTextEdit, com word-wrap) p/ valores longos como
-        hotwords. O config guarda uma string única: o get normaliza o whitespace (quebras
-        e espaços viram espaço simples), então digitar em linhas não muda o formato salvo."""
-        e = QPlainTextEdit()
-        e.setPlaceholderText(placeholder)
-        if tooltip:
-            widgets.add_tooltip(e, tooltip)
-        e.setFixedHeight(e.fontMetrics().lineSpacing() * rows + 16)
-        self._fields.append((e, section, attr, "bigtext", None))
-        self._row(form, label, e, None)
         return e
 
     def _check(self, form, label, section, attr, hint=None):
@@ -476,19 +478,29 @@ class SettingsWindow(QWidget):
     def _build_transcription_tab(self) -> None:
         f = self._tab("Transcrição")
         motor = self._choice(f, "Motor", "whisper", "engine", _STT_ENGINES)
-        modelo = self._list_choice(f, "Modelo", "whisper", "model", _WHISPER_MODELS)
-        dispositivo = self._choice(f, "Dispositivo", "whisper", "device", _WHISPER_DEVICES)
         self._choice(f, "Idioma", "whisper", "language", _WHISPER_LANGS)
-        self._bigtext(f, "Vocabulário (hotwords)", "whisper", "hotwords", rows=4,
-                      placeholder="Termos, siglas e nomes próprios que aparecem nas suas reuniões e "
-                                  "guiam a transcrição.  Ex.: SAP ABAP BAPI CDS Fiori OData, nomes "
-                                  "de clientes, produtos e projetos, jargão da sua área.",
-                      tooltip="Quanto mais específico do seu dia a dia, melhor a transcrição acerta "
-                              "os termos difíceis. Pode escrever em várias linhas.")
-        self._check(f, "Corrigir termos na transcrição", "whisper", "vocab_fix",
-                    hint='acerta na transcrição a grafia dos termos do vocabulário (ex.: "S 80" vira SE80)')
-        self._build_learned_terms(f)
-        av = self._group(f, "Avançado")
+        # as opções do motor escolhido logo abaixo dele; as dos outros motores somem
+        # (o vocabulário ganhou aba própria: a lista dos aprendidos empurrava isto p/ o fim)
+        ap = None
+        if sys.platform == "darwin":
+            ap = self._group(f, "Apple")
+            self._check(ap, "Transcrever ao vivo", "whisper", "live",
+                        hint="transcreve durante a call; ao fim só faltam as vozes e o resumo")
+        cl = self._group(f, "Nuvem")
+        self._text(cl, "Endpoint", "whisper", "cloud_base_url", placeholder="vazio = Groq",
+                   tooltip="URL do serviço compatível com OpenAI. Vazio usa a Groq.")
+        self._text(cl, "Chave da API", "whisper", "cloud_api_key", secret=True,
+                   placeholder="cole a chave da API",
+                   tooltip="Guardada cifrada ao salvar (Keychain no macOS, DPAPI no Windows).")
+        self._text(cl, "Modelo (nuvem)", "whisper", "cloud_model", placeholder="ex.: whisper-large-v3")
+        wh = self._group(f, "Whisper")
+        wh_box = wh.parentWidget()
+        self._list_choice(wh, "Modelo", "whisper", "model", _WHISPER_MODELS)
+        self._choice(wh, "Dispositivo", "whisper", "device", _WHISPER_DEVICES)
+        av_holder = QWidget()
+        av = QFormLayout(av_holder)
+        av.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        av.setContentsMargins(0, 0, 0, 0)
         self._int(av, "Batch size", "whisper", "batch_size", 0, 64, hint="0 desliga o lote")
         self._int(av, "Beam size", "whisper", "beam_size", 0, 10)
         self._int(av, "Threads de CPU", "whisper", "cpu_threads", 0, 64, hint="0 = automático")
@@ -496,35 +508,90 @@ class SettingsWindow(QWidget):
                     hint="transcreve só os trechos com fala; desligar só para depurar")
         self._int(av, "VAD silêncio mín. (ms)", "whisper", "vad_min_silence_ms", 0, 5000, hint="0 = padrão")
         self._float(av, "VAD limiar (0..1)", "whisper", "vad_threshold", 0.0, 1.0, 0.05, hint="0 = padrão")
-        ap = None
-        if sys.platform == "darwin":
-            ap = self._group(f, "Apple (só com motor = Apple)")
-            self._check(ap, "Transcrever ao vivo", "whisper", "live",
-                        hint="transcreve durante a call; ao fim só faltam as vozes e o resumo")
-        cl = self._group(f, "Nuvem (só com motor = Nuvem)")
-        self._text(cl, "Endpoint", "whisper", "cloud_base_url", placeholder="vazio = Groq",
-                   tooltip="URL do serviço compatível com OpenAI. Vazio usa a Groq.")
-        self._text(cl, "Chave da API", "whisper", "cloud_api_key", secret=True,
-                   placeholder="cole a chave da API",
-                   tooltip="Guardada cifrada ao salvar (Keychain no macOS, DPAPI no Windows).")
-        self._text(cl, "Modelo (nuvem)", "whisper", "cloud_model", placeholder="ex.: whisper-large-v3")
-        # cada controle só vale com o seu motor: os outros ficam esmaecidos (o Whisper,
-        # com a Apple escolhida, segue como reserva se o motor da Apple falhar)
-        whisper = [modelo, dispositivo, av.parentWidget()]
-        por_motor = {"apple": [ap.parentWidget()] if ap else [], "cloud": [cl.parentWidget()]}
+        avancado = widgets.Collapsible("Avançado")
+        avancado.set_content(av_holder)
+        wh.addRow(avancado)
+        reserva = QLabel("Com a Apple escolhida, o Whisper é a reserva: entra só se o motor "
+                         "da Apple falhar.")
+        reserva.setProperty("role", "muted"); reserva.setWordWrap(True)
+        reserva.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
+        wh.insertRow(0, reserva)
+        dica = QLabel("Os termos que guiam a transcrição ficam na aba Vocabulário.")
+        dica.setProperty("role", "muted"); dica.setWordWrap(True)
+        f.addRow(dica)
+        self._motor_groups = {"apple": ap.parentWidget() if ap else None, "cloud": cl.parentWidget()}
 
         def _sync_motor(_=None) -> None:
             engine = motor.currentData() or "local"
-            for w in whisper:
-                w.setEnabled(engine in ("local", "mlx"))
-                w.setToolTip("Reserva: usado só se o motor da Apple falhar."
-                             if engine == "apple" else "")
-            for nome, ws in por_motor.items():
-                for w in ws:
-                    w.setEnabled(engine == nome)
+            for nome, box in self._motor_groups.items():
+                if box is not None:
+                    f.setRowVisible(box, engine == nome)
+            # Whisper: o motor em si (local/mlx), a reserva da Apple, ou fora de uso (nuvem)
+            f.setRowVisible(wh_box, engine != "cloud")
+            reserva.setVisible(engine == "apple")
+            wh_box.setTitle("Whisper (reserva)" if engine == "apple" else "Whisper")
 
         motor.currentIndexChanged.connect(_sync_motor)
         _sync_motor()
+
+    def _build_vocabulary_tab(self) -> None:
+        """Vocabulário (hotwords) + o que aprende com as reuniões (#227), em aba própria:
+        com dezenas de termos aceitos, a lista enterrava as opções da Transcrição."""
+        f = self._tab("Vocabulário")
+        intro = QLabel("Termos, siglas e nomes próprios das suas reuniões. Guiam a transcrição, "
+                       "corrigem a grafia no texto e entram no resumo.")
+        intro.setProperty("role", "muted"); intro.setWordWrap(True)
+        f.addRow(intro)
+
+        meus = self._group(f, "Seus termos")
+        hw = QPlainTextEdit()
+        hw.setPlaceholderText("Ex.: SAP ABAP BAPI CDS Fiori OData, nomes de clientes, produtos e "
+                              "projetos, jargão da sua área. Separe por espaço, vírgula ou linha.")
+        widgets.add_tooltip(hw, "Quanto mais específico do seu dia a dia, melhor a transcrição "
+                                "acerta os termos difíceis.")
+        hw.setMinimumHeight(hw.fontMetrics().lineSpacing() * 6 + 16)
+        self._fields.append((hw, "whisper", "hotwords", "bigtext", None))
+        meus.addRow(hw)
+        self._hw_count = QLabel("")
+        self._hw_count.setProperty("role", "muted")
+        self._hw_count.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
+        meus.addRow(self._hw_count)
+        hw.textChanged.connect(lambda: self._update_hw_count(hw.toPlainText()))
+        self._check(meus, "Corrigir a grafia", "whisper", "vocab_fix",
+                    hint='acerta na transcrição a grafia dos termos (ex.: "S 80" vira SE80)')
+
+        self._sugg_group = QGroupBox("Sugestões das reuniões")
+        self._sugg_layout = QVBoxLayout(self._sugg_group)
+        f.addRow(self._sugg_group)
+
+        self._learned_group = QGroupBox("Aprendidos com as reuniões")
+        lv = QVBoxLayout(self._learned_group)
+        self._learned_filter = QLineEdit()
+        self._learned_filter.setPlaceholderText("Filtrar termos…")
+        self._learned_filter.setClearButtonEnabled(True)
+        self._learned_filter.textChanged.connect(self._filter_learned)
+        lv.addWidget(self._learned_filter)
+        self._learned_flow_host = QWidget()
+        self._learned_flow = widgets.FlowLayout(self._learned_flow_host)
+        lv.addWidget(self._learned_flow_host)
+        self._learned_empty = QLabel("")
+        self._learned_empty.setProperty("role", "muted"); self._learned_empty.setWordWrap(True)
+        lv.addWidget(self._learned_empty)
+        f.addRow(self._learned_group)
+
+        self._ignored = widgets.Collapsible("Ignorados")
+        self._ignored_host = QWidget()
+        self._ignored_flow = widgets.FlowLayout(self._ignored_host)
+        self._ignored.set_content(self._ignored_host)
+        f.addRow(self._ignored)
+        self._vocab_form = f
+        self._refresh_learned_terms()
+
+    def _update_hw_count(self, text: str) -> None:
+        from .. import vocab_fix
+
+        n = len(vocab_fix.parse_terms(text))
+        self._hw_count.setText("nenhum termo" if n == 0 else f"{n} termo{'s' if n != 1 else ''}")
 
     def select_tab(self, titulo: str) -> None:
         """Vai para a aba pelo título (o "Experimentar" da tela de novidades, #228)."""
@@ -533,27 +600,10 @@ class SettingsWindow(QWidget):
                 self._tabs.setCurrentIndex(i)
                 return
 
-    def _build_learned_terms(self, form) -> None:
-        """Vocabulário que aprende (#227): sugestões tiradas das reuniões (2+ reuniões) p/
-        aceitar ou ignorar, e os já aceitos p/ remover. Age na hora (dado à parte do
-        config.toml) - não depende do Salvar."""
-        box = QGroupBox("Termos aprendidos com as reuniões")
-        self._learned_layout = QVBoxLayout(box)
-        form.addRow(box)
-        self._refresh_learned_terms()
-
     def _refresh_learned_terms(self) -> None:
+        """Refaz sugestões, aprendidos e ignorados a partir do vocab_learned.json. Age na
+        hora (dado à parte do config.toml) - não depende do Salvar."""
         from .. import vocab_learn
-
-        lay = self._learned_layout
-        _clear_layout(lay)
-
-        def linha(texto: str, *botoes) -> None:
-            row = QHBoxLayout()
-            row.addWidget(QLabel(texto), 1)
-            for rotulo, acao in botoes:
-                row.addWidget(widgets.ModernButton(rotulo, acao))
-            lay.addLayout(row)
 
         def muda(termo: str, status: str):
             def _go() -> None:
@@ -561,21 +611,64 @@ class SettingsWindow(QWidget):
                 self._refresh_learned_terms()
             return _go
 
+        def aceitar_todas(termos: list[str]):
+            def _go() -> None:
+                for t in termos:
+                    vocab_learn.set_status(t, vocab_learn.ACEITO)
+                self._refresh_learned_terms()
+            return _go
+
+        # sugestões: poucas e pedem decisão -> linhas com os dois botões
+        _clear_layout(self._sugg_layout)
         sugestoes = vocab_learn.suggestions()
         for item in sugestoes:
+            row = QHBoxLayout()
             n = len(item["meetings"])
-            linha(f"<b>{item['term']}</b> · em {n} reuniões",
-                  ("Adicionar", muda(item["term"], vocab_learn.ACEITO)),
-                  ("Ignorar", muda(item["term"], vocab_learn.RECUSADO)))
+            row.addWidget(QLabel(f"<b>{item['term']}</b> · em {n} reuniões"), 1)
+            row.addWidget(widgets.ModernButton("Adicionar", muda(item["term"], vocab_learn.ACEITO)))
+            row.addWidget(widgets.ModernButton("Ignorar", muda(item["term"], vocab_learn.RECUSADO)))
+            self._sugg_layout.addLayout(row)
+        if len(sugestoes) > 1:
+            row = QHBoxLayout(); row.addStretch(1)
+            row.addWidget(widgets.ModernButton(f"Adicionar as {len(sugestoes)}",
+                                               aceitar_todas([i["term"] for i in sugestoes])))
+            self._sugg_layout.addLayout(row)
+        self._vocab_form.setRowVisible(self._sugg_group, bool(sugestoes))
+        self._sugg_group.setTitle(f"Sugestões das reuniões ({len(sugestoes)})")
+
+        # aprendidos: dezenas -> etiquetas que quebram linha, com filtro
+        _clear_layout(self._learned_flow)
         aceitos = vocab_learn.accepted()
         for termo in aceitos:
-            linha(f"{termo} · no vocabulário", ("Remover", muda(termo, vocab_learn.RECUSADO)))
-        if not sugestoes and not aceitos:
-            vazio = QLabel("Os termos técnicos das suas reuniões aparecem aqui quando se repetem "
-                           "em 2 ou mais reuniões; você decide quais entram no vocabulário.")
-            vazio.setWordWrap(True)
-            vazio.setProperty("role", "muted")
-            lay.addWidget(vazio)
+            self._learned_flow.addWidget(widgets.TermChip(
+                termo, "×", "Tirar do vocabulário", muda(termo, vocab_learn.RECUSADO)))
+        self._learned_group.setTitle(f"Aprendidos com as reuniões ({len(aceitos)})"
+                                     if aceitos else "Aprendidos com as reuniões")
+        self._learned_filter.setVisible(len(aceitos) > 12)
+        self._learned_empty.setText(
+            "" if aceitos else
+            "Os termos técnicos das suas reuniões aparecem aqui quando se repetem em 2 ou mais "
+            "reuniões; você decide quais entram no vocabulário.")
+        self._learned_empty.setVisible(not aceitos)
+        self._filter_learned(self._learned_filter.text())
+
+        # ignorados: recolhidos, só p/ desfazer um "Ignorar"/"×"
+        _clear_layout(self._ignored_flow)
+        ignorados = vocab_learn.ignored()
+        for termo in ignorados:
+            self._ignored_flow.addWidget(widgets.TermChip(
+                termo, "+", "Devolver ao vocabulário", muda(termo, vocab_learn.ACEITO), dim=True))
+        self._ignored.set_header(f"Ignorados ({len(ignorados)})")
+        self._vocab_form.setRowVisible(self._ignored, bool(ignorados))
+
+    def _filter_learned(self, text: str) -> None:
+        alvo = text.strip().casefold()
+        lay = self._learned_flow
+        for i in range(lay.count()):
+            w = lay.itemAt(i).widget()
+            if w is not None:
+                w.setVisible(not alvo or alvo in w.term.casefold())
+        lay.invalidate()
 
     def _build_ia_tab(self) -> None:
         f = self._tab("IA")
@@ -811,6 +904,9 @@ class SettingsWindow(QWidget):
             self._populate_theme_cards()
         if getattr(self, "_ts_off", None) is not None:
             self._style_timesheet_cards()
+        if getattr(self, "_learned_flow", None) is not None:
+            self._refresh_learned_terms()   # etiquetas levam as cores do tema no QSS
+        self._fit_tabs()
 
     # -- aba Apontamento (#118/#126): ativação opt-in do timesheet -------------
 

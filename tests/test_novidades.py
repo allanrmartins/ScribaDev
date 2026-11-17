@@ -148,7 +148,7 @@ class TelaTests(unittest.TestCase):
         botoes = [b for b in w.findChildren(widgets.ModernButton) if b.text() == "Experimentar"]
         self.assertEqual(len(botoes), len(versoes[0]["destaques"]))
         botoes[0].click()
-        self.assertEqual(abertas, ["Transcrição"])
+        self.assertEqual(abertas, ["Transcrição"])  # 1º destaque = motor da Apple
         w.close()
 
 

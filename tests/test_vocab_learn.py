@@ -236,9 +236,51 @@ class TelaTests(_AppDir):
             botoes[0].click()
             self.assertEqual(vocab_learn.accepted(), ["ZPL"])
             QApplication.sendPostedEvents(None, QEvent.DeferredDelete)   # a lista foi refeita
-            textos = [b.text() for b in win.findChildren(widgets.ModernButton)]
+            textos = [b.text() for b in win.findChildren(widgets.ModernButton) if b.isVisibleTo(win)]
             self.assertNotIn("Adicionar", textos)
-            self.assertIn("Remover", textos)
+            self.assertTrue(win._sugg_group.isHidden())   # sem sugestões, o grupo some
+            chips = [c for c in win.findChildren(widgets.TermChip) if not c.isHidden()]
+            self.assertEqual([c.term for c in chips], ["ZPL"])
+            chips[0]._btn.click()                          # × tira do vocabulário...
+            self.assertEqual(vocab_learn.accepted(), [])
+            self.assertEqual(vocab_learn.ignored(), ["ZPL"])
+            QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+            volta = [c for c in win.findChildren(widgets.TermChip) if not c.isHidden()]
+            self.assertEqual([c._btn.text() for c in volta], ["+"])
+            volta[0]._btn.click()                          # ...e o + dos ignorados devolve
+            self.assertEqual(vocab_learn.accepted(), ["ZPL"])
+            win.close()
+
+    def test_filtro_dos_aprendidos(self):
+        from PySide6.QtWidgets import QApplication
+
+        from scriba import config as config_mod
+        from scriba.qt import widgets
+        from scriba.qt.settings_ui import SettingsWindow
+
+        QApplication.instance() or QApplication([])
+        util.CONFIG_PATH.write_text(config_mod.DEFAULT_CONFIG, encoding="utf-8")
+        for termo in ("SAP GUI", "SAProuter", "Teams"):
+            for r in ("r1", "r2"):
+                vocab_learn.record(r, [termo], "")
+            vocab_learn.set_status(termo, vocab_learn.ACEITO)
+
+        class _App:
+            cfg = config_mod.load()
+
+            def reload_config(self):
+                self.cfg = config_mod.load()
+
+        with mock.patch.object(util, "PROMPT_PATH", util.APP_DIR / "prompt.md"), \
+                mock.patch.object(util, "CONTEXT_PATH", util.APP_DIR / "context.md"), \
+                mock.patch.object(util, "STATE_PATH", util.APP_DIR / "state.json"):
+            win = SettingsWindow(_App())
+            win._learned_filter.setText("sap")
+            visiveis = [c.term for c in win.findChildren(widgets.TermChip) if not c.isHidden()]
+            self.assertEqual(visiveis, ["SAP GUI", "SAProuter"])
+            win._learned_filter.setText("")
+            visiveis = [c.term for c in win.findChildren(widgets.TermChip) if not c.isHidden()]
+            self.assertEqual(len(visiveis), 3)
             win.close()
 
 

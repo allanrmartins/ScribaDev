@@ -61,34 +61,65 @@ class SettingsTests(unittest.TestCase):
                 return w, kind
         raise KeyError((section, attr))
 
-    def test_controles_de_cada_motor_so_ativos_com_ele(self):
-        """Motor Apple: Modelo/Dispositivo/Avançado (Whisper) esmaecidos como reserva e
-        o grupo Nuvem também; trocar p/ o Whisper reativa e esmaece Apple/Nuvem."""
+    def test_opcoes_de_cada_motor_so_aparecem_com_ele(self):
+        """Só o grupo do motor escolhido aparece (logo abaixo do Motor); o Whisper vira
+        "reserva" com a Apple e some com a Nuvem. isHidden = escondido explicitamente."""
         from scriba.qt.settings_ui import SettingsWindow
 
         win = SettingsWindow(self._app())
         motor, _ = self._field(win, "whisper", "engine")
-        modelo = next(w for w, s, a, k, c in win._fields if (s, a) == ("whisper", "model"))
-        batch, _ = self._field(win, "whisper", "batch_size")
+        modelo, _ = self._field(win, "whisper", "model")
         nuvem, _ = self._field(win, "whisper", "cloud_base_url")
+        whisper_box = modelo.parentWidget()
+        nuvem_box = win._motor_groups["cloud"]
 
         def escolhe(valor):
             motor.setCurrentIndex(motor.findData(valor))
 
         escolhe("cloud")
-        self.assertFalse(modelo.isEnabled())
-        self.assertTrue(nuvem.isEnabled())
+        self.assertFalse(nuvem_box.isHidden())
+        self.assertTrue(whisper_box.isHidden())
         escolhe("local")
-        self.assertTrue(modelo.isEnabled())
-        self.assertTrue(batch.isEnabled())
-        self.assertFalse(nuvem.isEnabled())
+        self.assertTrue(nuvem_box.isHidden())
+        self.assertFalse(whisper_box.isHidden())
+        self.assertEqual(whisper_box.title(), "Whisper")
         if motor.findData("apple") >= 0:   # só no Mac
             escolhe("apple")
-            self.assertFalse(modelo.isEnabled())
-            self.assertFalse(batch.isEnabled())
-            self.assertIn("Reserva", modelo.toolTip())
+            self.assertFalse(win._motor_groups["apple"].isHidden())
+            self.assertTrue(nuvem_box.isHidden())
+            self.assertEqual(whisper_box.title(), "Whisper (reserva)")
             ao_vivo, _ = self._field(win, "whisper", "live")
             self.assertTrue(ao_vivo.isEnabled())
+        self.assertIsNotNone(nuvem)
+        win.close()
+
+    def test_abas_cabem_sem_cortar_na_largura_minima(self):
+        """9 abas com elide: na largura mínima da janela nenhum título pode sair cortado."""
+        from scriba.qt.settings_ui import SettingsWindow
+
+        win = SettingsWindow(self._app())
+        win.resize(win.minimumWidth(), 600)
+        win.show()
+        self.app.processEvents()
+        bar = win._tabs.tabBar()
+        total = sum(bar.tabSizeHint(i).width() for i in range(bar.count()))
+        self.assertLessEqual(total, win._tabs.width())
+        self.assertIn("Vocabulário", [bar.tabText(i) for i in range(bar.count())])
+        win.close()
+
+    def test_vocabulario_em_aba_propria(self):
+        """Hotwords e correção saíram da Transcrição p/ a aba Vocabulário, com contador."""
+        from scriba.qt.settings_ui import SettingsWindow
+
+        win = SettingsWindow(self._app())
+        hw, kind = self._field(win, "whisper", "hotwords")
+        idx = win._tabs.indexOf(next(win._tabs.widget(i) for i in range(win._tabs.count())
+                                     if win._tabs.tabText(i) == "Vocabulário"))
+        self.assertTrue(win._tabs.widget(idx).isAncestorOf(hw))
+        hw.setPlainText("SAP, ABAP, user exit")
+        self.assertEqual(win._hw_count.text(), "3 termos")
+        hw.setPlainText("")
+        self.assertEqual(win._hw_count.text(), "nenhum termo")
         win.close()
 
     def test_timesheet_tab_dormente_mostra_destaque(self):
