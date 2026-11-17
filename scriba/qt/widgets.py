@@ -709,7 +709,9 @@ def remember_geometry(win, key: str, *, default: tuple[int, int, int, int] | Non
 
     def _save() -> None:
         try:
-            if not win.isVisible():
+            # crescimento automático (ex.: o painel da transcrição ao vivo alonga a capa
+            # durante a call) não vira a geometria salva: a janela marca _geom_hold
+            if not win.isVisible() or getattr(win, "_geom_hold", False):
                 return
             g = win.geometry()
         except RuntimeError:

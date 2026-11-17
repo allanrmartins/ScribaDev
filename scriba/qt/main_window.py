@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QScrollArea,
     QSizePolicy,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -163,6 +164,9 @@ def _clear_layout(lay) -> None:
             w.deleteLater()
 
 
+_LT_HEIGHT = 200   # altura do painel da transcrição ao vivo (px)
+
+
 class _ClickRow(QFrame):
     """Linha inteira clicável (item de reunião/pendência). QFrame#rowItem para o
     hover do QSS; não é um QAbstractButton (o guard de botão cortado só afere
@@ -192,6 +196,10 @@ class MainWindow(QWidget):
         self._live_cache: list = []      # reuniões em andamento exibidas (re-tema + poll +
                                          # deteção de mudança: a assinatura deriva daqui, #94)
         self._live_busy = False          # 1 scan em voo por vez (#91): I/O lento não empilha
+        # transcrição ao vivo no card de gravação: leitor da pasta atual + 1 leitura em voo
+        self._lt_tail = None
+        self._lt_busy = False
+        self._lt_grown = None            # (altura somada, tamanho depois) do alongamento automático
 
         self.setWindowTitle(f"ScribaDev v{__version__}")
         self.setMinimumSize(520, 560)
@@ -232,6 +240,9 @@ class MainWindow(QWidget):
         self._live_timer = QTimer(self)
         self._live_timer.timeout.connect(self._poll_live)
         self._live_timer.start(1200)
+        self._lt_timer = QTimer(self)
+        self._lt_timer.timeout.connect(self._poll_transcript)
+        self._lt_timer.start(1500)
 
     # ---- construção da UI ------------------------------------------------------
 
@@ -339,6 +350,22 @@ class MainWindow(QWidget):
         self._call_timer.setStyleSheet(f"font-size:{theme.zpt(28)}pt; font-weight:bold;")
         self._call_timer.setVisible(False)
         cv.addWidget(self._call_timer)
+        # transcrição ao vivo (motor da Apple + "ao vivo"): só existe gravando com ela ligada
+        self._lt_panel = QFrame()
+        self._lt_panel.setObjectName("liveTranscript")
+        lv = QVBoxLayout(self._lt_panel)
+        lv.setContentsMargins(0, 4, 0, 0)
+        lv.setSpacing(4)
+        self._lt_hint = QLabel("Transcrição ao vivo · cada trecho aparece uns segundos depois da fala")
+        self._lt_hint.setProperty("role", "muted")
+        lv.addWidget(self._lt_hint)
+        self._lt_view = QTextBrowser()
+        self._lt_view.setObjectName("liveTranscriptView")
+        self._lt_view.setOpenLinks(False)
+        self._lt_view.setFixedHeight(_LT_HEIGHT)
+        lv.addWidget(self._lt_view)
+        self._lt_panel.setVisible(False)
+        cv.addWidget(self._lt_panel)
         root.addWidget(self._card)
 
     def _build_stats(self, root) -> None:
@@ -449,6 +476,15 @@ class MainWindow(QWidget):
             f"QLabel#badge {{ background:{t.warn}; color:{t.bg}; border-radius:9px;"
             f" padding:0 7px; font-weight:bold; }}"
         )
+        if hasattr(self, "_lt_view"):
+            self._lt_hint.setStyleSheet(f"font-size:{theme.active().font_size_small}pt;")
+            self._lt_panel.setStyleSheet("QFrame#liveTranscript { background:transparent; border:none; }")
+            self._lt_view.setStyleSheet(
+                f"QTextBrowser#liveTranscriptView {{ background:{t.field}; color:{t.text};"
+                f" border:1px solid {t.border}; border-radius:{t.radius_sm}px; padding:6px 8px;"
+                f" font-size:{theme.zpt(10)}pt; }}")
+            if self._lt_tail is not None:
+                self._render_transcript(force_bottom=False)
 
     def _style_call_card(self) -> None:
         """Borda do card de call conforme o estado (destaque só quando há call)."""
@@ -802,6 +838,92 @@ class MainWindow(QWidget):
         if n:
             parts.append(f"{n} part.")
         return "  ·  ".join(parts)
+
+    # ---- transcrição ao vivo no card de gravação -----------------------------
+
+    def _poll_transcript(self) -> None:
+        """Timer (1,5 s): com gravação + ao vivo, lê os .live.jsonl novos FORA da GUI e
+        re-renderiza só quando chega trecho. Sem ao vivo, o painel some e o card fica
+        como sempre. App sem o método (harness/testes antigos) = nunca mostra."""
+        if not self.isVisible():
+            return
+        fn = getattr(self.app, "live_transcript_folder", None)
+        try:
+            folder = fn() if callable(fn) else None
+        except Exception:
+            folder = None
+        if folder is None:
+            if self._lt_tail is not None or not self._lt_panel.isHidden():
+                self._lt_tail = None
+                self._show_transcript(False)
+            return
+        if self._lt_tail is None or self._lt_tail.folder != Path(folder):
+            from ..live_tail import LiveTail
+
+            self._lt_tail = LiveTail(folder)   # outra gravação (ou capa aberta no meio)
+            self._render_transcript(force_bottom=True)
+            self._show_transcript(True)
+        if self._lt_busy:
+            return
+        self._lt_busy = True
+        tail = self._lt_tail
+        threading.Thread(target=self._read_transcript, args=(tail,), daemon=True,
+                         name="live-transcript").start()
+
+    def _read_transcript(self, tail) -> None:
+        try:
+            novo = tail.poll()
+        except Exception as e:
+            log.debug("leitura da transcrição ao vivo falhou: %s", e)
+            novo = False
+        finally:
+            self._lt_busy = False
+        if novo:
+            self.app.ui(lambda: self._render_transcript(force_bottom=False) if tail is self._lt_tail else None)
+
+    def _render_transcript(self, *, force_bottom: bool) -> None:
+        import html
+
+        t = theme.active()
+        lines = self._lt_tail.lines if self._lt_tail is not None else []
+        bar = self._lt_view.verticalScrollBar()
+        no_fim = force_bottom or bar.value() >= bar.maximum() - 4
+        if not lines:
+            self._lt_view.setHtml(f"<span style='color:{t.muted}'>Ouvindo… o primeiro trecho "
+                                  "aparece em uns 15 segundos.</span>")
+            return
+        rows = []
+        for ln in lines:
+            quem, cor = ("Você", t.accent_hover) if ln.stream == "mic" else ("Outros", t.ok)
+            m, s = divmod(int(ln.start), 60)
+            rows.append(f"<p style='margin:0 0 6px 0'><span style='color:{t.faint}'>{m:02d}:{s:02d}</span>"
+                        f"&nbsp; <b style='color:{cor}'>{quem}</b>&nbsp; {html.escape(ln.text)}</p>")
+        valor = bar.value()
+        self._lt_view.setHtml("".join(rows))
+        # o máximo da barra só se atualiza depois do layout do documento: rola na volta do loop
+        QTimer.singleShot(0, lambda: bar.setValue(bar.maximum() if no_fim else valor))
+
+    def _show_transcript(self, on: bool) -> None:
+        """Mostra/esconde o painel e alonga a capa para ele caber sem espremer as notas.
+        Encolhe de volta só se o usuário não mexeu no tamanho; o alongamento não vira a
+        geometria salva (_geom_hold)."""
+        if on == (not self._lt_panel.isHidden()):
+            return
+        self._lt_panel.setVisible(on)
+        if on:
+            extra = _LT_HEIGHT + 30
+            screen = self.screen()
+            livre = (screen.availableGeometry().bottom() - self.geometry().bottom()) if screen else 0
+            extra = max(0, min(extra, livre))
+            if extra:
+                self._geom_hold = True
+                self.resize(self.width(), self.height() + extra)
+                self._lt_grown = (extra, self.size())
+        else:
+            grown, self._lt_grown = self._lt_grown, None
+            if grown is not None and self.size() == grown[1]:
+                self.resize(self.width(), self.height() - grown[0])
+            QTimer.singleShot(800, lambda: setattr(self, "_geom_hold", False))
 
     # ---- reuniões em andamento (status vivo na capa) --------------------------
 
