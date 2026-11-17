@@ -42,31 +42,6 @@ class ParseTests(unittest.TestCase):
         self.assertFalse(done)
 
 
-class LiveResultTests(unittest.TestCase):
-    def test_sem_arquivo_ao_vivo(self):
-        self.assertIsNone(stt_apple.live_result(_tmp() / "mic.wav"))
-
-    def test_ao_vivo_terminado_vale_tambem_p_o_audio_arquivado(self):
-        d = _tmp()
-        (d / "loopback.live.jsonl").write_text("\n".join(_JSONL), encoding="utf-8")
-        for nome in ("loopback.wav", "loopback.opus"):   # reprocesso usa o .opus
-            segs = stt_apple.live_result(d / nome, wait_s=0)
-            self.assertEqual(len(segs), 2)
-
-    def test_incompleto_desiste_no_prazo(self):
-        d = _tmp()
-        (d / "mic.live.jsonl").write_text(_JSONL[0], encoding="utf-8")
-        self.assertIsNone(stt_apple.live_result(d / "mic.wav", wait_s=0))
-
-    def test_helper_com_erro_desiste_na_hora(self):
-        d = _tmp()
-        (d / "mic.live.jsonl").write_text("", encoding="utf-8")
-        (d / "mic.live.log").write_text("erro: idioma sem suporte\n", encoding="utf-8")
-        with mock.patch.object(stt_apple.time, "sleep") as dorme:
-            self.assertIsNone(stt_apple.live_result(d / "mic.wav", wait_s=30))
-        dorme.assert_not_called()
-
-
 class EscolhaDoMotorTests(unittest.TestCase):
     def test_apple_so_no_macos_26(self):
         cfg = Whisper(engine="apple")
@@ -105,15 +80,19 @@ class EscolhaDoMotorTests(unittest.TestCase):
         with mock.patch.object(subprocess, "run", return_value=r), mock.patch("builtins.print"):
             self.assertEqual(p.transcribe(_tmp() / "mic.wav"), ["whisper"])
 
-    def test_usa_o_resultado_ao_vivo_sem_rodar_o_helper(self):
+    def test_nota_ignora_o_ao_vivo_e_transcreve_o_arquivo(self):
+        """O .live.jsonl vem do modo de baixa latência (só para a tela): a nota sempre
+        transcreve o arquivo no modo preciso, mesmo com o ao vivo terminado ao lado."""
         d = _tmp()
-        (d / "mic.live.jsonl").write_text("\n".join(_JSONL), encoding="utf-8")
+        (d / "mic.live.jsonl").write_text('{"start": 0, "end": 1, "text": "texto da tela"}\n{"done": true}',
+                                          encoding="utf-8")
         p = stt_apple.AppleSpeechProvider(Whisper(engine="apple"), mock.Mock())
         p._helper = Path("/nao/existe/apple-stt")
-        with mock.patch.object(subprocess, "run") as run, mock.patch("builtins.print"):
+        feito = subprocess.CompletedProcess([], 0, stdout="\n".join(_JSONL), stderr="")
+        with mock.patch.object(subprocess, "run", return_value=feito) as run:
             segs = p.transcribe(d / "mic.wav")
-        run.assert_not_called()
-        self.assertEqual(len(segs), 2)
+        self.assertEqual(run.call_args[0][0][1], "file")
+        self.assertEqual([s.text for s in segs], ["bom dia", "vamos lá"])
 
 
 class ConfigTests(unittest.TestCase):

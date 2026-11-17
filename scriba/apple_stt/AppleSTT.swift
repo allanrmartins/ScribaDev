@@ -35,10 +35,12 @@ func resolveLocale(_ code: String) async throws -> Locale {
 }
 
 func makeTranscriber(_ locale: Locale, volatile: Bool = false) -> SpeechTranscriber {
-    // arquivo: só trechos finalizados. Ao vivo com canal do provisório: também os
-    // resultados voláteis (a frase ainda sendo dita), sempre com o tempo de cada trecho
+    // arquivo: só trechos finalizados, no modo preciso (é o que vai para a nota). Ao vivo
+    // com canal do provisório: voláteis + baixa latência - sem .fastResults os voláteis
+    // chegam em rajadas a cada ~11 s; com ele, 1-2 s (medido em 2026-11-17). O texto do
+    // ao vivo é só para a tela: a nota sempre retranscreve o arquivo no modo preciso.
     SpeechTranscriber(locale: locale, transcriptionOptions: [],
-                      reportingOptions: volatile ? [.volatileResults] : [],
+                      reportingOptions: volatile ? [.volatileResults, .fastResults] : [],
                       attributeOptions: [.audioTimeRange])
 }
 

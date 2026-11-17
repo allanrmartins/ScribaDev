@@ -57,7 +57,7 @@ else:
         "dir_backups": f"{_APP}/backups",
         "engine": ("# Motor de transcrição: local (Whisper, 100% na máquina; no Apple Silicon usa\n"
                    '# MLX/Metal sozinho; "mlx" força), apple (motor de fala da Apple, macOS 26+,\n'
-                   "# 100% no Mac; permite transcrever ao vivo) ou cloud (endpoint OpenAI-compatível\n"
+                   "# 100% no Mac; mostra a call escrita ao vivo) ou cloud (endpoint OpenAI-compatível\n"
                    "# — opt-in explícito)."
                    if _MAC else
                    "# Motor de transcrição: local (faster-whisper, 100% na máquina) ou cloud (envia o\n"
@@ -127,7 +127,7 @@ hotwords = ""
 vocab_fix = true                   # corrige a grafia dos termos do vocabulário na transcrição ("S 80" -> SE80)
 {_H["engine"]}
 engine = "local"
-live = false                       # só engine=apple: transcreve durante a call (ao fim, só vozes + resumo)
+live = false                       # só engine=apple: mostra a call escrita na tela inicial, ao vivo
 cloud_base_url = ""                # vazio = Groq (https://api.groq.com/openai/v1)
 cloud_api_key = ""                 # só engine=cloud; chave BYO. Definida pela UI, {_H["cifra"]}.
 cloud_model = "whisper-large-v3-turbo"
@@ -250,7 +250,8 @@ class Whisper:
     # essencial no da Apple (que ignora o vocabulário)
     vocab_fix: bool = True
     engine: str = "local"              # local (Whisper) | apple (macOS 26+) | cloud (Groq/OpenAI-compat STT)
-    # Só com engine=apple: transcreve DURANTE a call; ao fim só faltam vozes + resumo (#222)
+    # Só com engine=apple: mostra a call escrita na capa enquanto acontece (#222); a nota
+    # continua saindo da transcrição do arquivo no modo preciso
     live: bool = False
     cloud_base_url: str = ""           # vazio = Groq (https://api.groq.com/openai/v1)
     cloud_api_key: str = ""            # só engine=cloud; chave BYO (cifrada com DPAPI ao gravar)
@@ -462,7 +463,7 @@ vad_filter = {_b(w.vad_filter)}        # transcrever só trechos com fala (Siler
 hotwords = {_s(w.hotwords)}
 vocab_fix = {_b(w.vocab_fix)}          # corrige a grafia dos termos do vocabulário na transcrição
 engine = {_s(w.engine)}          # {_H["engine_save"]}
-live = {_b(w.live)}                  # só engine=apple: transcreve durante a call
+live = {_b(w.live)}                  # só engine=apple: mostra a call escrita na tela inicial, ao vivo
 cloud_base_url = {_s(w.cloud_base_url)}   # vazio = Groq (.../openai/v1)
 cloud_api_key = {_s(_maybe_protect(w.cloud_api_key, "whisper.cloud_api_key"))}     # só engine=cloud; chave BYO, {_H["cifra_save"]}
 cloud_model = {_s(w.cloud_model)}
