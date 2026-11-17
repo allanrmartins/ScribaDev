@@ -3,7 +3,7 @@
 # da Apple, em SILÊNCIO (nada toca no alto-falante), com o powermetrics.
 #
 # Fases (cada uma com o powermetrics amostrando a cada 1 s):
-#   1. repouso  - 30 s sem nada, a base para descontar
+#   1. repouso  - 60 s sem nada, a base para descontar
 #   2. hoje     - ao vivo só com trechos fixados (como na 1.4.28)
 #   3. novo     - ao vivo com a frase em andamento + baixa latência (.fastResults)
 #   4. arquivo  - a retranscrição do arquivo no modo preciso (o que a nota passa a usar)
@@ -42,10 +42,11 @@ fase() {   # fase <nome> <comando...>
     sleep 1
     sudo pkill -f "powermetrics.*$OUT/$nome.pm" || true
     echo "$nome $((t1 - t0))" >> "$OUT/duracoes.txt"
-    tail -n 3 "$OUT/$nome.log" | sed 's/^/   /'
+    # só as linhas de medida: o log do modo arquivo traz o TEXTO transcrito (fala de reunião)
+    grep -E "^(modo=|fixado:|provisorio:)" "$OUT/$nome.log" | sed 's/^/   /' || true
 }
 
-fase repouso sleep 30
+fase repouso sleep 60
 fase hoje "$PY" tools/simula_ao_vivo.py "$M/bin/apple-stt-hoje" "$M/audio.raw" "$OUT/sim-hoje" so-fixado
 fase novo "$PY" tools/simula_ao_vivo.py "$M/bin/apple-stt-fast" "$M/audio.raw" "$OUT/sim-novo" provisorio
 # a nota no modo preciso: o helper transcreve o WAV inteiro de uma vez
@@ -67,17 +68,24 @@ def amostras(nome):
     txt = (out / f"{nome}.pm").read_text(errors="replace")
     return {k: [int(x) for x in re.findall(rf"^{k} Power[^:]*:\s*(\d+)\s*mW", txt, re.M)]
             for k in ("CPU", "GPU", "ANE", "Combined")}
+import statistics as st
+# a CPU do Mac oscila muito (picos de outros programas, desvio de ~1,5 W): MEDIANA, não
+# média - com média o repouso saiu mais alto que as fases e o "extra" ficou negativo
 rep = amostras("repouso")
-base = {k: (sum(v) / len(v) if v else 0.0) for k, v in rep.items()}
-print(f"\nrepouso: CPU {base['CPU']:.0f} mW · GPU {base['GPU']:.0f} mW · ANE {base['ANE']:.0f} mW · total {base['Combined']:.0f} mW")
-for nome, rotulo in (("hoje", "ao vivo como hoje"), ("novo", "ao vivo novo (fastResults)"),
-                     ("arquivo", "nota no modo preciso")):
+base = {k: (st.median(v) if v else 0.0) for k, v in rep.items()}
+print(f"\nrepouso (mediana): CPU {base['CPU']:.0f} mW · GPU {base['GPU']:.0f} mW · ANE {base['ANE']:.0f} mW · total {base['Combined']:.0f} mW")
+for nome, rotulo in (("hoje", "ao vivo como hoje"), ("novo", "ao vivo novo (fastResults)")):
     am = amostras(nome)
-    # energia EXTRA da janela inteira (amostras de 1 s): soma de (amostra - repouso)
-    extra = {k: sum(x - base[k] for x in v) / 3600 for k, v in am.items()}   # mWh
-    por_hora = extra["Combined"] * 3600 / audio_s
-    pico_ane = max(am["ANE"] or [0])
-    print(f"{rotulo:28s} extra: CPU {extra['CPU']:+.2f} · ANE {extra['ANE']:+.2f} · total {extra['Combined']:+.2f} mWh"
-          f" (pico ANE {pico_ane} mW) -> por hora de call: {por_hora:+.0f} mWh = {por_hora / (BATERIA_WH * 10):+.2f}% da bateria")
+    extra = {k: (st.median(v) - base[k]) if v else 0.0 for k, v in am.items()}
+    ane = st.mean(am["ANE"]) if am["ANE"] else 0.0
+    print(f"{rotulo:28s} acima do repouso (mediana): CPU {extra['CPU']:+.0f} mW · total {extra['Combined']:+.0f} mW"
+          f" · ANE média {ane:.1f} mW (pico {max(am['ANE'] or [0])}) -> por hora de call:"
+          f" {extra['Combined'] / (BATERIA_WH * 10):+.2f}% da bateria")
+# a nota no modo preciso é um pico curto: aí vale a energia somada da janela
+am = amostras("arquivo")
+extra = sum(x - base["Combined"] for x in am["Combined"]) / 3600   # mWh
+por_hora = extra * 3600 / audio_s
+print(f"{'nota no modo preciso':28s} energia extra {extra:+.2f} mWh para {audio_s} s de áudio"
+      f" (pico ANE {max(am['ANE'] or [0])} mW) -> por hora de call: {por_hora:+.0f} mWh = {por_hora / (BATERIA_WH * 10):+.2f}% da bateria")
 print(f"\ndetalhes em {out}")
 EOF
