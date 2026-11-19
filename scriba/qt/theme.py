@@ -432,6 +432,18 @@ def _calendar_icon_path(color: str) -> str:
     return _icon_path(f"calendar_{color.lstrip('#')}.svg", svg)
 
 
+def _check_icon_path(color: str, *, partial: bool = False) -> str:
+    """SVG do ✓ (ou do traço do 'parcial') na cor do tema - miolo do checkbox das
+    grades (QTreeView::indicator)."""
+    mark = ("<line x1='4' y1='8' x2='12' y2='8' stroke='{c}' stroke-width='2' "
+            "stroke-linecap='round'/>" if partial else
+            "<polyline points='3.5,8.4 6.6,11.3 12.5,4.9' fill='none' stroke='{c}' "
+            "stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/>")
+    svg = (f"<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>"
+           f"{mark.format(c=color)}</svg>")
+    return _icon_path(f"check_{'part' if partial else 'on'}_{color.lstrip('#')}.svg", svg)
+
+
 # --------------------------------------------------------- ícones Fluent ------
 # Ícones vendorizados de github.com/microsoft/fluentui-system-icons (MIT; texto da
 # licença em scriba/qt/icons/LICENSE). São SVGs de cor única (#212121 na origem);
@@ -704,6 +716,24 @@ def qss(theme: Theme | None = None) -> str:
        vence o :selected e a linha "perde" a seleção no Shift+clique da grade */
     QTreeWidget::item:selected:hover, QTreeView::item:selected:hover {{
         background: {t.accent_hover}; color: {t.on_accent};
+    }}
+    /* checkbox das grades (coluna "Lançado" dos apontamentos) desenhado pelo
+       tema: no macOS 27 o estilo nativo do Qt parou de desenhar o checkbox de
+       item de lista/árvore (o QCheckBox avulso segue normal) e a coluna sumia */
+    QTreeView::indicator {{
+        width: 14px; height: 14px;
+        border: 1px solid {t.border_strong};
+        border-radius: {t.radius_sm}px;
+        background: {t.field};
+    }}
+    QTreeView::indicator:hover {{ border-color: {t.accent}; }}
+    QTreeView::indicator:checked {{
+        background: {t.accent}; border-color: {t.accent};
+        image: url({_check_icon_path(t.on_accent)});
+    }}
+    QTreeView::indicator:indeterminate {{
+        background: {t.accent}; border-color: {t.accent};
+        image: url({_check_icon_path(t.on_accent, partial=True)});
     }}
 
     QSplitter::handle {{ background: {t.border}; }}
